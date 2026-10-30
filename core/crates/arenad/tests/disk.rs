@@ -18,7 +18,7 @@ use arenad::{
 use fake_upstream::FakeUpstream;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
-use world::{schema::load_base, snapshot::{Source, Worlds}, testing::{self, Cleanup}};
+use world::{schema::load_base, snapshot::Worlds, testing::{self, Cleanup}};
 
 static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
@@ -196,9 +196,16 @@ fn limit_refuses_new_runs() {
         assert!(h["disk"]["bytes"].as_i64().unwrap() > 1 && h["disk"]["databases"].as_i64().unwrap() >= 1, "{h}");
         let (st, v) = fx.post("/api/runs", json!({"task_id": "27", "team": team()})).await;
         assert_eq!((st, v["error"].as_str()), (507, Some("the arena's databases use more than the limit; delete old runs")));
-        let (st, _) = fx.post("/api/branches/whatever/fork", json!({"at_seq": 1})).await;
-        assert_eq!(st, 507);
-        assert!(fx.state.store.runs().await.unwrap().is_empty(), "no run was created");
+        // 404 and 409 are reported before 507.
+        assert_eq!(fx.post("/api/branches/whatever/fork", json!({"at_seq": 1})).await.0, 404);
+        let t = team();
+        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+        let b = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
+        assert_eq!(fx.post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1})).await.0, 409);
+        fx.state.store.set_status(&b, BranchStatus::Passed, None).await.unwrap();
+        let (st, v) = fx.post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1})).await;
+        assert_eq!((st, v["error"].as_str()), (507, Some("the arena's databases use more than the limit; delete old runs")));
+        assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1, "no branch was created");
     })
 }
 
@@ -208,36 +215,47 @@ fn startup_gc_drops_only_orphans() {
         let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let fx = setup_with("gc", &up, |_| {}).await;
         let (store, worlds) = (&fx.state.store, &fx.state.worlds);
+        // What the store treats as referenced: its branches' databases and recorded snapshots.
         let t = team();
         let run_id = store.create_run("27", &t).await.unwrap();
         let b = store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
-        let kept_branch = worlds.new_branch(&b, Source::Base).await.unwrap();
-        let kept_snap = worlds.snapshot(&kept_branch).await.unwrap();
-        let orphan_snap = worlds.snapshot(&kept_branch).await.unwrap();
-        let tag = uuid::Uuid::new_v4().simple().to_string();
-        let orphan_branch = worlds.new_branch(&format!("gcorphan_{tag}"), Source::Base).await.unwrap();
-        let temp_rows = worlds.new_branch(&format!("rows_{tag}"), Source::Base).await.unwrap();
-        let other = format!("gcother_{tag}");
-        worlds.admin().create_db_from(&other, "world_base").await.unwrap();
-        for d in [&kept_snap, &orphan_snap, &orphan_branch, &temp_rows] {
-            fx.clean.add(d);
-        }
-        fx.clean.add(&other);
         store
-            .append(&b, Some("resolver"), EventKind::ToolCall, json!({"name": "x", "snapshot": kept_snap}))
+            .append(&b, Some("resolver"), EventKind::ToolCall, json!({"name": "x", "snapshot": "snap_abc"}))
             .await
             .unwrap();
+        store.append(&b, None, EventKind::RunStart, json!({"snapshot": "snap_not_a_tool_call"})).await.unwrap();
+        let refs = store.referenced_dbs().await.unwrap();
+        assert!(refs.contains(&format!("branch_{b}")) && refs.contains("snap_abc"));
+        assert!(!refs.contains("snap_not_a_tool_call"));
 
-        // Only this test's databases are candidates: the server also holds real runs.
-        let all = vec![kept_branch.clone(), kept_snap.clone(), orphan_snap.clone(), orphan_branch.clone(), temp_rows.clone(), other.clone()];
-        let mut cands = vec![];
-        for d in &all[..5] {
-            cands.push((d.clone(), 1_000_000));
+        // The real selection path (`list_prefix` + exact prefixes) on unique test prefixes, so
+        // the server's real databases can never be selected.
+        let p = format!("gctest{}_", std::process::id());
+        let (pb, ps) = (format!("{p}branch_"), format!("{p}snap_"));
+        let name = |s: &str| format!("{p}{s}");
+        let want_dropped = [format!("{pb}orphan"), format!("{ps}orphan")];
+        let want_kept = [
+            format!("{pb}keep"),                // referenced
+            format!("{ps}keep"),                // referenced
+            name("branchXorphan"),              // `_` is not a wildcard: not an exact prefix
+            name("branchy_orphan"),             // look-alike of `branch_`
+            name("xbranch_orphan"),             // prefix not at the start of the name part
+            name("snap"),                       // no trailing underscore
+            name("gold_orphan"),                // other prefix
+        ];
+        for d in want_dropped.iter().chain(&want_kept) {
+            worlds.admin().create_db_from(d, "template1").await.unwrap();
+            fx.clean.add(d);
         }
-        let (n, bytes) = arenad::gc::collect_orphans_among(store, worlds, cands).await.unwrap();
-        assert_eq!((n, bytes), (3, 3_000_000));
-        for (d, want) in [(&kept_branch, true), (&kept_snap, true), (&orphan_snap, false), (&orphan_branch, false), (&temp_rows, false), (&other, true)] {
-            assert_eq!(db_exists(&fx, d).await, want, "{d}");
+        let keep: std::collections::HashSet<String> = [format!("{pb}keep"), format!("{ps}keep")].into();
+        let (n, bytes) = arenad::gc::collect_orphans_with(worlds, &[pb.as_str(), ps.as_str()], &keep).await.unwrap();
+        assert_eq!(n, 2);
+        assert!(bytes > 0);
+        for d in &want_dropped {
+            assert!(!db_exists(&fx, d).await, "{d} should be dropped");
+        }
+        for d in &want_kept {
+            assert!(db_exists(&fx, d).await, "{d} should survive");
         }
     })
 }

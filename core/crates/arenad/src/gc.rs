@@ -23,17 +23,23 @@ pub async fn usage(worlds: &Worlds) -> Result<(usize, i64)> {
 /// `world_base`, `gold_*`, `arena` or databases with any other prefix. Returns
 /// (databases dropped, bytes they used).
 pub async fn collect_orphans(store: &Store, worlds: &Worlds) -> Result<(usize, i64)> {
-    let mut candidates = vec![];
-    for p in ["branch_", "snap_"].into_iter().chain(TEMP_PREFIXES) {
-        candidates.extend(worlds.list(p).await?);
-    }
-    collect_orphans_among(store, worlds, candidates).await
+    let keep = store.referenced_dbs().await?;
+    let prefixes: Vec<&str> = ["branch_", "snap_"].into_iter().chain(TEMP_PREFIXES).collect();
+    collect_orphans_with(worlds, &prefixes, &keep).await
 }
 
-/// The rule behind `collect_orphans`, applied to the given `(name, bytes)` candidates only
-/// (tests pass just the databases they made, as the server also holds real runs).
-pub async fn collect_orphans_among(store: &Store, worlds: &Worlds, candidates: Vec<(String, i64)>) -> Result<(usize, i64)> {
-    let keep = store.referenced_dbs().await?;
+/// The selection behind `collect_orphans`: drops every database whose name starts with one
+/// of `prefixes` (exact text, not a LIKE pattern) and is not in `keep`. Tests pass unique
+/// prefixes so a real server's databases can't be selected.
+pub async fn collect_orphans_with(
+    worlds: &Worlds,
+    prefixes: &[&str],
+    keep: &std::collections::HashSet<String>,
+) -> Result<(usize, i64)> {
+    let mut candidates = vec![];
+    for p in prefixes {
+        candidates.extend(worlds.list(p).await?);
+    }
     let (mut n, mut bytes) = (0, 0);
     for (name, size) in candidates {
         if keep.contains(&name) {

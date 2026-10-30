@@ -106,16 +106,19 @@ async fn ensure_gold_creates_and_caches() {
     let fix = fixture();
     let task = tasks().into_iter().find(|t| eligible(t)).unwrap();
     let id = task["id"].as_str().unwrap().to_string();
-    let name = format!("gold_{id}");
+    // Never the real gold_<id> (a live run may be using it): a name only this test uses.
+    let name = format!("gold_test_{}_{id}", std::process::id());
+    let tmp = format!("gold_tmp_test_{}_{id}", std::process::id());
     let _gold_guard = Cleanup::new();
     _gold_guard.add(&name);
+    _gold_guard.add(&tmp);
     admin.drop_db(&name).await.unwrap();
     let got = {
         let _g = LOCK.lock().await;
-        world::gold::ensure_gold(&admin, &task).await.unwrap()
+        world::gold::ensure_gold_named(&admin, &task, &name, &tmp).await.unwrap()
     };
     assert_eq!(got, name);
-    let again = world::gold::ensure_gold(&admin, &task).await.unwrap();
+    let again = world::gold::ensure_gold_named(&admin, &task, &name, &tmp).await.unwrap();
     assert_eq!(again, name);
     let now = admin.with_db(&name, async |c| dump(c).await).await.unwrap();
     assert_eq!(Value::Object(changed_rows(&base, &now)), fix[&id]);

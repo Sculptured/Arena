@@ -17,11 +17,20 @@ pub async fn ensure_gold(admin: &Admin, task: &Value) -> Result<String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(anyhow!("bad task id {id:?}"));
     }
-    let name = format!("gold_{id}");
+    ensure_gold_named(admin, task, &format!("gold_{id}"), &format!("gold_tmp_{id}_{}", std::process::id())).await
+}
+
+/// `ensure_gold` with explicit database names (tests use names that can't collide with a
+/// real `gold_<id>`): builds `name` under the temporary name `tmp`, then renames.
+pub async fn ensure_gold_named(admin: &Admin, task: &Value, name: &str, tmp: &str) -> Result<String> {
+    let id = match &task["id"] {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let (name, tmp) = (name.to_string(), tmp.to_string());
     if admin.exists(&name).await? {
         return Ok(name);
     }
-    let tmp = format!("gold_tmp_{id}_{}", std::process::id());
     admin.drop_db(&tmp).await?;
     admin.create_db_from(&tmp, BASE_DB).await?;
     let actions = task["evaluation_criteria"]["actions"].as_array().cloned().unwrap_or_default();

@@ -251,6 +251,12 @@ async fn fork_branch(State(state): State<Arc<AppState>>, Path(id): Path<String>,
     if req.changes.values().any(|c| c.kind == Some(AgentKind::Open)) {
         open_check(&state)?;
     }
+    // Existence (404) and not-running (409) come first, so a 507 never masks them.
+    match state.store.find_branch(&id).await? {
+        None => return Err(ApiError::not_found(format!("there is no branch \"{id}\""))),
+        Some(b) if b.status == BranchStatus::Running => return Err(ApiError::conflict("the branch is still running")),
+        Some(_) => {}
+    }
     check_disk(&state).await?;
     let resp = detached(async move { Ok(fork::fork(&state, &id, req.at_seq, req.changes).await?) }).await?;
     Ok(Json(resp))
