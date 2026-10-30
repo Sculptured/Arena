@@ -3,4 +3,5 @@ pub mod schema;
 pub mod testing;
 pub use schema::dump;
 pub mod gold;
+pub mod snapshot;
 pub mod tools;
