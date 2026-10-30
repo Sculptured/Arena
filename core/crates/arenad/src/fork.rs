@@ -1,0 +1,527 @@
+//! Fork: go back to step N of a branch, change components, and rerun from there with the
+//! world restored exactly as it was just before step N.
+
+use std::{collections::HashMap, sync::Arc};
+
+use serde::Serialize;
+use serde_json::Value;
+use world::snapshot::Source;
+
+use crate::{
+    app::AppState,
+    exec::BranchCtx,
+    model::*,
+    runner::{self, StartPoint},
+};
+
+pub const REASON_EARLIER: &str = "a change targets an agent that finished earlier";
+pub const REASON_CLI: &str = "Claude Code and Codex sessions restart from the agent's start";
+pub const REASON_KIND: &str = "the agent's mode changes";
+pub const REASON_TOOL: &str = "a tool call is redone from the model call that chose it";
+pub const REASON_RUN_START: &str = "the run restarts from the first agent's start";
+pub const REASON_AGENT_RESTART: &str = "the agent restarts from its first start";
+pub const REASON_LAST_MODEL_CALL: &str = "the step is redone from the agent's last model call before it";
+pub const REASON_NO_MODEL_CALL: &str = "the agent made no model call to resume from, so it restarts from its start";
+
+/// Where the new branch's database is copied from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restore {
+    Base,
+    Snapshot(String),
+}
+
+/// Where a fork actually starts, and what it carries over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForkPlan {
+    pub start_seq: i64,
+    /// `Some(at_seq)` when `start_seq != at_seq`.
+    pub moved_from: Option<i64>,
+    /// Why the fork point moved (None when it didn't).
+    pub reason: Option<String>,
+    pub agent_index: usize,
+    pub restore: Restore,
+    pub resume: Option<Vec<Value>>,
+    /// Recorded handoff notes of the agents before `agent_index`, in chain order.
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ForkError {
+    /// No event with that seq on the branch (or the timeline lacks a step the plan needs).
+    UnknownSeq,
+    /// A change names an agent that isn't in the team (or an event names one).
+    UnknownAgent(String),
+    /// The source branch is still running.
+    BranchRunning,
+    /// A successful write at `seq` has no snapshot, so the world before the fork point
+    /// can't be restored exactly.
+    NoRestorePoint { seq: i64 },
+    /// An agent before the fork point has no recorded handoff note.
+    MissingHandoff(String),
+    /// Storage or database failure.
+    Internal(anyhow::Error),
+}
+
+impl std::fmt::Display for ForkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForkError::UnknownSeq => write!(f, "there is no step with that number on this branch"),
+            ForkError::UnknownAgent(a) => write!(f, "there is no agent \"{a}\" in this team"),
+            ForkError::BranchRunning => write!(f, "the branch is still running"),
+            ForkError::NoRestorePoint { seq } => write!(
+                f,
+                "the write at step {seq} has no snapshot, so the world before this step can't be restored exactly"
+            ),
+            ForkError::MissingHandoff(a) => write!(f, "agent \"{a}\" has no recorded handoff note to carry over"),
+            ForkError::Internal(e) => write!(f, "fork failed: {e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for ForkError {}
+
+impl From<anyhow::Error> for ForkError {
+    fn from(e: anyhow::Error) -> ForkError {
+        ForkError::Internal(e)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ForkResponse {
+    pub branch_id: String,
+    pub start_seq: i64,
+    pub moved_from: Option<i64>,
+    pub reason: Option<String>,
+}
+
+fn is_change(c: &Change) -> bool {
+    c.prompt.is_some() || c.model.is_some() || c.kind.is_some()
+}
+
+/// Plans a fork of a branch (its full event list, `team` its effective team) at `at_seq`.
+/// Empty changes (no field set) are ignored.
+pub fn plan_fork(
+    events: &[Event],
+    team: &Team,
+    at_seq: i64,
+    changes: &HashMap<String, Change>,
+) -> Result<ForkPlan, ForkError> {
+    if team.agents.is_empty() {
+        return Err(ForkError::UnknownAgent(String::new()));
+    }
+    let index_of = |id: &str| team.agents.iter().position(|a| a.id == id);
+    let mut changed: Vec<usize> = vec![];
+    for (id, c) in changes {
+        let i = index_of(id).ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
+        if is_change(c) {
+            changed.push(i);
+        }
+    }
+    let at = events.iter().find(|e| e.seq == at_seq).ok_or(ForkError::UnknownSeq)?;
+    // An agent's real start: its first AgentStart (a resumed agent has a second one).
+    let first_start = |i: usize| {
+        events
+            .iter()
+            .find(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some(team.agents[i].id.as_str()))
+            .map(|e| e.seq)
+            .ok_or(ForkError::UnknownSeq)
+    };
+
+    // 1. The agent active at `at_seq`.
+    let last_start = events.iter().rev().find(|e| e.seq <= at_seq && e.kind == EventKind::AgentStart);
+    let mut a = match (at.kind, last_start) {
+        (EventKind::RunStart, _) | (_, None) => 0,
+        (_, Some(s)) => {
+            let id = s.agent.clone().unwrap_or_default();
+            index_of(&id).ok_or(ForkError::UnknownAgent(id))?
+        }
+    };
+
+    let mut resume = None;
+    let (start_seq, reason): (i64, Option<&str>) = if let Some(&e) = changed.iter().filter(|&&i| i < a).min() {
+        // 2. A change to an agent that finished earlier: restart from it.
+        a = e;
+        (first_start(a)?, Some(REASON_EARLIER))
+    } else if changes.get(&team.agents[a].id).is_some_and(|c| c.kind.is_some()) {
+        // 3. Mode change, or a CLI agent: restart the agent.
+        (first_start(a)?, Some(REASON_KIND))
+    } else if team.agents[a].kind != AgentKind::Open {
+        (first_start(a)?, Some(REASON_CLI))
+    } else if at.kind == EventKind::RunStart {
+        // The run's start: begin with the first agent (or right after RunStart if it never began).
+        (first_start(0).unwrap_or(at_seq + 1), Some(REASON_RUN_START))
+    } else if at.kind == EventKind::AgentStart {
+        (first_start(a)?, Some(REASON_AGENT_RESTART))
+    } else {
+        // 4. Open agent: resume from a model call.
+        let agent_start = first_start(a)?;
+        let model_call = if at.kind == EventKind::ModelCall {
+            Some(at)
+        } else {
+            let id = team.agents[a].id.as_str();
+            events.iter().rev().find(|e| {
+                e.seq <= at_seq && e.seq > agent_start && e.kind == EventKind::ModelCall && e.agent.as_deref() == Some(id)
+            })
+        };
+        let messages = model_call.and_then(|m| m.payload["request"]["messages"].as_array().cloned());
+        match (model_call, messages) {
+            (Some(m), Some(msgs)) => {
+                resume = Some(msgs);
+                let why = match at.kind {
+                    EventKind::ModelCall => None,
+                    EventKind::ToolCall | EventKind::Handoff => Some(REASON_TOOL),
+                    _ => Some(REASON_LAST_MODEL_CALL),
+                };
+                (m.seq, why)
+            }
+            _ => (agent_start, Some(REASON_NO_MODEL_CALL)),
+        }
+    };
+    if start_seq == first_start(a).unwrap_or(i64::MIN) {
+        resume = None;
+    }
+
+    // 5. The world just before `start_seq`: the snapshot of the last write before it.
+    let mut restore = Ok(Restore::Base);
+    for e in events.iter().filter(|e| e.seq < start_seq && e.kind == EventKind::ToolCall) {
+        let p = &e.payload;
+        if let Some(s) = p["snapshot"].as_str() {
+            restore = Ok(Restore::Snapshot(s.to_string()));
+        } else if p["error"].is_null() && p["writes"].as_array().is_some_and(|w| !w.is_empty()) {
+            restore = Err(ForkError::NoRestorePoint { seq: e.seq });
+        }
+    }
+    let restore = restore?;
+
+    // 6. The recorded handoff notes of the agents before `a`.
+    let notes = team.agents[..a]
+        .iter()
+        .map(|spec| {
+            events
+                .iter()
+                .rev()
+                .find(|e| e.seq < start_seq && e.kind == EventKind::Handoff && e.agent.as_deref() == Some(spec.id.as_str()))
+                .and_then(|e| e.payload["note"].as_str().map(str::to_string))
+                .ok_or_else(|| ForkError::MissingHandoff(spec.id.clone()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // 7.
+    let moved = start_seq != at_seq;
+    Ok(ForkPlan {
+        start_seq,
+        moved_from: moved.then_some(at_seq),
+        reason: if moved { reason.map(str::to_string) } else { None },
+        agent_index: a,
+        restore,
+        resume,
+        notes,
+    })
+}
+
+/// `team` with each agent's prompt/model/kind replaced where `changes` sets them.
+pub fn apply_changes(team: &Team, changes: &HashMap<String, Change>) -> Team {
+    let mut t = team.clone();
+    for spec in &mut t.agents {
+        if let Some(c) = changes.get(&spec.id) {
+            if let Some(p) = &c.prompt {
+                spec.prompt = p.clone();
+            }
+            if let Some(m) = &c.model {
+                spec.model = Some(m.clone());
+            }
+            if let Some(k) = c.kind {
+                spec.kind = k;
+            }
+        }
+    }
+    t
+}
+
+/// Forks `branch_id` at `at_seq` with `changes` and starts the new branch running.
+pub async fn fork(
+    state: &Arc<AppState>,
+    branch_id: &str,
+    at_seq: i64,
+    changes: HashMap<String, Change>,
+) -> Result<ForkResponse, ForkError> {
+    let parent = state.store.branch(branch_id).await?;
+    if parent.status == BranchStatus::Running {
+        return Err(ForkError::BranchRunning);
+    }
+    let events = state.store.events(branch_id).await?;
+    let plan = plan_fork(&events, &parent.team, at_seq, &changes)?;
+    let task_id = match events.iter().find(|e| e.kind == EventKind::RunStart).and_then(|e| e.payload["task_id"].as_str()) {
+        Some(t) => t.to_string(),
+        None => state
+            .store
+            .runs()
+            .await?
+            .into_iter()
+            .find(|r| r.id == parent.run_id)
+            .map(|r| r.task_id)
+            .ok_or_else(|| anyhow::anyhow!("no run {} for branch {branch_id}", parent.run_id))?,
+    };
+    let team = apply_changes(&parent.team, &changes);
+    let changes_json = serde_json::to_value(&changes).map_err(anyhow::Error::from)?;
+    let new_id = state
+        .store
+        .create_branch(&parent.run_id, Some((branch_id, plan.start_seq)), &team, &changes_json, plan.reason.clone())
+        .await?;
+    let setup = async {
+        state.store.copy_prefix(branch_id, &new_id, plan.start_seq).await?;
+        let source = match &plan.restore {
+            Restore::Base => Source::Base,
+            Restore::Snapshot(s) => Source::Snapshot(s.clone()),
+        };
+        state.worlds.new_branch(&new_id, source).await
+    };
+    let db = match setup.await {
+        Ok(db) => db,
+        Err(e) => {
+            let _ = state.store.set_status(&new_id, BranchStatus::InfraError, Some(format!("{e:#}"))).await;
+            return Err(ForkError::Internal(e));
+        }
+    };
+    let ctx = Arc::new(BranchCtx::new(new_id.clone(), db, team, task_id));
+    let from = StartPoint { agent_index: plan.agent_index, resume: plan.resume, notes: plan.notes };
+    runner::spawn_branch(state, ctx, from);
+    Ok(ForkResponse { branch_id: new_id, start_seq: plan.start_seq, moved_from: plan.moved_from, reason: plan.reason })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spec(id: &str, kind: AgentKind) -> AgentSpec {
+        AgentSpec { id: id.into(), name: id.into(), kind, model: None, prompt: format!("You are {id}.") }
+    }
+
+    fn team(resolver: AgentKind) -> Team {
+        Team { id: "t".into(), name: "T".into(), agents: vec![spec("triage", AgentKind::Open), spec("resolver", resolver)] }
+    }
+
+    fn ev(seq: i64, agent: Option<&str>, kind: EventKind, payload: Value) -> Event {
+        Event { branch_id: "b".into(), seq, at: chrono::Utc::now(), agent: agent.map(str::to_string), kind, payload }
+    }
+
+    fn msgs(tag: &str) -> Vec<Value> {
+        vec![json!({"role": "system", "content": "sys"}), json!({"role": "user", "content": tag})]
+    }
+
+    fn mc(seq: i64, agent: &str, tag: &str) -> Event {
+        ev(seq, Some(agent), EventKind::ModelCall, json!({"request": {"messages": msgs(tag)}, "response": {}, "usage": {}}))
+    }
+
+    fn read(seq: i64, agent: &str) -> Event {
+        let p = json!({"name": "get_order_details", "args": {}, "result": {}, "error": null,
+                       "reads": ["orders/#W1"], "writes": [], "snapshot": null, "tool_call_id": "x"});
+        ev(seq, Some(agent), EventKind::ToolCall, p)
+    }
+
+    fn write(seq: i64, agent: &str, snapshot: Option<&str>) -> Event {
+        let mut p = json!({"name": "exchange_delivered_order_items", "args": {}, "result": {}, "error": null,
+                           "reads": ["orders/#W1"], "writes": ["orders/#W1"], "snapshot": snapshot, "tool_call_id": "x"});
+        if snapshot.is_none() {
+            p["snapshot_error"] = json!("disk full");
+        }
+        ev(seq, Some(agent), EventKind::ToolCall, p)
+    }
+
+    fn start(seq: i64, agent: &str) -> Event {
+        ev(seq, Some(agent), EventKind::AgentStart, json!({}))
+    }
+
+    /// 1 RunStart; triage 2..=7 (handoff at 6); resolver 8..=14 with writes snapshotted at 10
+    /// (snap_a) and 12 (snap_b); 15 Check.
+    fn events() -> Vec<Event> {
+        vec![
+            ev(1, None, EventKind::RunStart, json!({"task_id": "27"})),
+            start(2, "triage"),
+            mc(3, "triage", "m3"),
+            read(4, "triage"),
+            mc(5, "triage", "m5"),
+            ev(6, Some("triage"), EventKind::Handoff, json!({"note": "N1"})),
+            ev(7, Some("triage"), EventKind::AgentEnd, json!({"ok": true})),
+            start(8, "resolver"),
+            mc(9, "resolver", "m9"),
+            write(10, "resolver", Some("snap_a")),
+            mc(11, "resolver", "m11"),
+            write(12, "resolver", Some("snap_b")),
+            mc(13, "resolver", "m13"),
+            ev(14, Some("resolver"), EventKind::AgentEnd, json!({"ok": true})),
+            ev(15, None, EventKind::Check, json!({"passed": false})),
+        ]
+    }
+
+    fn no_changes() -> HashMap<String, Change> {
+        HashMap::new()
+    }
+
+    fn change(agent: &str, c: Change) -> HashMap<String, Change> {
+        [(agent.to_string(), c)].into_iter().collect()
+    }
+
+    #[test]
+    fn cli_agent_moves_to_agent_start() {
+        let p = plan_fork(&events(), &team(AgentKind::ClaudeCode), 12, &no_changes()).unwrap();
+        assert_eq!(p.start_seq, 8);
+        assert_eq!(p.moved_from, Some(12));
+        assert_eq!(p.reason.as_deref(), Some("Claude Code and Codex sessions restart from the agent's start"));
+        assert_eq!(p.agent_index, 1);
+        assert_eq!(p.resume, None);
+        assert_eq!(p.restore, Restore::Base);
+        assert_eq!(p.notes, vec!["N1".to_string()]);
+    }
+
+    #[test]
+    fn open_tool_call_moves_to_its_model_call() {
+        let p = plan_fork(&events(), &team(AgentKind::Open), 12, &no_changes()).unwrap();
+        assert_eq!(p.start_seq, 11);
+        assert_eq!(p.moved_from, Some(12));
+        assert_eq!(p.reason.as_deref(), Some("a tool call is redone from the model call that chose it"));
+        assert_eq!(p.agent_index, 1);
+        assert_eq!(p.resume, Some(msgs("m11")));
+        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.notes, vec!["N1".to_string()]);
+    }
+
+    #[test]
+    fn open_model_call_stays_and_resumes_messages() {
+        let p = plan_fork(&events(), &team(AgentKind::Open), 11, &no_changes()).unwrap();
+        assert_eq!(p.start_seq, 11);
+        assert_eq!(p.moved_from, None);
+        assert_eq!(p.reason, None);
+        assert_eq!(p.agent_index, 1);
+        assert_eq!(p.resume, Some(msgs("m11")));
+        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        // A prompt change to the active agent doesn't move the fork point.
+        let c = change("resolver", Change { prompt: Some("New.".into()), ..Default::default() });
+        let p = plan_fork(&events(), &team(AgentKind::Open), 11, &c).unwrap();
+        assert_eq!((p.start_seq, p.moved_from), (11, None));
+    }
+
+    #[test]
+    fn change_to_finished_agent_moves_back() {
+        let c = change("triage", Change { prompt: Some("Be brief.".into()), ..Default::default() });
+        let p = plan_fork(&events(), &team(AgentKind::Open), 12, &c).unwrap();
+        assert_eq!(p.start_seq, 2);
+        assert_eq!(p.moved_from, Some(12));
+        assert_eq!(p.reason.as_deref(), Some("a change targets an agent that finished earlier"));
+        assert_eq!(p.agent_index, 0);
+        assert_eq!(p.resume, None);
+        assert_eq!(p.restore, Restore::Base);
+        assert!(p.notes.is_empty());
+    }
+
+    #[test]
+    fn kind_change_moves_to_agent_start() {
+        let c = change("resolver", Change { kind: Some(AgentKind::Codex), ..Default::default() });
+        let p = plan_fork(&events(), &team(AgentKind::Open), 11, &c).unwrap();
+        assert_eq!(p.start_seq, 8);
+        assert_eq!(p.moved_from, Some(11));
+        assert_eq!(p.reason.as_deref(), Some("the agent's mode changes"));
+        assert_eq!(p.agent_index, 1);
+        assert_eq!(p.resume, None);
+        assert_eq!(p.restore, Restore::Base);
+        assert_eq!(p.notes, vec!["N1".to_string()]);
+    }
+
+    #[test]
+    fn restore_is_last_snapshot_before_start() {
+        let t = team(AgentKind::Open);
+        let at = |seq| plan_fork(&events(), &t, seq, &no_changes()).unwrap();
+        assert_eq!(at(13).restore, Restore::Snapshot("snap_b".into()));
+        assert_eq!(at(12).restore, Restore::Snapshot("snap_a".into())); // moved to 11
+        assert_eq!(at(11).restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(at(10).restore, Restore::Base); // moved to 9
+        assert_eq!(at(9).restore, Restore::Base);
+        assert_eq!(at(3).restore, Restore::Base);
+    }
+
+    #[test]
+    fn unsnapshotted_write_has_no_restore_point() {
+        let mut evs = events();
+        evs[11] = write(12, "resolver", None);
+        let e = plan_fork(&evs, &team(AgentKind::Open), 13, &no_changes()).unwrap_err();
+        assert!(matches!(e, ForkError::NoRestorePoint { seq: 12 }), "{e:?}");
+        // Before the unsnapshotted write, the earlier snapshot is exact.
+        let p = plan_fork(&evs, &team(AgentKind::Open), 11, &no_changes()).unwrap();
+        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        // A later snapshot is a full copy, so it is exact past an earlier unsnapshotted write.
+        let mut evs = events();
+        evs[9] = write(10, "resolver", None);
+        let p = plan_fork(&evs, &team(AgentKind::Open), 13, &no_changes()).unwrap();
+        assert_eq!(p.restore, Restore::Snapshot("snap_b".into()));
+    }
+
+    #[test]
+    fn fork_of_a_fork_with_two_agent_starts() {
+        // Branch forked at seq 11 (resume): prefix 1..=10, then the resumed resolver.
+        let mut evs: Vec<Event> = events().into_iter().take(10).collect();
+        evs.extend([
+            start(11, "resolver"),
+            mc(12, "resolver", "m12"),
+            write(13, "resolver", Some("snap_c")),
+            mc(14, "resolver", "m14"),
+            ev(15, Some("resolver"), EventKind::AgentEnd, json!({"ok": true})),
+            ev(16, None, EventKind::Check, json!({"passed": true})),
+        ]);
+        let t = team(AgentKind::Open);
+        let p = plan_fork(&evs, &t, 13, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.agent_index), (12, Some(13), 1));
+        assert_eq!(p.resume, Some(msgs("m12")));
+        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.notes, vec!["N1".to_string()]);
+        let p = plan_fork(&evs, &t, 14, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.restore), (14, Restore::Snapshot("snap_c".into())));
+        // Restarting the agent goes to its real (first) start, before any of its writes.
+        let c = change("resolver", Change { kind: Some(AgentKind::ClaudeCode), ..Default::default() });
+        let p = plan_fork(&evs, &t, 13, &c).unwrap();
+        assert_eq!((p.start_seq, p.resume, p.restore), (8, None, Restore::Base));
+        // Forking at the resumed AgentStart restarts the agent from its first start.
+        let p = plan_fork(&evs, &t, 11, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.resume), (8, Some(11), None));
+    }
+
+    #[test]
+    fn other_steps_map_to_a_start_point() {
+        let t = team(AgentKind::Open);
+        // RunStart: the first agent's start.
+        let p = plan_fork(&events(), &t, 1, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.agent_index, p.resume.clone()), (2, Some(1), 0, None));
+        assert!(p.reason.is_some());
+        // An open agent's AgentStart stays, with no resume.
+        let p = plan_fork(&events(), &t, 8, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.reason.clone(), p.resume.clone()), (8, None, None, None));
+        assert_eq!(p.notes, vec!["N1".to_string()]);
+        // A handoff is a tool call: redone from the model call that chose it.
+        let p = plan_fork(&events(), &t, 6, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.agent_index), (5, 0));
+        assert_eq!(p.reason.as_deref(), Some("a tool call is redone from the model call that chose it"));
+        // AgentEnd and Check: from the agent's last model call.
+        let p = plan_fork(&events(), &t, 14, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.moved_from), (13, Some(14)));
+        let p = plan_fork(&events(), &t, 15, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.agent_index, p.restore), (13, 1, Restore::Snapshot("snap_b".into())));
+    }
+
+    #[test]
+    fn bad_inputs_are_errors() {
+        let t = team(AgentKind::Open);
+        assert!(matches!(plan_fork(&events(), &t, 99, &no_changes()), Err(ForkError::UnknownSeq)));
+        let c = change("nobody", Change { prompt: Some("x".into()), ..Default::default() });
+        assert!(matches!(plan_fork(&events(), &t, 11, &c), Err(ForkError::UnknownAgent(a)) if a == "nobody"));
+        let evs: Vec<Event> = events().into_iter().filter(|e| e.kind != EventKind::Handoff).collect();
+        assert!(matches!(plan_fork(&evs, &t, 11, &no_changes()), Err(ForkError::MissingHandoff(a)) if a == "triage"));
+    }
+
+    #[test]
+    fn errors_read_well() {
+        assert_eq!(ForkError::BranchRunning.to_string(), "the branch is still running");
+        assert!(ForkError::UnknownAgent("bob".into()).to_string().contains("bob"));
+        assert!(ForkError::NoRestorePoint { seq: 12 }.to_string().contains("12"));
+        assert!(ForkError::MissingHandoff("triage".into()).to_string().contains("triage"));
+    }
+}
