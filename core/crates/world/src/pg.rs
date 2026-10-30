@@ -35,6 +35,24 @@ impl Admin {
             .await
     }
 
+    /// Runs `f` on a fresh connection to `db`, then closes it for real (drops the
+    /// client and awaits the connection task) before returning, so the backend is
+    /// gone by the time a later `CREATE DATABASE ... TEMPLATE db` runs.
+    pub async fn with_db<T>(
+        &self,
+        db: &str,
+        f: impl AsyncFnOnce(&mut Client) -> Result<T>,
+    ) -> Result<T> {
+        let (mut client, conn) = tokio_postgres::connect(&self.db_url(db), NoTls)
+            .await
+            .with_context(|| format!("connecting to {db}"))?;
+        let handle = tokio::spawn(conn);
+        let out = f(&mut client).await;
+        drop(client);
+        let _ = handle.await;
+        out
+    }
+
     pub fn db_url(&self, db: &str) -> String {
         format!("{}/{}", self.base_url, db)
     }

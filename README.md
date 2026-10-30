@@ -6,7 +6,7 @@ A Rust service that runs agent teams against a Postgres copy of the tau2-bench r
 
     docker compose -f deploy/compose.yml up -d
 
-Postgres 17 listens on `127.0.0.1:5544` (user and password `arena`). Override the test connection with `ARENA_PG_URL` (default `postgres://arena:arena@127.0.0.1:5544`).
+Postgres 17 listens on `127.0.0.1:5544` (user and password `arena`). Override the test connection with `ARENA_PG_URL` (default `postgres://arena:arena@127.0.0.1:5544/postgres`).
 
 ## Run the tests
 
