@@ -430,6 +430,36 @@
   - Fork at the resolver's first step with a changed prompt, then compare.
   - Screenshot each page into the scratchpad. Checkpoint.
 
+### Task 13b: Disk hygiene (added 2026-10-30 at the user's request: "make sure not to fill up the disk")
+
+Each copy of the retail database is about 21 MB, and every successful write makes a snapshot, so databases add up. Test runs had already left 53 snapshots behind (1.1 GB).
+
+**Files:**
+- Modify: `core/crates/world/src/snapshot.rs`, `core/crates/arenad/src/{store.rs,api.rs,main.rs,app.rs}`
+- Modify: every test binary that creates databases (`core/crates/world/tests/*.rs`, `core/crates/arenad/tests/*.rs`)
+- Modify: `ui/src/pages/Runs.tsx`, `ui/src/pages/Run.tsx`, `ui/src/api.ts`
+- Test: `core/crates/arenad/tests/disk.rs`
+
+**Interfaces:**
+- Produces:
+  - `Worlds::list(prefix: &str) -> Result<Vec<(String, i64)>>`: database names and sizes in bytes.
+  - `Store::delete_run(run_id) -> Result<Vec<String>>`: deletes the run's branches and events and returns every database name they referenced (branch databases and the `snapshot` fields of their `ToolCall` events).
+  - `DELETE /api/runs/{id}`: 409 if any of its branches is running; otherwise it drops every referenced database (errors are ignored per database but logged) and the metadata, and returns `{dropped: n}`.
+  - `GET /api/health` gains `disk: {databases: n, bytes: n, limit_bytes: n}`.
+  - Before creating a run or a fork, `POST /api/runs` and `POST …/fork` refuse with 507 "the arena's databases use more than the limit; delete old runs" when the total size of the `branch_%`, `snap_%` and `gold_%` databases is at least `ARENA_MAX_DB_BYTES` (default 5 GiB).
+  - At startup, arenad drops `branch_`/`snap_` databases that no event or branch in the store references (orphans from crashes or tests), and logs how many it dropped and how many bytes they used. It never touches `world_base`, `gold_*`, `arena` or databases of other prefixes.
+  - UI: a "Delete run" action on the Runs page (with an inline confirm, not `window.confirm`) and the disk line in the top bar.
+
+- [ ] **Step 1: Write the failing tests** in `tests/disk.rs`:
+  - `delete_run_drops_its_databases`: run a scripted team that writes once, then delete the run. Its branch database and snapshot no longer exist.
+  - `delete_running_run_is_409`.
+  - `limit_refuses_new_runs`: with `ARENA_MAX_DB_BYTES` set to 1, POST gives 507.
+  - `startup_gc_drops_only_orphans`: create an orphan `snap_` and a referenced one; after the startup GC only the referenced one remains.
+- [ ] **Step 2: Make every existing test drop every database it creates** (branch, snapshot, temp copy, metadata store, gold copy), including on assertion failure (use a drop guard). Add a final check to each test binary that the count of `branch_%`/`snap_%`/`arena_test%` databases matches what it was before the binary ran.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Run `cargo test` and `cd ui && npx vitest run && npm run build`. Expected: all pass, and afterwards `psql -c "select count(*) from pg_database where datname like 'snap_%'"` is the same as before the tests.
+- [ ] **Step 5:** Checkpoint.
+
 ### Task 14: Live runs and the README
 
 **Files:**
