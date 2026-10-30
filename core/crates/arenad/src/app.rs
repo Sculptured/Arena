@@ -79,6 +79,8 @@ pub struct AppState {
     pub drivers: OnceLock<Drivers>,
     tasks: OnceLock<Tasks>,
     /// Final database dumps of finished branches, by branch id (for compare).
+    /// Set to true when shutdown starts; SSE streams end on it.
+    pub shutdown: tokio::sync::watch::Sender<bool>,
     pub dumps: std::sync::Mutex<HashMap<String, serde_json::Value>>,
 }
 
@@ -89,7 +91,7 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("http client");
-        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new(), dumps: Default::default() }
+        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new(), shutdown: tokio::sync::watch::channel(false).0, dumps: Default::default() }
     }
 }
 

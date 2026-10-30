@@ -49,8 +49,14 @@ async fn main() -> anyhow::Result<()> {
         ui_dist.map_or("api only".to_string(), |d| d.display().to_string())
     );
     axum::serve(listener, router)
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            // End the SSE streams so graceful shutdown can finish; exit anyway after 5 s.
+            let _ = state.shutdown.send(true);
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                std::process::exit(0);
+            });
         })
         .await?;
     Ok(())

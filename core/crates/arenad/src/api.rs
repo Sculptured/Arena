@@ -10,7 +10,7 @@ use std::{
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{header, StatusCode, Uri},
+    http::{header, Method, StatusCode, Uri},
     response::{
         sse::{Event as SseEvent, KeepAlive, Sse},
         IntoResponse, Response,
@@ -237,13 +237,32 @@ async fn stream(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> R
             }
             true
         }
+        let mut shutdown = state.shutdown.subscribe();
+        if *shutdown.borrow() {
+            return;
+        }
         if !catch_up(&state, &id, &mut last, &tx).await {
             return;
         }
+        // Status is checked on its own timer so other branches' events can't starve it,
+        // and once right away so a finished branch gets its `status` immediately.
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
+            enum Wake {
+                Stop,
+                Tick,
+                Ev(Result<Event, RecvError>),
+            }
+            let wake = tokio::select! {
+                _ = shutdown.changed() => Wake::Stop,
+                _ = tick.tick() => Wake::Tick,
+                got = rx.recv() => Wake::Ev(got),
+            };
             let mut check_status = false;
-            match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
-                Ok(Ok(e)) if e.branch_id == id => {
+            match wake {
+                Wake::Stop => return,
+                Wake::Tick => check_status = true,
+                Wake::Ev(Ok(e)) if e.branch_id == id => {
                     if e.seq == last + 1 {
                         last = e.seq;
                         if tx.send(Ok(sse_event("event", &e))).await.is_err() {
@@ -253,15 +272,14 @@ async fn stream(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> R
                         return;
                     }
                 }
-                Ok(Ok(_)) => {}
-                Ok(Err(RecvError::Lagged(_))) => {
+                Wake::Ev(Ok(_)) => {}
+                Wake::Ev(Err(RecvError::Lagged(_))) => {
                     if !catch_up(&state, &id, &mut last, &tx).await {
                         return;
                     }
                     check_status = true;
                 }
-                Ok(Err(RecvError::Closed)) => tokio::time::sleep(Duration::from_millis(250)).await,
-                Err(_) => check_status = true,
+                Wake::Ev(Err(RecvError::Closed)) => tokio::time::sleep(Duration::from_millis(250)).await,
             }
             if check_status {
                 let Ok(Some(b)) = state.store.find_branch(&id).await else { return };
@@ -325,25 +343,29 @@ async fn rows(
         return Err(ApiError::bad("there is no step with that number on this branch"));
     }
     let source = restore_source(&events, seq)?;
-    let tmp = state
-        .worlds
-        .new_branch(&format!("rows_{id}_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]), source)
-        .await?;
-    let read = state
-        .worlds
-        .with_client(&tmp, async |c| {
-            let mut out = serde_json::Map::new();
-            for (t, i) in &keys {
-                let row = c.query_opt(&format!("SELECT doc FROM {t} WHERE id = $1"), &[i]).await?;
-                out.insert(format!("{t}/{i}"), row.map(|r| r.get::<_, Value>(0)).unwrap_or(Value::Null));
-            }
-            Ok(out)
-        })
-        .await;
-    let dropped = state.worlds.drop_db(&tmp).await;
-    let out = read?;
-    dropped?;
-    Ok(Json(json!({"seq": seq, "rows": out})))
+    // Create, read and drop run detached, so a client disconnect can't leak the temp database.
+    detached(async move {
+        let tmp = state
+            .worlds
+            .new_branch(&format!("rows_{id}_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]), source)
+            .await?;
+        let read = state
+            .worlds
+            .with_client(&tmp, async |c| {
+                let mut out = serde_json::Map::new();
+                for (t, i) in &keys {
+                    let row = c.query_opt(&format!("SELECT doc FROM {t} WHERE id = $1"), &[i]).await?;
+                    out.insert(format!("{t}/{i}"), row.map(|r| r.get::<_, Value>(0)).unwrap_or(Value::Null));
+                }
+                Ok(out)
+            })
+            .await;
+        let dropped = state.worlds.drop_db(&tmp).await;
+        let out = read?;
+        dropped?;
+        Ok(Json(json!({"seq": seq, "rows": out})))
+    })
+    .await
 }
 
 // ---------------------------------------------------------------- compare
@@ -406,21 +428,75 @@ fn content_type(p: &FsPath) -> &'static str {
     }
 }
 
-/// Serves `dist` for any path the API doesn't claim; unknown paths get `index.html` (SPA).
+/// Serves `dist` for GET/HEAD requests the API doesn't claim; unknown non-asset paths get
+/// `index.html` (SPA). `/api/`, `/mcp/`, `/gateway/` and missing `/assets/` files are 404s.
 pub fn with_ui(router: Router, dist: PathBuf) -> Router {
-    router.fallback(move |uri: Uri| {
+    router.fallback(move |method: Method, uri: Uri| {
         let dist = dist.clone();
         async move {
-            let rel = uri.path().trim_start_matches('/');
-            let safe = FsPath::new(rel).components().all(|c| matches!(c, Component::Normal(_)));
-            let mut file = dist.join(if safe { rel } else { "index.html" });
-            if !safe || rel.is_empty() || !file.is_file() {
-                file = dist.join("index.html");
+            let path = uri.path();
+            let reserved = ["/api/", "/mcp/", "/gateway/"].iter().any(|p| path.starts_with(p) || path == p.trim_end_matches('/'));
+            if reserved || !(method == Method::GET || method == Method::HEAD) {
+                return ApiError::not_found("no such route").into_response();
             }
+            let rel = path.trim_start_matches('/');
+            let safe = FsPath::new(rel).components().all(|c| matches!(c, Component::Normal(_)));
+            let candidate = dist.join(rel);
+            let file = if safe && !rel.is_empty() && candidate.is_file() {
+                candidate
+            } else if rel.starts_with("assets/") || !safe && rel.contains("assets/") {
+                return ApiError::not_found("no such file").into_response();
+            } else {
+                dist.join("index.html")
+            };
             match tokio::fs::read(&file).await {
                 Ok(bytes) => ([(header::CONTENT_TYPE, content_type(&file))], bytes).into_response(),
                 Err(_) => StatusCode::NOT_FOUND.into_response(),
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    async fn call(app: &Router, method: &str, uri: &str) -> (StatusCode, String, String) {
+        let r = app.clone().oneshot(Request::builder().method(method).uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let ct = r.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
+        let st = r.status();
+        let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        (st, ct, String::from_utf8_lossy(&body).to_string())
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_is_scoped() {
+        let root = std::env::temp_dir().join(format!("arena_ui_{}", uuid::Uuid::new_v4().simple()));
+        let dist = root.join("dist");
+        std::fs::create_dir_all(dist.join("assets")).unwrap();
+        std::fs::write(dist.join("index.html"), "INDEX").unwrap();
+        std::fs::write(dist.join("assets/a.js"), "JS").unwrap();
+        std::fs::write(root.join("secret.txt"), "SECRET").unwrap();
+        let app = with_ui(Router::new(), dist);
+
+        assert_eq!(call(&app, "GET", "/").await.2, "INDEX");
+        assert_eq!(call(&app, "GET", "/runs/x").await.2, "INDEX");
+        let (st, ct, body) = call(&app, "GET", "/assets/a.js").await;
+        assert_eq!((st, body.as_str()), (StatusCode::OK, "JS"));
+        assert!(ct.starts_with("text/javascript"));
+        assert_eq!(call(&app, "GET", "/assets/missing.js").await.0, StatusCode::NOT_FOUND);
+        let (st, ct, body) = call(&app, "POST", "/mcp/nope").await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        assert!(ct.starts_with("application/json") && body.contains("error"), "{ct} {body}");
+        assert_eq!(call(&app, "GET", "/gateway/x").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&app, "GET", "/api/x").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&app, "POST", "/runs/x").await.0, StatusCode::NOT_FOUND);
+        for p in ["/../secret.txt", "/%2e%2e/secret.txt", "/assets/../../secret.txt", "/%2e%2e%2fsecret.txt"] {
+            let (_, _, body) = call(&app, "GET", p).await;
+            assert!(!body.contains("SECRET"), "{p} escaped");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

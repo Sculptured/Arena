@@ -59,6 +59,10 @@ struct Fx {
 }
 
 async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
+    setup_with(tag, upstream, |_| {}).await
+}
+
+async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_api_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
@@ -68,6 +72,7 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     config.upstream_base = upstream.base_url.clone();
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
+    tweak(&mut config);
     let state = Arc::new(AppState::new(store, worlds, config));
     let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
@@ -381,5 +386,45 @@ fn fork_over_http_maps_errors_and_starts_a_branch() {
         assert_eq!(done["status"], "passed", "{done}");
         assert_eq!(done["parent_id"], b.as_str());
         teardown(fx, &[&b, &child]).await;
+    })
+}
+
+#[test]
+fn open_mode_is_rejected_without_a_key() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("x")]).await;
+        let fx = setup_with("nokey", &up, |c| {
+            c.openrouter_key = None;
+            c.upstream_base = app::OPENROUTER_BASE.to_string();
+        })
+        .await;
+        let (_, h) = fx.get("/api/health").await;
+        assert_eq!(h["open_available"], false);
+        let (st, v) = fx.post("/api/runs", json!({"task_id": "27", "team": team()})).await;
+        assert_eq!((st, v["error"].as_str()), (400, Some("open mode needs OPENROUTER_API_KEY")));
+        let (st, v) = fx.post("/api/branches/whatever/fork", json!({"at_seq": 1, "changes": {"resolver": {"kind": "open"}}})).await;
+        assert_eq!((st, v["error"].as_str()), (400, Some("open mode needs OPENROUTER_API_KEY")));
+        assert!(fx.state.store.runs().await.unwrap().is_empty(), "no run was created");
+        drop(fx.state);
+        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
+    })
+}
+
+#[test]
+fn stream_ends_when_shutdown_fires() {
+    run(async {
+        // A branch that stays running: a run row + running branch with no driver activity.
+        let up = FakeUpstream::start(vec![text_msg("x")]).await;
+        let fx = setup("shutdown", &up).await;
+        let t = team();
+        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+        let b = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
+        let mut resp = fx.http.get(format!("{}/api/branches/{b}/stream", fx.base)).send().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        fx.state.shutdown.send(true).unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(5), async { while resp.chunk().await.unwrap().is_some() {} }).await;
+        assert!(ended.is_ok(), "stream did not end on shutdown");
+        drop(fx.state);
+        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
     })
 }
