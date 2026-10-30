@@ -82,7 +82,8 @@ fn command_with(
     if let Some(m) = &spec.model {
         c.args(["-m", m]);
     }
-    c.arg(prompt);
+    // The prompt is positional and may start with "-": keep it apart from the flags.
+    c.args(["--", prompt]);
     super::scrub_env(&mut c);
     c
 }
@@ -135,6 +136,7 @@ pub fn parse(stdout: &str, returncode: i32) -> AgentResult {
         cost_usd: None,
         cost_source: None,
         seconds: 0.0,
+        failure: None,
     }
 }
 

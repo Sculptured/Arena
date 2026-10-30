@@ -20,6 +20,10 @@ async fn handle(
     Path((branch, agent)): Path<(String, String)>,
     Json(mut body): Json<Value>,
 ) -> Response {
+    let live = state.live.read().unwrap().get(&branch).is_some_and(|c| c.has_agent(&agent));
+    if !live {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "unknown branch or agent"}))).into_response();
+    }
     if !body.is_object() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "request body must be a JSON object"}))).into_response();
     }

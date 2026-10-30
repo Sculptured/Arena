@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { rows } from '../api';
-import { formatCost } from './timeline';
+import { formatCost, rowKeys } from './timeline';
 import type { Event } from '../types';
 
 export const pretty = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? null, null, 2));
@@ -18,7 +18,7 @@ function keysOf(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : [];
 }
 
-function RowsAtStep({ branchId, seq, keys, auto }: { branchId: string; seq: number; keys: string[]; auto?: boolean }) {
+function RowsAtStep({ branchId, seq, keys, more, auto }: { branchId: string; seq: number; keys: string[]; more: number; auto?: boolean }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,6 +35,7 @@ function RowsAtStep({ branchId, seq, keys, auto }: { branchId: string; seq: numb
         {busy ? 'Loading…' : 'Rows at this step'}
       </button>
       {keys.length === 0 && <span className="muted small"> nothing read or written</span>}
+      {more > 0 && <span className="muted small"> (+{more} more not shown)</span>}
       {err && <div className="notice error">{err}</div>}
       {data && Object.entries(data).map(([k, doc]) => (
         <div key={k} className="row-doc">
@@ -59,7 +60,7 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
   switch (event.kind) {
     case 'tool_call': {
       const reads = keysOf(p.reads), writes = keysOf(p.writes);
-      const keys = [...new Set([...writes, ...reads])].slice(0, 50);
+      const { keys, more } = rowKeys(writes, reads);
       body = (
         <>
           <Block title="Arguments" value={p.args} />
@@ -70,7 +71,7 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
             {p.snapshot_error && <div className="notice error">snapshot failed: {p.snapshot_error}</div>}
             {p.snapshot && <div className="muted small">snapshot {String(p.snapshot)}</div>}
           </div>
-          <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} auto={auto} />
+          <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} more={more} auto={auto} />
           {p.error ? <div className="block"><div className="label">Error</div><pre className="json err">{p.error}</pre></div> : <Block title="Result" value={p.result} />}
         </>
       );

@@ -3,13 +3,32 @@ use std::{future::Future, pin::Pin, sync::{Arc, Weak}, time::Instant};
 use serde_json::{json, Value};
 use world::tools;
 
-use super::{AgentResult, AgentRun, Driver};
+use super::{AgentResult, AgentRun, Driver, FailureKind};
 use crate::{
     app::AppState,
     exec::{handoff_schema, ToolExec},
 };
 
 pub const MAX_MODEL_CALLS: usize = 40;
+const DEFAULT_OPEN_MODEL: &str = "deepseek/deepseek-chat-v3.1";
+
+/// How the loop ended badly: the model misbehaved, or something broke around it.
+enum Fault {
+    Model(String),
+    Infra(String),
+}
+
+impl From<String> for Fault {
+    fn from(s: String) -> Fault {
+        Fault::Infra(s)
+    }
+}
+
+impl From<&str> for Fault {
+    fn from(s: &str) -> Fault {
+        Fault::Infra(s.to_string())
+    }
+}
 
 /// Our own agent loop: every model call goes through the recording gateway.
 pub struct OpenDriver {
@@ -61,9 +80,15 @@ impl OpenDriver {
         let mut totals = [0i64; 3];
         let mut cost = Some(0.0f64);
         let outcome = self.drive(&run, &mut totals, &mut cost).await;
+        let (error, failure) = match outcome {
+            Ok(()) => (None, None),
+            Err(Fault::Model(e)) => (Some(e), Some(FailureKind::Model)),
+            Err(Fault::Infra(e)) => (Some(e), None),
+        };
         AgentResult {
-            ok: outcome.is_ok(),
-            error: outcome.err(),
+            ok: error.is_none(),
+            error,
+            failure,
             tokens: json!({"prompt_tokens": totals[0], "completion_tokens": totals[1], "total_tokens": totals[2]}),
             cost_source: cost.map(|_| "openrouter".to_string()),
             cost_usd: cost,
@@ -71,7 +96,7 @@ impl OpenDriver {
         }
     }
 
-    async fn drive(&self, run: &AgentRun, totals: &mut [i64; 3], cost: &mut Option<f64>) -> Result<(), String> {
+    async fn drive(&self, run: &AgentRun, totals: &mut [i64; 3], cost: &mut Option<f64>) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
         let agent = run.spec.id.as_str();
         let url = format!(
@@ -86,14 +111,12 @@ impl OpenDriver {
         let http = &state.http;
         for _ in 0..MAX_MODEL_CALLS {
             let mut body = json!({"messages": messages, "tools": tools});
-            if let Some(m) = &run.spec.model {
-                body["model"] = json!(m);
-            }
+            body["model"] = json!(run.spec.model.as_deref().unwrap_or(DEFAULT_OPEN_MODEL));
             let resp = http.post(&url).json(&body).send().await.map_err(|e| format!("gateway request failed: {e}"))?;
             let status = resp.status();
             let text = resp.text().await.map_err(|e| format!("gateway response unreadable: {e}"))?;
             if !status.is_success() {
-                return Err(format!("model call failed ({status}): {text}"));
+                return Err(format!("model call failed ({status}): {text}").into());
             }
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?;
             let usage = &v["usage"];
@@ -112,7 +135,7 @@ impl OpenDriver {
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
             if calls.is_empty() {
                 if v["choices"][0]["finish_reason"] == "length" {
-                    return Err("model output was cut off".into());
+                    return Err(Fault::Model("model output was cut off".into()));
                 }
                 return Ok(());
             }
@@ -142,6 +165,6 @@ impl OpenDriver {
                 }
             }
         }
-        Err(format!("agent exceeded {MAX_MODEL_CALLS} model calls"))
+        Err(Fault::Model(format!("agent exceeded {MAX_MODEL_CALLS} model calls")))
     }
 }

@@ -157,6 +157,7 @@ fn triage_write_is_refused_and_recorded() {
         let fx = setup("refuse").await;
         let r = call(&fx, "triage", "modify_user_address", address_args()).await;
         assert_eq!(r["isError"], true);
+        assert_eq!(r["content"][0]["text"], "Write tools are not available to this agent");
         let evs = fx.store.events(&fx.branch).await.unwrap();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].kind, EventKind::ToolCall);

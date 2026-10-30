@@ -79,7 +79,7 @@ export default function Team() {
             <div className="agent-fields">
               <label className="field">
                 <span className="label">Mode</span>
-                <select value={a.kind} onChange={(e) => patch(i, { kind: e.target.value as AgentKind })}>
+                <select value={a.kind} onChange={(e) => patch(i, { kind: e.target.value as AgentKind, model: null })}>
                   {KINDS.map((k) => (
                     <option key={k.value} value={k.value} disabled={k.value === 'open' && !openOk && a.kind !== 'open'}>
                       {k.label}{k.value === 'open' && !openOk ? ' (needs OPENROUTER_API_KEY)' : ''}

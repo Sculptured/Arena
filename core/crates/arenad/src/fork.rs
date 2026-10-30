@@ -102,8 +102,21 @@ fn changes_kind(c: &Change, spec: &AgentSpec) -> bool {
     c.kind.is_some_and(|k| k != spec.kind)
 }
 
+/// The model a change sets: `Some(None)` clears it (empty or blank text), `Some(Some(m))` sets it.
+fn new_model(c: &Change) -> Option<Option<String>> {
+    c.model.as_ref().map(|m| {
+        let m = m.trim();
+        (!m.is_empty()).then(|| m.to_string())
+    })
+}
+
+/// True when `c` changes the agent's model (the same model, or clearing an unset one, is no change).
+fn changes_model(c: &Change, spec: &AgentSpec) -> bool {
+    new_model(c).is_some_and(|m| m != spec.model)
+}
+
 fn is_change(c: &Change, spec: &AgentSpec) -> bool {
-    c.prompt.is_some() || c.model.is_some() || changes_kind(c, spec)
+    c.prompt.is_some() || changes_model(c, spec) || changes_kind(c, spec)
 }
 
 /// Plans a fork of a branch (its full event list, `team` its effective team) at `at_seq`.
@@ -243,8 +256,12 @@ pub fn apply_changes(team: &Team, changes: &HashMap<String, Change>) -> Team {
             if let Some(p) = &c.prompt {
                 spec.prompt = p.clone();
             }
-            if let Some(m) = &c.model {
-                spec.model = Some(m.clone());
+            if changes_kind(c, spec) {
+                // The old model belongs to the old driver: the new driver's default applies.
+                spec.model = None;
+            }
+            if let Some(m) = new_model(c) {
+                spec.model = m;
             }
             if let Some(k) = c.kind {
                 spec.kind = k;
@@ -547,6 +564,44 @@ mod tests {
         // Before its AgentEnd the resolver is still active: a prompt change resumes.
         let p = plan_fork(&events(), &t, 13, &c).unwrap();
         assert_eq!((p.start_seq, p.moved_from), (13, None));
+    }
+
+    #[test]
+    fn apply_changes_model_rules() {
+        let mut t = team(AgentKind::Open);
+        t.agents[0].model = Some("old/model".into());
+        let ap = |c: Change| apply_changes(&t, &change(&t.agents[0].id.clone(), c)).agents[0].clone();
+        // A mode change resets the model.
+        let a = ap(Change { kind: Some(AgentKind::Codex), ..Default::default() });
+        assert_eq!((a.kind, a.model), (AgentKind::Codex, None));
+        // An explicit model with the mode change is kept.
+        let a = ap(Change { kind: Some(AgentKind::Codex), model: Some("gpt-x".into()), ..Default::default() });
+        assert_eq!(a.model.as_deref(), Some("gpt-x"));
+        // Same kind keeps the model.
+        let a = ap(Change { kind: Some(AgentKind::Open), ..Default::default() });
+        assert_eq!(a.model.as_deref(), Some("old/model"));
+        // Empty or blank text clears.
+        assert_eq!(ap(Change { model: Some("".into()), ..Default::default() }).model, None);
+        assert_eq!(ap(Change { model: Some("  ".into()), ..Default::default() }).model, None);
+        assert_eq!(ap(Change { model: Some("new".into()), ..Default::default() }).model.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn same_or_empty_model_is_not_a_change() {
+        let mut t = team(AgentKind::Open);
+        t.agents[0].model = Some("m".into());
+        let id = t.agents[0].id.clone();
+        let same = Change { model: Some("m".into()), ..Default::default() };
+        assert!(!is_change(&same, &t.agents[0]));
+        let empty = Change { model: Some("".into()), ..Default::default() };
+        assert!(is_change(&empty, &t.agents[0]));
+        t.agents[0].model = None;
+        assert!(!is_change(&empty, &t.agents[0]));
+        assert!(is_change(&same, &t.agents[0]));
+        // And plan_fork ignores it.
+        let c = change(&id, empty);
+        let p = plan_fork(&events(), &t, 11, &c).unwrap();
+        assert_eq!((p.start_seq, p.moved_from), (11, None));
     }
 
     #[test]

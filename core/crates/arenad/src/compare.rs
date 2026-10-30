@@ -99,4 +99,42 @@ mod tests {
         assert_eq!(d[0], json!({"key": "orders/o", "a": null, "b": {"s": 1}}));
         assert_eq!(d[1]["key"], "users/u1");
     }
+
+    fn branch() -> Branch {
+        Branch {
+            id: "b".into(),
+            run_id: "r".into(),
+            parent_id: None,
+            start_seq: None,
+            team: Team { id: "t".into(), name: "T".into(), agents: vec![] },
+            changes: json!([]),
+            fork_note: None,
+            status: BranchStatus::Passed,
+            error: None,
+            created_at: chrono::Utc::now(),
+            ended_at: None,
+        }
+    }
+
+    fn end(seq: i64, agent: &str, tokens: i64, cost: Option<f64>, source: Option<&str>) -> Event {
+        ev(seq, agent, EventKind::AgentEnd, json!({"ok": true, "tokens": tokens, "cost_usd": cost, "cost_source": source}))
+    }
+
+    #[test]
+    fn summary_shows_dollars_only_when_every_agent_has_them() {
+        // One agent with a dollar figure, one without (Codex): tokens summed, no dollars.
+        let mixed = [end(1, "a", 100, Some(0.5), Some("api_equivalent_estimate")), end(2, "b", 50, None, None)];
+        let s = summary(&branch(), &mixed);
+        assert_eq!(s["tokens"], 150);
+        assert!(s["cost_usd"].is_null());
+        assert_eq!(s["cost_source"], "api_equivalent_estimate");
+        // Two sources, both with dollars: summed, labelled mixed.
+        let two = [end(1, "a", 1, Some(0.5), Some("openrouter")), end(2, "b", 2, Some(0.25), Some("api_equivalent_estimate"))];
+        let s = summary(&branch(), &two);
+        assert_eq!(s["cost_usd"], 0.75);
+        assert_eq!(s["cost_source"], "mixed");
+        // The null does not depend on order.
+        let rev = [end(1, "b", 50, None, None), end(2, "a", 100, Some(0.5), Some("openrouter"))];
+        assert!(summary(&branch(), &rev)["cost_usd"].is_null());
+    }
 }

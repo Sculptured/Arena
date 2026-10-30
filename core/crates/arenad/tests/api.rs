@@ -427,3 +427,41 @@ fn stream_ends_when_shutdown_fires() {
         drop(fx.state);
     })
 }
+
+#[test]
+fn compare_of_branch_without_database_is_409() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("x")]).await;
+        let fx = setup("nodb", &up).await;
+        let t = team();
+        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+        let ghost = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
+        fx.state.store.set_status(&ghost, BranchStatus::InfraError, Some("setup failed".into())).await.unwrap();
+        let (st, v) = fx.get(&format!("/api/compare?a={ghost}&b={ghost}")).await;
+        assert_eq!(st, 409, "{v}");
+        assert_eq!(v["error"], "this branch has no database (its setup failed)");
+        drop(fx.state);
+    })
+}
+
+#[test]
+fn api_rejects_foreign_host_headers() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("x")]).await;
+        let fx = setup("host", &up).await;
+        let port = fx.base.rsplit(':').next().unwrap().to_string();
+        for (host, want) in [
+            ("evil.example", 403),
+            (&format!("evil.example:{port}"), 403),
+            ("127.0.0.1.evil.example", 403),
+            ("127.0.0.1", 200),
+            (&format!("127.0.0.1:{port}"), 200),
+            (&format!("localhost:{port}"), 200),
+            (&format!("[::1]:{port}"), 200),
+        ] {
+            let r = fx.http.get(format!("{}/api/health", fx.base)).header("Host", host).send().await.unwrap();
+            assert_eq!(r.status().as_u16(), want, "host {host}");
+        }
+        drop(fx.state);
+    })
+}

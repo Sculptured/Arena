@@ -71,7 +71,8 @@ fn claude_command_has_only_retail_mcp() {
     assert_eq!(a[i + 1], "mcp__retail__*");
     let i = a.iter().position(|x| x == "--model").unwrap();
     assert_eq!(a[i + 1], "sonnet");
-    assert_eq!(a[1], "do it");
+    assert_eq!(a[0], "-p");
+    assert_eq!(a[a.len() - 2..], ["--", "do it"]);
     assert!(a.contains(&"--no-session-persistence".to_string()));
     assert!(c.get_envs().any(|(k, v)| k == "PGPASSWORD" && v.is_none()));
     let c = claude::command(&spec(Some("opus")), URL, "x");
@@ -122,6 +123,7 @@ fn codex_command_sets_mcp_url() {
     let a = args(&c);
     assert_eq!(c.get_program(), "codex");
     assert_eq!(a[0], "exec");
+    assert_eq!(a[a.len() - 2..], ["--", "do it"]);
     assert!(a.contains(&format!("mcp_servers.retail.url=\"{URL}\"")));
     assert!(a.contains(&"approval_policy=\"never\"".to_string()));
     assert!(a.contains(&"mcp_servers.retail.default_tools_approval_mode=\"approve\"".to_string()));

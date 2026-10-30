@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use world::snapshot::Source;
 
 use crate::{
-    agents::AgentRun,
+    agents::{AgentRun, FailureKind},
     app::AppState,
     exec::BranchCtx,
     model::*,
@@ -124,7 +124,9 @@ async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) ->
         state.store.append(&ctx.branch_id, id, EventKind::AgentEnd, serde_json::to_value(&end)?).await?;
         if !result.ok {
             let e = result.error.unwrap_or_else(|| "agent failed".to_string());
-            return Ok((BranchStatus::InfraError, Some(e)));
+            // The model's own behavior is a failed attempt, not a broken harness.
+            let status = if result.failure == Some(FailureKind::Model) { BranchStatus::Failed } else { BranchStatus::InfraError };
+            return Ok((status, Some(e)));
         }
         if !ctx.is_last(&spec.id) && ctx.handoff_note(&spec.id).is_none() {
             return Ok((BranchStatus::Failed, Some("no handoff".to_string())));

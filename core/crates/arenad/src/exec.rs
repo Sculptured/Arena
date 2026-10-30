@@ -88,7 +88,7 @@ impl ToolExec {
         let mut reads = vec![];
         let mut writes = vec![];
         let outcome: Result<Value, String> = if tools::WRITE_TOOLS.contains(&name) && !last {
-            Err(format!("{name} is not available to you: only the last agent in the team may make changes"))
+            Err("Write tools are not available to this agent".to_string())
         } else {
             match self
                 .worlds

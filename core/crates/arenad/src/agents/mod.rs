@@ -19,6 +19,13 @@ pub struct AgentRun {
     pub resume: Option<Vec<Value>>,
 }
 
+/// Why an agent failed, when it is not an infrastructure problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The model's own behavior (too many calls, output cut off): the branch is `failed`.
+    Model,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     pub ok: bool,
@@ -29,6 +36,8 @@ pub struct AgentResult {
     pub cost_usd: Option<f64>,
     pub cost_source: Option<String>,
     pub seconds: f64,
+    /// `None` on failure means an infrastructure error (CLI or gateway/upstream problem).
+    pub failure: Option<FailureKind>,
 }
 
 pub trait Driver: Send + Sync {
@@ -58,6 +67,7 @@ fn failed(error: String, seconds: f64) -> AgentResult {
         cost_usd: None,
         cost_source: None,
         seconds,
+        failure: None,
     }
 }
 

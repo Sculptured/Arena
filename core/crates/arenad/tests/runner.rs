@@ -62,7 +62,7 @@ struct Fail;
 impl Driver for Fail {
     fn run<'a>(&'a self, _: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async {
-            AgentResult { ok: false, error: Some("boom".into()), tokens: json!({}), cost_usd: None, cost_source: None, seconds: 0.0 }
+            AgentResult { ok: false, error: Some("boom".into()), tokens: json!({}), cost_usd: None, cost_source: None, seconds: 0.0, failure: None }
         })
     }
 }
@@ -226,6 +226,21 @@ fn driver_error_is_infra_error_not_failed() {
         assert_eq!(kinds(&evs), vec![EventKind::RunStart, EventKind::AgentStart, EventKind::AgentEnd]);
         let end: AgentEndPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
         assert!(!end.ok);
+        teardown(fx, &[&branch]).await;
+    })
+}
+
+#[test]
+fn model_cutoff_is_failed_not_infra_error() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"role": "assistant", "content": "partial", "_finish_reason": "length"})]).await;
+        let fx = setup("cutoff", Some(&up), false).await;
+        let (_run, branch) = runner::start_run(&fx.state, "27", team()).await.unwrap();
+        let b = finished(&fx, &branch).await;
+        assert_eq!(b.status, BranchStatus::Failed);
+        assert_eq!(b.error.as_deref(), Some("model output was cut off"));
+        let evs = fx.state.store.events(&branch).await.unwrap();
+        assert!(!kinds(&evs).contains(&EventKind::Check));
         teardown(fx, &[&branch]).await;
     })
 }

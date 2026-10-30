@@ -41,7 +41,7 @@ export default function ForkPanel({ branch, seq, onForked }: {
               <strong>{a.name}</strong>
               <label className="field fork-mode">
                 <span className="label">Mode</span>
-                <select value={e.kind ?? a.kind} onChange={(ev) => set(a.id, { kind: ev.target.value as AgentKind })}>
+                <select value={e.kind ?? a.kind} onChange={(ev) => set(a.id, { kind: ev.target.value as AgentKind, model: '' })}>
                   {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </select>
               </label>

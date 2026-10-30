@@ -13,7 +13,7 @@ The arena runs a team of AI agents on a customer-service task from tau2-bench re
 
 Needs Docker, Rust, Node, and the `claude` and/or `codex` CLIs on your PATH for CLI mode.
 
-    docker compose -f deploy/compose.yml up -d     # Postgres on 127.0.0.1:5544
+    docker compose -f deploy/compose.yml up -d     # Postgres, published on loopback only (127.0.0.1:5544)
     cd core && cargo run -p arenad                 # API on http://127.0.0.1:4510
     cd ui && npm install && npm run dev            # UI on http://127.0.0.1:4520
 
@@ -43,14 +43,14 @@ You choose a step N and a change (prompt, model, or kind of one agent).
 - The fork point moves back to the start of an agent when: the agent active at step N is a CLI agent (a CLI session can't be cut at a tool call); the change switches its mode; or the change is for an agent that finished before step N (then it moves to the start of the earliest changed agent). The response and the UI say where the fork started (`start_seq`), where you asked for (`moved_from`), and why (`reason`).
 - A change is never silently ignored.
 - If there is no restore point for the step, the fork is refused with an error.
-- Changing only `kind` keeps the agent's old `model`. Switching a Claude agent (model `sonnet`) to `codex` without also setting a Codex model fails (see the measurements). Set the model too.
+- Changing `kind` resets the agent's model to the new mode's default, unless the same change also sets a model. An empty model in a change clears the model.
 
 ## Cost labels
 
 - `openrouter`: the cost OpenRouter reports (open mode).
 - `api_equivalent_estimate`: Claude Code's own `total_cost_usd`. It is what the same tokens would cost at API prices, not what a subscription pays.
 - No label and no dollar figure: Codex reports tokens only.
-- When one branch mixes agents, the branch cost adds only the agents that have a dollar figure. The label shows the source of the agents that had one. Tokens are always summed.
+- Dollars are shown only when every agent in the branch has a dollar figure; otherwise only tokens are shown. Tokens are always summed. When agents have different sources the label is `mixed`.
 
 ## Measurements
 
@@ -62,7 +62,7 @@ Live runs on task 27 (2026-10-30), through the HTTP API, one run each. "A" is th
 |---|---|---|---|---|
 | A: default team (Task 13) | passed | 23.574 | 104427 | $0.0996256 (api_equivalent_estimate) |
 | A fork: resolver prompt changed, forked at step 12 (Task 13) | passed | 8.911 | 36036 | $0.0296177 (api_equivalent_estimate) |
-| B: triage Claude Code, resolver Codex (new run, model unset) | passed | 50.708 | 166583 | $0.0407897 (api_equivalent_estimate, triage only; Codex has no dollar figure) |
+| B: triage Claude Code, resolver Codex (new run, model unset) | passed | 50.708 | 166583 | $0.0407897 (api_equivalent_estimate, triage only, from its agent_end; Codex has no dollar figure, so the compare output shows no dollars for B) |
 | C1: fork of A at step 12, resolver kind changed to `codex`, model left as `sonnet` | infra_error | 1.725 | 0 | none |
 | C2: same fork, resolver kind `codex` and model `gpt-6.1-sol` | passed | 29.159 | 106955 | none (Codex reports tokens only) |
 | Open mode | not run | | | no `OPENROUTER_API_KEY` set; `open_available` was false |
@@ -70,7 +70,7 @@ Live runs on task 27 (2026-10-30), through the HTTP API, one run each. "A" is th
 Notes:
 - The two fork rows (and C1/C2) cover the resolver only. For comparison, A's resolver alone was 8.796 s, 45932 tokens, $0.0508491 (from the agent_end event).
 - B and C2 passed the database check (no differing rows against the gold result). The Codex resolver was slower than the Claude resolver (34.6 s in B and 28.8 s in C2, against 8.8 s in A; Claude's 8.9 s fork with a longer prompt was similar) and used more tokens (107721 in B and 106955 in C2, against 45932). Codex token counts include cached input, so they are not comparable one to one with Claude's. One run each, so this is an observation, not a benchmark.
-- C1 failed because Codex with a ChatGPT account does not support the model `sonnet`: `The 'sonnet' model is not supported when using Codex with a ChatGPT account.` It is not a usage limit. The fork response was `{"start_seq":12,"moved_from":null,"reason":null}`, and the branch ended `infra_error`. C2 is the one retry, with the model set to the one in my Codex config.
+- C1 was measured before the fix that makes a kind-only fork reset the model (a kind-only fork now resets the model to the new mode's default, so C1 would not fail this way). It failed because Codex with a ChatGPT account does not support the model `sonnet`: `The 'sonnet' model is not supported when using Codex with a ChatGPT account.` It is not a usage limit. The fork response was `{"start_seq":12,"moved_from":null,"reason":null}`, and the branch ended `infra_error`. C2 is the one retry, with the model set to the one in my Codex config.
 - Compare, A against C2: `first_divergent_seq` 13, `differing_rows` empty. A against B: `first_divergent_seq` 13, `differing_rows` empty. A against the Task 13 prompt fork: `first_divergent_seq` 16, `differing_rows` empty. A against C1: `first_divergent_seq` 13, one differing row, `orders/#W7181492` (A made the exchange, the failed branch did not).
 - None of the forks moved (`moved_from` and `reason` were `null`): step 12 is already the start of the resolver.
 

@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: arena
       POSTGRES_PASSWORD: arena
     ports:
-      - "5544:5432"
+      - "127.0.0.1:5544:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 volumes:

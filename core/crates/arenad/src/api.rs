@@ -451,6 +451,12 @@ async fn compare_branches(State(state): State<Arc<AppState>>, Query(q): Query<Ha
         }
     }
     let (ba, bb) = (finished_branch(&state, a).await?, finished_branch(&state, b).await?);
+    for id in [a, b] {
+        let name = format!("branch_{id}");
+        if !state.worlds.list(&name).await?.iter().any(|(n, _)| *n == name) {
+            return Err(ApiError::conflict("this branch has no database (its setup failed)"));
+        }
+    }
     let (ea, eb) = (state.store.events(a).await?, state.store.events(b).await?);
     let (da, db) = (final_dump(&state, a).await?, final_dump(&state, b).await?);
     Ok(Json(json!({

@@ -80,7 +80,7 @@ export default function Run() {
   const sm = summarize(detail, detail.events);
   const taskId = (detail.events.find((e) => e.kind === 'run_start')?.payload as any)?.task_id ?? '';
   const event = detail.events.find((e) => e.seq === selected) ?? null;
-  const others = siblings.filter((b) => b.id !== detail.id && b.status !== 'running');
+  const others = siblings.filter((b) => b.id !== detail.id && (b.status === 'passed' || b.status === 'failed'));
 
   return (
     <>

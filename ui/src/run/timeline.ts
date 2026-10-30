@@ -128,7 +128,11 @@ export function summarize(
   };
 }
 
-/** Only fields that really changed: blank model is no change, prompts compare trimmed. */
+/**
+ * Only fields that really changed. Prompts compare trimmed. A cleared model that was set is sent as ""
+ * (explicit clear); blank on an unset model is no change. A mode change resets the model server-side,
+ * so a blank model box next to it sends just the mode.
+ */
 export function changedFields(agents: AgentSpec[], edits: Record<string, Change>): Record<string, Change> {
   const out: Record<string, Change> = {};
   for (const a of agents) {
@@ -136,10 +140,19 @@ export function changedFields(agents: AgentSpec[], edits: Record<string, Change>
     if (!e) continue;
     const c: Change = {};
     if (e.prompt != null && e.prompt.trim() !== a.prompt.trim()) c.prompt = e.prompt.trim();
+    const kindChanged = e.kind != null && e.kind !== (a.kind as AgentKind);
     const m = e.model?.trim();
-    if (m && m !== (a.model ?? '')) c.model = m;
-    if (e.kind != null && e.kind !== (a.kind as AgentKind)) c.kind = e.kind;
+    if (m != null && m !== (a.model ?? '') && (m !== '' || !kindChanged)) c.model = m;
+    if (kindChanged) c.kind = e.kind;
     if (Object.keys(c).length) out[a.id] = c;
   }
   return out;
+}
+
+export const MAX_ROW_KEYS = 50;
+
+/** Row keys to fetch for a step: writes first, wildcard reads (`table/*`) dropped, capped. */
+export function rowKeys(writes: string[], reads: string[]): { keys: string[]; more: number } {
+  const all = [...new Set([...writes, ...reads])].filter((k) => !k.endsWith('/*'));
+  return { keys: all.slice(0, MAX_ROW_KEYS), more: Math.max(0, all.length - MAX_ROW_KEYS) };
 }

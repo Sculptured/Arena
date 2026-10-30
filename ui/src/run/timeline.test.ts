@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changedFields, jsonDiff, lanes, summarize } from './timeline';
+import { changedFields, rowKeys, jsonDiff, lanes, summarize } from './timeline';
 import type { Event, EventKind, Team } from '../types';
 
 const team: Team = {
@@ -78,10 +78,33 @@ describe('summarize', () => {
 
 describe('changedFields', () => {
   const agents = team.agents.map((a) => ({ ...a, model: 'sonnet', prompt: 'p' }));
-  it('ignores blank model, whitespace prompt edits, unchanged values', () => {
-    expect(changedFields(agents, { triage: { model: '  ', prompt: ' p ' }, resolver: { model: 'sonnet', kind: 'claude_code' } })).toEqual({});
+  it('ignores whitespace prompt edits and unchanged values', () => {
+    expect(changedFields(agents, { triage: { prompt: ' p ' }, resolver: { model: 'sonnet', kind: 'claude_code' } })).toEqual({});
+  });
+  it('a cleared model that was set is an explicit clear', () => {
+    expect(changedFields(agents, { triage: { model: '  ' } })).toEqual({ triage: { model: '' } });
+  });
+  it('blank model on an unset model is no change', () => {
+    const unset = agents.map((a) => ({ ...a, model: null }));
+    expect(changedFields(unset, { triage: { model: '' } })).toEqual({});
+  });
+  it('a mode change with a cleared model box sends just the mode', () => {
+    expect(changedFields(agents, { triage: { kind: 'codex', model: '' } })).toEqual({ triage: { kind: 'codex' } });
+    expect(changedFields(agents, { triage: { kind: 'codex', model: 'gpt-x' } })).toEqual({ triage: { kind: 'codex', model: 'gpt-x' } });
   });
   it('keeps real changes, trimmed', () => {
     expect(changedFields(agents, { triage: { model: ' opus ', prompt: 'q ' , kind: 'codex' } })).toEqual({ triage: { model: 'opus', prompt: 'q', kind: 'codex' } });
+  });
+});
+
+describe('rowKeys', () => {
+  it('drops wildcard reads and dedups, writes first', () => {
+    expect(rowKeys(['orders/#W1'], ['orders/*', 'users/u1', 'orders/#W1'])).toEqual({ keys: ['orders/#W1', 'users/u1'], more: 0 });
+  });
+  it('caps at 50 and reports the rest', () => {
+    const reads = Array.from({ length: 53 }, (_, i) => `products/p${i}`);
+    const r = rowKeys([], reads);
+    expect(r.keys).toHaveLength(50);
+    expect(r.more).toBe(3);
   });
 });

@@ -38,7 +38,6 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> 
     let mcp = json!({"mcpServers": {"retail": {"type": "http", "url": mcp_url}}}).to_string();
     let mut c = Command::new(binary);
     c.arg("-p")
-        .arg(prompt)
         .arg("--model")
         .arg(spec.model.as_deref().unwrap_or("sonnet"))
         .args(["--output-format", "json"])
@@ -49,7 +48,9 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> 
         .arg("--disable-slash-commands")
         .args(["--tools", ""])
         .args(["--allowedTools", "mcp__retail__*"])
-        .arg("--no-session-persistence");
+        .arg("--no-session-persistence")
+        // The prompt is positional and may start with "-": keep it apart from the flags.
+        .args(["--", prompt]);
     super::scrub_env(&mut c);
     c
 }
@@ -67,6 +68,7 @@ pub fn parse(stdout: &str) -> AgentResult {
             cost_usd: None,
             cost_source: None,
             seconds: 0.0,
+            failure: None,
         };
     };
     let u = &v["usage"];
@@ -89,6 +91,7 @@ pub fn parse(stdout: &str) -> AgentResult {
         cost_usd: v["total_cost_usd"].as_f64(),
         cost_source: Some("api_equivalent_estimate".into()),
         seconds: 0.0,
+        failure: None,
     }
 }
 

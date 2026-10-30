@@ -8,7 +8,7 @@ use std::{
 };
 
 use arenad::{
-    agents::{open::OpenDriver, AgentRun, Driver},
+    agents::{open::OpenDriver, AgentRun, Driver, FailureKind},
     app::{self, AppState, Config},
     exec::BranchCtx,
     model::*,
@@ -255,6 +255,7 @@ fn truncated_final_message_fails_the_agent() {
         let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("model output was cut off"));
+        assert_eq!(r.failure, Some(FailureKind::Model));
         teardown(fx).await;
     })
 }
@@ -275,6 +276,64 @@ fn gateway_never_forwards_authorization_to_non_openrouter_upstream() {
             .unwrap();
         assert_eq!(r.status(), 200);
         assert_eq!(up.auth_headers(), vec![None]);
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn model_call_cap_is_a_model_failure() {
+    run(async {
+        let call = tool_msg(vec![("c", "get_order_details", json!({"order_id": "#W0000000"}))]);
+        let up = FakeUpstream::start(vec![call; arenad::agents::open::MAX_MODEL_CALLS]).await;
+        let fx = setup("cap", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(!r.ok);
+        assert_eq!(r.failure, Some(FailureKind::Model));
+        assert!(r.error.unwrap().contains("exceeded"));
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn upstream_error_is_an_infra_failure() {
+    run(async {
+        let up = FakeUpstream::start(vec![]).await;
+        let fx = setup("upfail", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(!r.ok);
+        assert_eq!(r.failure, None);
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn missing_model_sends_the_default_open_model() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("hi")]).await;
+        let mut a = agent("solo", "p");
+        a.model = None;
+        let fx = setup("defmodel", vec![a], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(up.requests()[0]["model"], "deepseek/deepseek-chat-v3.1");
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn gateway_refuses_unknown_branch_or_agent_without_calling_upstream() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("hi")]).await;
+        let fx = setup("gw404", vec![agent("solo", "p")], &up).await;
+        let body = json!({"model": "m", "messages": []});
+        for (b, a) in [("nobranch", "solo"), (fx.ctx.branch_id.as_str(), "nobody")] {
+            let url = format!("{}/gateway/{}/{}/v1/chat/completions", fx.state.config.self_base, b, a);
+            let r = reqwest::Client::new().post(url).json(&body).send().await.unwrap();
+            assert_eq!(r.status(), 404);
+            let v: Value = r.json().await.unwrap();
+            assert!(v["error"].is_string());
+        }
+        assert!(up.requests().is_empty());
         teardown(fx).await;
     })
 }

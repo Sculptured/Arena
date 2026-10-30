@@ -87,9 +87,9 @@ pub struct AppState {
     /// Set once, after the `Arc<AppState>` exists (the open driver holds a `Weak` to it).
     pub drivers: OnceLock<Drivers>,
     tasks: OnceLock<Tasks>,
-    /// Final database dumps of finished branches, by branch id (for compare).
     /// Set to true when shutdown starts; SSE streams end on it.
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    /// Final database dumps of finished branches, by branch id (for compare).
     pub dumps: std::sync::Mutex<HashMap<String, serde_json::Value>>,
 }
 
@@ -142,8 +142,49 @@ mod tests {
         assert!(!is_openrouter_url("https://evil.com/openrouter.ai"));
         assert!(!is_openrouter_url("not a url"));
     }
+
+    #[test]
+    fn loopback_hosts() {
+        use super::is_loopback_host as ok;
+        for h in ["127.0.0.1", "127.0.0.1:4510", "localhost", "LOCALHOST:80", "[::1]", "[::1]:4510"] {
+            assert!(ok(h), "{h}");
+        }
+        for h in ["evil.example", "127.0.0.1.evil.example", "localhost.evil.com:80", "127.0.0.1:abc", "[::2]", "", "::1"] {
+            assert!(!ok(h), "{h}");
+        }
+    }
+}
+
+/// True when `host` (a Host header value) names this machine's loopback: `127.0.0.1`, `localhost`
+/// or `[::1]`, with an optional port.
+fn is_loopback_host(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(rest) => match rest.split_once(']') {
+            Some((ip, "")) => return ip == "::1",
+            Some((ip, port)) => return ip == "::1" && port.strip_prefix(':').is_some_and(|p| p.parse::<u16>().is_ok()),
+            None => return false,
+        },
+        None => match host.split_once(':') {
+            Some((n, port)) if port.parse::<u16>().is_ok() => n,
+            Some(_) => return false,
+            None => host,
+        },
+    };
+    name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost")
+}
+
+/// DNS-rebinding guard: a web page on another origin can resolve its own name to 127.0.0.1, so the
+/// browser would send that name in `Host`. Only loopback names reach the API.
+async fn loopback_host_only(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let ok = req.headers().get(axum::http::header::HOST).and_then(|h| h.to_str().ok()).is_some_and(is_loopback_host);
+    if !ok {
+        return (axum::http::StatusCode::FORBIDDEN, axum::Json(serde_json::json!({"error": "forbidden host"}))).into_response();
+    }
+    next.run(req).await
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    crate::mcp::router().merge(crate::gateway::router()).merge(crate::api::router()).with_state(state)
+    let api = crate::api::router().layer(axum::middleware::from_fn(loopback_host_only));
+    crate::mcp::router().merge(crate::gateway::router()).merge(api).with_state(state)
 }
