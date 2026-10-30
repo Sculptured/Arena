@@ -13,11 +13,13 @@ pub struct BranchCtx {
     pub task_id: String,
     /// agent id -> handoff note, set once the agent has called `handoff`.
     pub handoffs: Mutex<HashMap<String, String>>,
+    /// Held across every tool call so DB order, snapshots and event order agree.
+    gate: tokio::sync::Mutex<()>,
 }
 
 impl BranchCtx {
     pub fn new(branch_id: String, db: String, team: Team, task_id: String) -> BranchCtx {
-        BranchCtx { branch_id, db, team, task_id, handoffs: Mutex::new(HashMap::new()) }
+        BranchCtx { branch_id, db, team, task_id, handoffs: Mutex::new(HashMap::new()), gate: tokio::sync::Mutex::new(()) }
     }
 
     pub fn is_last(&self, agent: &str) -> bool {
@@ -76,11 +78,13 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
+        let _gate = branch.gate.lock().await;
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }
         let last = branch.is_last(agent);
         let mut snapshot = None;
+        let mut snapshot_error = None;
         let mut reads = vec![];
         let mut writes = vec![];
         let outcome: Result<Value, String> = if tools::WRITE_TOOLS.contains(&name) && !last {
@@ -101,7 +105,7 @@ impl ToolExec {
                             if !writes.is_empty() {
                                 match self.worlds.snapshot(&branch.db).await {
                                     Ok(s) => snapshot = Some(s),
-                                    Err(e) => eprintln!("snapshot of {} failed: {e:#}", branch.db),
+                                    Err(e) => snapshot_error = Some(format!("{e:#}")),
                                 }
                             }
                             Ok(o.result.unwrap_or(Value::Null))
@@ -118,6 +122,7 @@ impl ToolExec {
             reads: json!(reads),
             writes: json!(writes),
             snapshot,
+            snapshot_error,
             tool_call_id,
         };
         self.record(branch, agent, EventKind::ToolCall, &payload).await?;
@@ -159,6 +164,7 @@ impl ToolExec {
                     reads: json!([]),
                     writes: json!([]),
                     snapshot: None,
+                    snapshot_error: None,
                     tool_call_id,
                 };
                 self.record(branch, agent, EventKind::ToolCall, &payload).await?;

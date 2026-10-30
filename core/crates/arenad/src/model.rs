@@ -126,6 +126,9 @@ pub struct ToolCallPayload {
     pub reads: Value,
     pub writes: Value,
     pub snapshot: Option<String>,
+    /// Set when the write committed but snapshotting it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_error: Option<String>,
     pub tool_call_id: Option<String>,
 }
 

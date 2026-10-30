@@ -252,3 +252,82 @@ fn handoff_records_once_and_is_not_for_last_agent() {
         teardown(fx, &[]).await;
     })
 }
+
+async fn seed_second_user(fx: &Fx) -> (String, String) {
+    // Two distinct users from the data so the writes are independent.
+    let ids: Vec<String> = fx
+        .worlds
+        .with_client(&fx.db, async |c| {
+            let rows = c.query("SELECT id FROM users ORDER BY id LIMIT 2", &[]).await?;
+            Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+        })
+        .await
+        .unwrap();
+    (ids[0].clone(), ids[1].clone())
+}
+
+fn addr_for(user: &str, line: &str) -> Value {
+    json!({"user_id": user, "address1": line, "address2": "", "city": "New York",
+           "state": "NY", "country": "USA", "zip": "10001"})
+}
+
+#[test]
+fn parallel_writes_snapshot_in_order() {
+    run(async {
+        let fx = setup("par").await;
+        let (u1, u2) = seed_second_user(&fx).await;
+        let (a, b) = tokio::join!(
+            call(&fx, "resolver", "modify_user_address", addr_for(&u1, "1 Alpha Way")),
+            call(&fx, "resolver", "modify_user_address", addr_for(&u2, "2 Beta Way")),
+        );
+        assert_eq!(a["isError"], false, "{a}");
+        assert_eq!(b["isError"], false, "{b}");
+        let evs = fx.store.events(&fx.branch).await.unwrap();
+        assert_eq!(evs.len(), 2);
+        assert!(evs[0].seq < evs[1].seq);
+        let mut extra = vec![];
+        let mut seen = vec![];
+        for (i, e) in evs.iter().enumerate() {
+            let p: ToolCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
+            let line = p.args["address1"].as_str().unwrap().to_string();
+            let snap = p.snapshot.expect("snapshot");
+            let d = fx.worlds.new_branch(&format!("mcppar{}_{}", i, fx.branch), Source::Snapshot(snap.clone())).await.unwrap();
+            let dumped = fx.worlds.with_client(&d, async |c| dump(c).await).await.unwrap().to_string();
+            seen.push(line.clone());
+            for l in ["1 Alpha Way", "2 Beta Way"] {
+                let expected = seen.iter().any(|s| s == l);
+                assert_eq!(dumped.contains(l), expected, "event {i} snapshot, line {l}");
+            }
+            extra.extend([d, snap]);
+        }
+        teardown(fx, &extra).await;
+    })
+}
+
+#[test]
+fn failed_snapshot_is_recorded() {
+    run(async {
+        let fx = setup("snapfail").await;
+        let exec = arenad::exec::ToolExec::new(fx.store.clone(), fx.worlds.clone());
+        let ctx = BranchCtx::new(
+            fx.branch.clone(),
+            fx.db.clone(),
+            Team { id: "t".into(), name: "T".into(), agents: vec![agent("resolver")] },
+            "task".into(),
+        );
+        // An open session on the branch DB makes `CREATE DATABASE .. TEMPLATE` fail.
+        let (_keep, conn) = tokio_postgres::connect(&fx.worlds.admin().db_url(&fx.db), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(conn);
+        let v = exec.run(&ctx, "resolver", "modify_user_address", address_args(), None).await;
+        assert!(v.get("error").is_none(), "{v}");
+        let evs = fx.store.events(&fx.branch).await.unwrap();
+        let p: ToolCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
+        assert!(p.snapshot.is_none());
+        assert!(p.snapshot_error.is_some());
+        assert!(p.error.is_none());
+        drop(_keep);
+        teardown(fx, &[]).await;
+    })
+}
