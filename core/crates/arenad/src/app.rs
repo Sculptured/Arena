@@ -22,6 +22,11 @@ pub struct Config {
 
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 
+/// True only for `https` URLs whose host is exactly `openrouter.ai`.
+pub fn is_openrouter_url(base: &str) -> bool {
+    reqwest::Url::parse(base).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("openrouter.ai"))
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
@@ -45,7 +50,7 @@ impl Config {
     }
 
     pub fn upstream_is_openrouter(&self) -> bool {
-        self.upstream_base.contains("openrouter.ai")
+        is_openrouter_url(&self.upstream_base)
     }
 
     /// Open-mode agents can run: a key is set, or the upstream is not OpenRouter.
@@ -60,11 +65,32 @@ pub struct AppState {
     /// Branches currently running, by branch id.
     pub live: RwLock<HashMap<String, Arc<BranchCtx>>>,
     pub config: Config,
+    /// Shared HTTP client (gateway upstream and open agent loop).
+    pub http: reqwest::Client,
 }
 
 impl AppState {
     pub fn new(store: Arc<Store>, worlds: Arc<Worlds>, config: Config) -> AppState {
-        AppState { store, worlds, live: RwLock::new(HashMap::new()), config }
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .expect("http client");
+        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openrouter_url;
+
+    #[test]
+    fn openrouter_detection_is_exact() {
+        assert!(is_openrouter_url("https://openrouter.ai/api/v1"));
+        assert!(!is_openrouter_url("https://openrouter.ai.evil.com/api/v1"));
+        assert!(!is_openrouter_url("http://openrouter.ai"));
+        assert!(!is_openrouter_url("https://evil.com/openrouter.ai"));
+        assert!(!is_openrouter_url("not a url"));
     }
 }
 

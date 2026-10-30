@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use serde_json::{json, Value};
 use world::tools;
@@ -49,7 +49,13 @@ fn initial_messages(run: &AgentRun) -> Vec<Value> {
 }
 
 impl Driver for OpenDriver {
-    async fn run(&self, run: AgentRun) -> AgentResult {
+    fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
+        Box::pin(self.run_inner(run))
+    }
+}
+
+impl OpenDriver {
+    async fn run_inner(&self, run: AgentRun) -> AgentResult {
         let start = Instant::now();
         let mut totals = [0i64; 3];
         let mut cost = Some(0.0f64);
@@ -63,9 +69,7 @@ impl Driver for OpenDriver {
             seconds: start.elapsed().as_secs_f64(),
         }
     }
-}
 
-impl OpenDriver {
     async fn drive(&self, run: &AgentRun, totals: &mut [i64; 3], cost: &mut Option<f64>) -> Result<(), String> {
         let agent = run.spec.id.as_str();
         let url = format!(
@@ -77,7 +81,7 @@ impl OpenDriver {
         let tools = openai_tools(!run.branch.is_last(agent));
         let mut messages = initial_messages(run);
         let exec = ToolExec::new(self.state.store.clone(), self.state.worlds.clone());
-        let http = reqwest::Client::new();
+        let http = &self.state.http;
         for _ in 0..MAX_MODEL_CALLS {
             let mut body = json!({"messages": messages, "tools": tools});
             if let Some(m) = &run.spec.model {
@@ -105,16 +109,26 @@ impl OpenDriver {
             messages.push(msg.clone());
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
             if calls.is_empty() {
+                if v["choices"][0]["finish_reason"] == "length" {
+                    return Err("model output was cut off".into());
+                }
                 return Ok(());
             }
             for call in calls {
                 let id = call["id"].as_str().unwrap_or("").to_string();
                 let name = call["function"]["name"].as_str().unwrap_or("").to_string();
-                let args = call["function"]["arguments"]
-                    .as_str()
-                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                    .filter(Value::is_object)
-                    .unwrap_or_else(|| json!({}));
+                let raw = call["function"]["arguments"].as_str().unwrap_or("");
+                let parsed = if raw.trim().is_empty() {
+                    Some(json!({}))
+                } else {
+                    serde_json::from_str::<Value>(raw).ok().filter(Value::is_object)
+                };
+                let Some(args) = parsed else {
+                    let content = json!({"error": format!(
+                        "arguments for {name} were not valid JSON (the output may have been cut off); the tool was not run")});
+                    messages.push(json!({"role": "tool", "tool_call_id": id, "content": content.to_string()}));
+                    continue;
+                };
                 let res = exec.run_outcome(&run.branch, agent, &name, args, Some(id.clone())).await;
                 let content = match &res {
                     Ok(v) => v.to_string(),

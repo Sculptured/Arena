@@ -69,7 +69,7 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
     let port = listener.local_addr().unwrap().port();
     let mut config = Config::new(data_dir());
     config.upstream_base = upstream.base_url.clone();
-    config.openrouter_key = None;
+    config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
     let state = Arc::new(AppState::new(store, worlds, config));
     let ctx = Arc::new(BranchCtx::new(branch.clone(), db.clone(), team, "task".into()));
@@ -131,7 +131,8 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
         ])
         .await;
         let fx = setup("scripted", vec![agent("solo", "You are the solo agent.")], &up).await;
-        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        let d: Arc<dyn Driver> = Arc::new(driver(&fx));
+        let r = d.run(agent_run(&fx, 0, None)).await;
         assert!(r.ok, "{:?}", r.error);
         assert_eq!(r.tokens, json!({"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45}));
         assert!((r.cost_usd.unwrap() - 0.003).abs() < 1e-9);
@@ -155,6 +156,7 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
         let reqs = up.requests();
         assert_eq!(reqs.len(), 3);
         assert_eq!(reqs[0], mc.request);
+        assert!(up.auth_headers().iter().all(Option::is_none));
         let last = reqs[1]["messages"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["role"], "tool");
         assert_eq!(last["tool_call_id"], "c1");
@@ -222,6 +224,56 @@ fn handoff_stops_loop_and_resume_replaces_system_prompt() {
         assert_eq!(reqs[0]["messages"][1]["content"], "earlier input");
         assert!(reqs[0]["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "handoff"));
         assert_eq!(reqs[0]["usage"], json!({"include": true}));
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn malformed_tool_arguments_are_not_run() {
+    run(async {
+        let bad = json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "b1", "type": "function", "function": {"name": "get_order_details", "arguments": "{\"order_id\": \"#W00"}}]});
+        let up = FakeUpstream::start(vec![bad, text_msg("sorry")]).await;
+        let fx = setup("badargs", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(kinds(&fx).await, vec![EventKind::ModelCall, EventKind::ModelCall]);
+        let reqs = up.requests();
+        let last = reqs[1]["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["tool_call_id"], "b1");
+        assert!(last["content"].as_str().unwrap().contains("not valid JSON"));
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn truncated_final_message_fails_the_agent() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"role": "assistant", "content": "partial", "_finish_reason": "length"})]).await;
+        let fx = setup("cut", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(!r.ok);
+        assert_eq!(r.error.as_deref(), Some("model output was cut off"));
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn gateway_never_forwards_authorization_to_non_openrouter_upstream() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("hi")]).await;
+        let fx = setup("auth", vec![agent("solo", "p")], &up).await;
+        assert!(fx.state.config.open_available());
+        let url = format!("{}/gateway/{}/solo/v1/chat/completions", fx.state.config.self_base, fx.ctx.branch_id);
+        let r = reqwest::Client::new()
+            .post(url)
+            .header("Authorization", "Bearer incoming-secret")
+            .json(&json!({"model": "fake/model", "messages": [{"role": "user", "content": "x"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(up.auth_headers(), vec![None]);
         teardown(fx).await;
     })
 }

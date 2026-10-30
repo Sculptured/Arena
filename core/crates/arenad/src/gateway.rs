@@ -26,7 +26,7 @@ async fn handle(
     body["usage"] = json!({"include": true});
     let cfg = &state.config;
     let url = format!("{}/chat/completions", cfg.upstream_base.trim_end_matches('/'));
-    let mut req = reqwest::Client::new().post(&url).json(&body);
+    let mut req = state.http.post(&url).json(&body);
     if cfg.upstream_is_openrouter() {
         if let Some(key) = &cfg.openrouter_key {
             req = req.bearer_auth(key);

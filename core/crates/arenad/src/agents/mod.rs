@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use serde_json::Value;
 
@@ -30,5 +30,5 @@ pub struct AgentResult {
 }
 
 pub trait Driver: Send + Sync {
-    fn run(&self, ctx: AgentRun) -> impl Future<Output = AgentResult> + Send;
+    fn run<'a>(&'a self, ctx: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>>;
 }

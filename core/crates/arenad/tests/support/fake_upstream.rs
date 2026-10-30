@@ -1,7 +1,8 @@
 //! A scripted OpenAI-compatible upstream for tests. Serves the script's assistant
 //! messages in order (repeating the last one when exhausted) with fixed usage, and
 //! records every request body it received. A script entry of the form
-//! `{"_status": 500}` makes that call fail with that HTTP status.
+//! `{"_status": 500}` makes that call fail with that HTTP status; a message with
+//! `_finish_reason` is served with that finish_reason (the key is removed).
 #![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
@@ -65,10 +66,15 @@ async fn handle(
         )
             .into_response();
     }
+    let mut msg = msg.clone();
+    let finish = msg
+        .as_object_mut()
+        .and_then(|m| m.remove("_finish_reason"))
+        .unwrap_or_else(|| json!("stop"));
     Json(json!({
         "id": format!("gen-{n}"),
         "model": "fake/model",
-        "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.001},
     }))
     .into_response()
