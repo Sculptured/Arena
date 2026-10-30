@@ -1,4 +1,4 @@
-import type { Event, Team } from '../types';
+import type { AgentKind, AgentSpec, Branch, Change, Event, Team } from '../types';
 
 export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check';
 
@@ -59,6 +59,7 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
 export function costLabel(source: string | null | undefined): string {
   if (source === 'api_equivalent_estimate') return 'API-equivalent estimate';
   if (source === 'openrouter') return 'OpenRouter';
+  if (source === 'mixed') return 'mixed';
   return '';
 }
 
@@ -86,5 +87,59 @@ export function jsonDiff(a: unknown, b: unknown): DiffLine[] {
   }
   while (i < n) out.push({ op: '-', text: x[i++] });
   while (j < m) out.push({ op: '+', text: y[j++] });
+  return out;
+}
+
+export interface Summary {
+  seconds: number | null;
+  live: boolean;
+  tokens: number;
+  cost_usd: number | null;
+  cost_source: string | null;
+  /** "since fork at step N" for a forked branch, else null. */
+  scope: string | null;
+}
+
+/** Same arithmetic as the server's compare summary: own events only (seq >= start_seq). */
+export function summarize(
+  branch: Pick<Branch, 'start_seq' | 'created_at' | 'ended_at' | 'status'>,
+  events: Event[],
+  now: number = Date.now(),
+): Summary {
+  const from = branch.start_seq ?? 0;
+  let tokens = 0;
+  let cost: number | null = 0;
+  const sources: string[] = [];
+  for (const e of events) {
+    if (e.seq < from || e.kind !== 'agent_end') continue;
+    const p = (e.payload ?? {}) as { tokens?: number | null; cost_usd?: number | null; cost_source?: string | null };
+    tokens += p.tokens ?? 0;
+    cost = cost != null && p.cost_usd != null ? cost + p.cost_usd : null;
+    if (p.cost_source && !sources.includes(p.cost_source)) sources.push(p.cost_source);
+  }
+  const start = Date.parse(branch.created_at);
+  const live = !branch.ended_at && branch.status === 'running';
+  const end = branch.ended_at ? Date.parse(branch.ended_at) : live ? now : NaN;
+  const seconds = Number.isNaN(start) || Number.isNaN(end) ? null : (end - start) / 1000;
+  return {
+    seconds, live, tokens, cost_usd: cost,
+    cost_source: sources.length === 0 ? null : sources.length === 1 ? sources[0] : 'mixed',
+    scope: branch.start_seq != null ? `since fork at step ${branch.start_seq}` : null,
+  };
+}
+
+/** Only fields that really changed: blank model is no change, prompts compare trimmed. */
+export function changedFields(agents: AgentSpec[], edits: Record<string, Change>): Record<string, Change> {
+  const out: Record<string, Change> = {};
+  for (const a of agents) {
+    const e = edits[a.id];
+    if (!e) continue;
+    const c: Change = {};
+    if (e.prompt != null && e.prompt.trim() !== a.prompt.trim()) c.prompt = e.prompt.trim();
+    const m = e.model?.trim();
+    if (m && m !== (a.model ?? '')) c.model = m;
+    if (e.kind != null && e.kind !== (a.kind as AgentKind)) c.kind = e.kind;
+    if (Object.keys(c).length) out[a.id] = c;
+  }
   return out;
 }

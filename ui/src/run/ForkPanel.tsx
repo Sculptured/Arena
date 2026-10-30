@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { fork } from '../api';
+import { changedFields } from './timeline';
 import type { AgentKind, BranchDetail, Change, ForkResponse } from '../types';
 
 const MODES: { id: AgentKind; label: string }[] = [
@@ -18,19 +19,7 @@ export default function ForkPanel({ branch, seq, onForked }: {
   const [err, setErr] = useState<string | null>(null);
 
   const set = (id: string, patch: Change) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...patch } }));
-  const changes = (): Record<string, Change> => {
-    const out: Record<string, Change> = {};
-    for (const a of branch.team.agents) {
-      const e = edits[a.id];
-      if (!e) continue;
-      const c: Change = {};
-      if (e.prompt != null && e.prompt !== a.prompt) c.prompt = e.prompt;
-      if (e.model != null && e.model !== (a.model ?? '')) c.model = e.model;
-      if (e.kind != null && e.kind !== a.kind) c.kind = e.kind;
-      if (Object.keys(c).length) out[a.id] = c;
-    }
-    return out;
-  };
+  const changes = () => changedFields(branch.team.agents, edits);
   const n = Object.keys(changes()).length;
 
   const go = async () => {

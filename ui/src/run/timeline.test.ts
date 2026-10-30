@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jsonDiff, lanes } from './timeline';
+import { changedFields, jsonDiff, lanes, summarize } from './timeline';
 import type { Event, EventKind, Team } from '../types';
 
 const team: Team = {
@@ -51,5 +51,37 @@ describe('jsonDiff', () => {
     const d = jsonDiff({ a: 1, b: 2 }, { a: 1, b: 3 });
     expect(d.filter((l) => l.op !== ' ').map((l) => `${l.op}${l.text.trim()}`)).toEqual(['-"b": 2', '+"b": 3']);
     expect(jsonDiff(undefined, { a: 1 })[0]).toEqual({ op: '-', text: '(absent)' });
+  });
+});
+
+const end = (seq: number, p: object) => ev(seq, 'triage', 'agent_end', p);
+const br = { start_seq: null, created_at: '2026-01-01T00:00:00Z', ended_at: '2026-01-01T00:00:10Z', status: 'passed' as const };
+
+describe('summarize', () => {
+  it('sums agent_end, single source, seconds from timestamps', () => {
+    const s = summarize(br, [end(2, { tokens: 10, cost_usd: 0.5, cost_source: 'openrouter' }), end(5, { tokens: 5, cost_usd: 0.25, cost_source: 'openrouter' })]);
+    expect(s).toMatchObject({ seconds: 10, tokens: 15, cost_usd: 0.75, cost_source: 'openrouter', scope: null, live: false });
+  });
+  it('mixed sources and null cost', () => {
+    const m = summarize(br, [end(2, { tokens: 1, cost_usd: 1, cost_source: 'openrouter' }), end(3, { tokens: 1, cost_usd: 1, cost_source: 'api_equivalent_estimate' })]);
+    expect(m.cost_source).toBe('mixed');
+    const n = summarize(br, [end(2, { tokens: 1, cost_usd: null, cost_source: null }), end(3, { tokens: 1, cost_usd: 1, cost_source: 'openrouter' })]);
+    expect(n.cost_usd).toBeNull();
+  });
+  it('forked counts only own events; running uses now', () => {
+    const s = summarize({ ...br, start_seq: 4, ended_at: null, status: 'running' },
+      [end(2, { tokens: 100, cost_usd: 9, cost_source: 'openrouter' }), end(6, { tokens: 7, cost_usd: 1, cost_source: 'openrouter' })],
+      Date.parse('2026-01-01T00:00:03Z'));
+    expect(s).toMatchObject({ tokens: 7, cost_usd: 1, seconds: 3, live: true, scope: 'since fork at step 4' });
+  });
+});
+
+describe('changedFields', () => {
+  const agents = team.agents.map((a) => ({ ...a, model: 'sonnet', prompt: 'p' }));
+  it('ignores blank model, whitespace prompt edits, unchanged values', () => {
+    expect(changedFields(agents, { triage: { model: '  ', prompt: ' p ' }, resolver: { model: 'sonnet', kind: 'claude_code' } })).toEqual({});
+  });
+  it('keeps real changes, trimmed', () => {
+    expect(changedFields(agents, { triage: { model: ' opus ', prompt: 'q ' , kind: 'codex' } })).toEqual({ triage: { model: 'opus', prompt: 'q', kind: 'codex' } });
   });
 });

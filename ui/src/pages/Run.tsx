@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { branch as fetchBranch, runs as fetchRuns, stream } from '../api';
 import { StatusChip } from '../components';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
 import Timeline from '../run/Timeline';
-import { formatCost, lanes } from '../run/timeline';
+import { formatCost, lanes, summarize } from '../run/timeline';
 import type { Branch, BranchDetail, Event } from '../types';
 import { branchTree } from './Runs';
 
@@ -22,9 +22,14 @@ export default function Run() {
   const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
   const [picking, setPicking] = useState(false);
 
+  const current = useRef(branchId);
+  current.current = branchId;
+  // A response only lands if it is still for the branch on screen.
   const load = useCallback(() => {
-    fetchBranch(branchId).then((d) => { setDetail(d); setError(null); }).catch((e) => setError(String(e.message ?? e)));
-    fetchRuns().then((r) => setSiblings(r.find((x) => x.id === runId)?.branches ?? [])).catch(() => {});
+    const id = branchId;
+    fetchBranch(id).then((d) => { if (current.current === id) { setDetail(d); setError(null); } })
+      .catch((e) => { if (current.current === id) setError(String(e.message ?? e)); });
+    fetchRuns().then((r) => { if (current.current === id) setSiblings(r.find((x) => x.id === runId)?.branches ?? []); }).catch(() => {});
   }, [branchId, runId]);
 
   useEffect(() => {
@@ -38,7 +43,7 @@ export default function Run() {
     if (!running) return;
     const off = stream(
       branchId,
-      (e: Event) => setDetail((d) => (d && !d.events.some((x) => x.seq === e.seq) ? { ...d, events: [...d.events, e] } : d)),
+      (e: Event) => setDetail((d) => (d && d.id === branchId && !d.events.some((x) => x.seq === e.seq) ? { ...d, events: [...d.events, e] } : d)),
       () => load(),
     );
     return off;
@@ -72,10 +77,7 @@ export default function Run() {
     );
   }
 
-  const own = detail.events.filter((e) => e.kind === 'agent_end' && e.seq >= (detail.start_seq ?? 0));
-  const sum = (f: (p: any) => number | null) => own.reduce<number | null>((acc, e) => { const v = f(e.payload); return v == null ? acc : (acc ?? 0) + v; }, null);
-  const seconds = sum((p) => p.seconds), tokens = sum((p) => p.tokens), cost = sum((p) => p.cost_usd);
-  const source = own.map((e) => (e.payload as any).cost_source).find((s) => s) ?? null;
+  const sm = summarize(detail, detail.events);
   const taskId = (detail.events.find((e) => e.kind === 'run_start')?.payload as any)?.task_id ?? '';
   const event = detail.events.find((e) => e.seq === selected) ?? null;
   const others = siblings.filter((b) => b.id !== detail.id && b.status !== 'running');
@@ -87,9 +89,10 @@ export default function Run() {
         <StatusChip status={detail.status} />
         <span className="muted mono small">{detail.id.slice(0, 8)}</span>
         <span className="spacer" />
-        <span className="stat"><span className="label">Seconds</span>{seconds != null ? seconds.toFixed(1) : '–'}</span>
-        <span className="stat"><span className="label">Tokens</span>{tokens ?? '–'}</span>
-        <span className="stat"><span className="label">Cost</span>{formatCost(cost, source)}</span>
+        {sm.scope && <span className="muted small">{sm.scope}</span>}
+        <span className="stat"><span className="label">Seconds{sm.live ? ' so far' : ''}</span>{sm.seconds != null ? sm.seconds.toFixed(1) : '–'}</span>
+        <span className="stat"><span className="label">Tokens</span>{sm.tokens}</span>
+        <span className="stat"><span className="label">Cost</span>{formatCost(sm.cost_usd, sm.cost_source)}</span>
       </header>
       <div className="run-body">
         <section className="run-main">

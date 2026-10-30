@@ -1,9 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { compare } from '../api';
+import { branch as fetchBranch, compare } from '../api';
 import { StatusChip } from '../components';
 import { formatCost, jsonDiff } from '../run/timeline';
-import type { CompareResponse, CompareSide } from '../types';
+import { pretty } from '../run/Inspector';
+import type { CompareResponse, CompareSide, Event } from '../types';
+
+function StepView({ id, ev }: { id: string; ev: Event | undefined }) {
+  const p = (ev?.payload ?? {}) as Record<string, unknown>;
+  return (
+    <div className="panel cmp-col">
+      <div className="cmp-top"><span className="mono">{id.slice(0, 8)}</span></div>
+      {!ev ? <span className="muted">(no step — this branch ended)</span> : (
+        <>
+          <div className="small"><span className="mono">step {ev.seq}</span> · {ev.agent ?? 'run'} · <span className="chip">{ev.kind.replace('_', ' ')}</span>{typeof p.name === 'string' && <span className="mono"> {p.name}</span>}</div>
+          {ev.kind === 'tool_call' ? <pre className="json">{pretty(p.args)}</pre> : <pre className="json">{pretty(p)}</pre>}
+        </>
+      )}
+    </div>
+  );
+}
 
 function Side({ id, s }: { id: string; s: CompareSide }) {
   return (
@@ -21,10 +37,15 @@ function Side({ id, s }: { id: string; s: CompareSide }) {
 export default function Compare() {
   const { a = '', b = '' } = useParams();
   const [data, setData] = useState<CompareResponse | null>(null);
+  const [evs, setEvs] = useState<[Event[], Event[]] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    setData(null); setError(null);
-    compare(a, b).then(setData).catch((e) => setError(String(e.message ?? e)));
+    let cancelled = false;
+    setData(null); setEvs(null); setError(null);
+    Promise.all([compare(a, b), fetchBranch(a), fetchBranch(b)])
+      .then(([c, x, y]) => { if (!cancelled) { setData(c); setEvs([x.events, y.events]); } })
+      .catch((e) => { if (!cancelled) setError(String(e.message ?? e)); });
+    return () => { cancelled = true; };
   }, [a, b]);
 
   return (
@@ -41,6 +62,12 @@ export default function Compare() {
                 ? <strong>First divergence at step {data.first_divergent_seq}</strong>
                 : <strong>The branches never diverge</strong>}
             </div>
+            {data.first_divergent_seq != null && evs && (
+              <div className="cmp-cols">
+                <StepView id={a} ev={evs[0].find((e) => e.seq === data.first_divergent_seq)} />
+                <StepView id={b} ev={evs[1].find((e) => e.seq === data.first_divergent_seq)} />
+              </div>
+            )}
             <div className="panel pane">
               <div className="label">Differing rows ({data.differing_rows.length})</div>
               {data.differing_rows.length === 0 && <p className="muted">The final databases are identical.</p>}
