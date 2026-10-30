@@ -182,12 +182,16 @@ impl Store {
     }
 
     pub async fn branch(&self, id: &str) -> Result<Branch> {
+        self.find_branch(id).await?.ok_or_else(|| anyhow!("no such branch: {id}"))
+    }
+
+    /// Like `branch`, but a missing branch is `Ok(None)` rather than an error.
+    pub async fn find_branch(&self, id: &str) -> Result<Option<Branch>> {
         let row = self
             .client
             .query_opt(&format!("SELECT {BRANCH_COLS} FROM branches WHERE id = $1"), &[&id])
-            .await?
-            .ok_or_else(|| anyhow!("no such branch: {id}"))?;
-        branch_from(&row)
+            .await?;
+        row.as_ref().map(branch_from).transpose()
     }
 
     pub async fn runs(&self) -> Result<Vec<RunSummary>> {

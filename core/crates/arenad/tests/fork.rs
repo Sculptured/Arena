@@ -374,6 +374,20 @@ fn fork_while_running_is_409() {
 }
 
 #[test]
+fn fork_of_unknown_branch_is_unknown_branch() {
+    run(async {
+        let up = FakeUpstream::start(vec![]).await;
+        let fx = setup("nobranch", &up).await;
+        let e = fork::fork(&fx.state, "nosuchbranch", 1, HashMap::new()).await.unwrap_err();
+        assert!(matches!(e, ForkError::UnknownBranch(ref b) if b == "nosuchbranch"), "{e:?}");
+        assert!(e.to_string().contains("nosuchbranch"));
+        assert!(fx.state.store.find_branch("nosuchbranch").await.unwrap().is_none());
+        drop(fx.state);
+        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
+    })
+}
+
+#[test]
 fn fork_plan_errors_create_no_branch() {
     run(async {
         let mut script = triage_script();

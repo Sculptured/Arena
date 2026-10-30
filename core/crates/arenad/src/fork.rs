@@ -49,6 +49,8 @@ pub struct ForkPlan {
 pub enum ForkError {
     /// No event with that seq on the branch (or the timeline lacks a step the plan needs).
     UnknownSeq,
+    /// No branch with that id.
+    UnknownBranch(String),
     /// A change names an agent that isn't in the team (or an event names one).
     UnknownAgent(String),
     /// The source branch is still running.
@@ -66,6 +68,7 @@ impl std::fmt::Display for ForkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ForkError::UnknownSeq => write!(f, "there is no step with that number on this branch"),
+            ForkError::UnknownBranch(b) => write!(f, "there is no branch \"{b}\""),
             ForkError::UnknownAgent(a) => write!(f, "there is no agent \"{a}\" in this team"),
             ForkError::BranchRunning => write!(f, "the branch is still running"),
             ForkError::NoRestorePoint { seq } => write!(
@@ -94,12 +97,17 @@ pub struct ForkResponse {
     pub reason: Option<String>,
 }
 
-fn is_change(c: &Change) -> bool {
-    c.prompt.is_some() || c.model.is_some() || c.kind.is_some()
+/// True when `c` changes the agent's mode (a kind equal to the current one is no change).
+fn changes_kind(c: &Change, spec: &AgentSpec) -> bool {
+    c.kind.is_some_and(|k| k != spec.kind)
+}
+
+fn is_change(c: &Change, spec: &AgentSpec) -> bool {
+    c.prompt.is_some() || c.model.is_some() || changes_kind(c, spec)
 }
 
 /// Plans a fork of a branch (its full event list, `team` its effective team) at `at_seq`.
-/// Empty changes (no field set) are ignored.
+/// Empty changes (no field set, or only the agent's current kind) are ignored.
 pub fn plan_fork(
     events: &[Event],
     team: &Team,
@@ -113,7 +121,7 @@ pub fn plan_fork(
     let mut changed: Vec<usize> = vec![];
     for (id, c) in changes {
         let i = index_of(id).ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
-        if is_change(c) {
+        if is_change(c, &team.agents[i]) {
             changed.push(i);
         }
     }
@@ -137,12 +145,20 @@ pub fn plan_fork(
         }
     };
 
+    // An agent has finished at `at_seq` once its AgentEnd is at or before it.
+    let finished = |i: usize| {
+        events.iter().any(|e| {
+            e.seq <= at_seq && e.kind == EventKind::AgentEnd && e.agent.as_deref() == Some(team.agents[i].id.as_str())
+        })
+    };
+
     let mut resume = None;
-    let (start_seq, reason): (i64, Option<&str>) = if let Some(&e) = changed.iter().filter(|&&i| i < a).min() {
-        // 2. A change to an agent that finished earlier: restart from it.
+    let earliest_finished_change = changed.iter().copied().filter(|&i| i < a || finished(i)).min();
+    let (start_seq, reason): (i64, Option<&str>) = if let Some(e) = earliest_finished_change {
+        // 2. A change to an agent that has finished (including `a`): restart from it.
         a = e;
         (first_start(a)?, Some(REASON_EARLIER))
-    } else if changes.get(&team.agents[a].id).is_some_and(|c| c.kind.is_some()) {
+    } else if changes.get(&team.agents[a].id).is_some_and(|c| changes_kind(c, &team.agents[a])) {
         // 3. Mode change, or a CLI agent: restart the agent.
         (first_start(a)?, Some(REASON_KIND))
     } else if team.agents[a].kind != AgentKind::Open {
@@ -245,7 +261,11 @@ pub async fn fork(
     at_seq: i64,
     changes: HashMap<String, Change>,
 ) -> Result<ForkResponse, ForkError> {
-    let parent = state.store.branch(branch_id).await?;
+    let parent = state
+        .store
+        .find_branch(branch_id)
+        .await?
+        .ok_or_else(|| ForkError::UnknownBranch(branch_id.to_string()))?;
     if parent.status == BranchStatus::Running {
         return Err(ForkError::BranchRunning);
     }
@@ -505,6 +525,40 @@ mod tests {
         assert_eq!((p.start_seq, p.moved_from), (13, Some(14)));
         let p = plan_fork(&events(), &t, 15, &no_changes()).unwrap();
         assert_eq!((p.start_seq, p.agent_index, p.restore), (13, 1, Restore::Snapshot("snap_b".into())));
+    }
+
+    #[test]
+    fn change_to_finished_active_agent_moves_back() {
+        let t = team(AgentKind::Open);
+        let c = change("resolver", Change { prompt: Some("New.".into()), ..Default::default() });
+        // At the Check (after the resolver's AgentEnd) and at its AgentEnd itself.
+        for at in [15, 14] {
+            let p = plan_fork(&events(), &t, at, &c).unwrap();
+            assert_eq!((p.start_seq, p.moved_from, p.agent_index), (8, Some(at), 1), "at {at}");
+            assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
+            assert_eq!((p.resume, p.restore), (None, Restore::Base));
+            assert_eq!(p.notes, vec!["N1".to_string()]);
+        }
+        // Changes to both: the earliest finished one wins.
+        let mut both = c.clone();
+        both.insert("triage".into(), Change { model: Some("m".into()), ..Default::default() });
+        let p = plan_fork(&events(), &t, 15, &both).unwrap();
+        assert_eq!((p.start_seq, p.agent_index), (2, 0));
+        // Before its AgentEnd the resolver is still active: a prompt change resumes.
+        let p = plan_fork(&events(), &t, 13, &c).unwrap();
+        assert_eq!((p.start_seq, p.moved_from), (13, None));
+    }
+
+    #[test]
+    fn same_kind_is_not_a_mode_change() {
+        let t = team(AgentKind::Open);
+        let c = change("resolver", Change { kind: Some(AgentKind::Open), ..Default::default() });
+        let p = plan_fork(&events(), &t, 11, &c).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.resume), (11, None, Some(msgs("m11"))));
+        // Nor a change to a finished agent.
+        let c = change("triage", Change { kind: Some(AgentKind::Open), ..Default::default() });
+        let p = plan_fork(&events(), &t, 11, &c).unwrap();
+        assert_eq!((p.start_seq, p.agent_index), (11, 1));
     }
 
     #[test]
