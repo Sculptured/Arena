@@ -78,6 +78,8 @@ pub struct AppState {
     /// Set once, after the `Arc<AppState>` exists (the open driver holds a `Weak` to it).
     pub drivers: OnceLock<Drivers>,
     tasks: OnceLock<Tasks>,
+    /// Final database dumps of finished branches, by branch id (for compare).
+    pub dumps: std::sync::Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl AppState {
@@ -87,7 +89,7 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("http client");
-        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new() }
+        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new(), dumps: Default::default() }
     }
 }
 
@@ -132,5 +134,5 @@ mod tests {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    crate::mcp::router().merge(crate::gateway::router()).with_state(state)
+    crate::mcp::router().merge(crate::gateway::router()).merge(crate::api::router()).with_state(state)
 }

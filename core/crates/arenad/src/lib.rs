@@ -1,5 +1,7 @@
 pub mod agents;
+pub mod api;
 pub mod app;
+pub mod compare;
 pub mod exec;
 pub mod fork;
 pub mod gateway;
