@@ -1,5 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { modesLine, useHealth } from './components';
+import Compare from './pages/Compare';
+import Run from './pages/Run';
 import Runs from './pages/Runs';
 import Team from './pages/Team';
 
@@ -28,8 +30,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Runs />} />
         <Route path="/team" element={<Team />} />
-        <Route path="/runs/:runId/:branchId" element={<Placeholder title="Run" />} />
-        <Route path="/compare/:a/:b" element={<Placeholder title="Compare" />} />
+        <Route path="/runs/:runId/:branchId" element={<Run />} />
+        <Route path="/compare/:a/:b" element={<Compare />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
       </Routes>
     </div>

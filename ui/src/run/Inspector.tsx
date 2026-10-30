@@ -1,0 +1,130 @@
+import { useEffect, useState } from 'react';
+import { rows } from '../api';
+import { formatCost } from './timeline';
+import type { Event } from '../types';
+
+export const pretty = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? null, null, 2));
+
+function Block({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div className="block">
+      <div className="label">{title}</div>
+      <pre className="json">{pretty(value)}</pre>
+    </div>
+  );
+}
+
+function keysOf(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : [];
+}
+
+function RowsAtStep({ branchId, seq, keys, auto }: { branchId: string; seq: number; keys: string[]; auto?: boolean }) {
+  const [data, setData] = useState<Record<string, unknown> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setData(null); setErr(null); }, [branchId, seq]);
+  const load = async () => {
+    setBusy(true); setErr(null);
+    try { setData((await rows(branchId, seq, keys)).rows); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
+  useEffect(() => { if (auto && keys.length) void load(); }, [auto, branchId, seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="block">
+      <button className="btn btn-sm" onClick={load} disabled={busy || keys.length === 0}>
+        {busy ? 'Loading…' : 'Rows at this step'}
+      </button>
+      {keys.length === 0 && <span className="muted small"> nothing read or written</span>}
+      {err && <div className="notice error">{err}</div>}
+      {data && Object.entries(data).map(([k, doc]) => (
+        <div key={k} className="row-doc">
+          <div className="mono small">{k}{doc === null && <span className="muted"> (absent)</span>}</div>
+          {doc !== null && <pre className="json">{pretty(doc)}</pre>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function messageText(m: unknown): string {
+  const c = (m as { content?: unknown })?.content;
+  return typeof c === 'string' ? c : pretty(c ?? m);
+}
+
+export default function Inspector({ branchId, event, autoRows }: { branchId: string; event: Event | null; autoRows?: boolean }) {
+  const auto = autoRows;
+  if (!event) return <div className="inspector empty-pane muted">Select a step. Use ↑/↓ or j/k to move.</div>;
+  const p = (event.payload ?? {}) as Record<string, any>;
+  let body: React.ReactNode;
+  switch (event.kind) {
+    case 'tool_call': {
+      const reads = keysOf(p.reads), writes = keysOf(p.writes);
+      const keys = [...new Set([...writes, ...reads])].slice(0, 50);
+      body = (
+        <>
+          <Block title="Arguments" value={p.args} />
+          <div className="block">
+            <div className="label">Reads / writes</div>
+            <div className="small">reads: {reads.length ? reads.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
+            <div className="small">writes: {writes.length ? writes.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
+            {p.snapshot_error && <div className="notice error">snapshot failed: {p.snapshot_error}</div>}
+            {p.snapshot && <div className="muted small">snapshot {String(p.snapshot)}</div>}
+          </div>
+          <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} auto={auto} />
+          {p.error ? <div className="block"><div className="label">Error</div><pre className="json err">{p.error}</pre></div> : <Block title="Result" value={p.result} />}
+        </>
+      );
+      break;
+    }
+    case 'model_call': {
+      const msgs: unknown[] = Array.isArray(p.request?.messages) ? p.request.messages : [];
+      body = (
+        <>
+          <div className="block">
+            <div className="label">Messages ({msgs.length})</div>
+            {msgs.map((m, i) => (
+              <details key={i} open={i === msgs.length - 1}>
+                <summary className="small"><span className="mono">{(m as { role?: string })?.role ?? '?'}</span></summary>
+                <pre className="json">{messageText(m)}</pre>
+              </details>
+            ))}
+          </div>
+          <Block title="Response" value={p.response} />
+          <Block title="Usage" value={p.usage} />
+          <div className="muted small">cost: {formatCost(p.cost_usd, p.cost_source)}</div>
+        </>
+      );
+      break;
+    }
+    case 'handoff': body = <Block title="Handoff note" value={p.note} />; break;
+    case 'check':
+      body = (
+        <>
+          <div>{p.passed ? 'Passed' : 'Failed'}</div>
+          {p.differing_rows?.length ? <Block title="Differing rows" value={p.differing_rows} /> : null}
+          {p.gold_db && <div className="muted small">gold db {String(p.gold_db)}</div>}
+        </>
+      );
+      break;
+    case 'agent_end':
+      body = (
+        <>
+          <div>{p.ok ? 'Finished' : 'Failed'}{p.error ? `: ${p.error}` : ''}</div>
+          <div className="muted small">{p.seconds != null ? `${Number(p.seconds).toFixed(1)} s · ` : ''}{p.tokens != null ? `${p.tokens} tokens · ` : ''}{formatCost(p.cost_usd, p.cost_source)}</div>
+        </>
+      );
+      break;
+    default: body = <Block title="Payload" value={p} />;
+  }
+  return (
+    <div className="inspector">
+      <div className="insp-head">
+        <span className="mono">step {event.seq}</span>
+        <span className="chip">{event.kind.replace('_', ' ')}</span>
+        {event.agent && <span className="muted small">{event.agent}</span>}
+        {event.kind === 'tool_call' && <span className="mono">{p.name}</span>}
+      </div>
+      {body}
+    </div>
+  );
+}
