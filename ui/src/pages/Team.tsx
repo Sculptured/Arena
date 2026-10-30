@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { defaultTeam } from '../api';
 import { useHealth } from '../components';
 import { clearStoredTeam, loadTeam, saveTeam, slug, withSlugIds } from '../team';
+import { DEFAULT_OPENROUTER_MODEL } from '../types';
 import type { AgentKind, AgentSpec, Team as TeamT } from '../types';
 
 const KINDS: { value: AgentKind; label: string }[] = [
   { value: 'claude_code', label: 'Claude Code' },
   { value: 'codex', label: 'Codex' },
-  { value: 'open', label: 'Open' },
+  { value: 'open', label: 'OpenRouter' },
 ];
 
 export default function Team() {
@@ -93,7 +94,7 @@ export default function Team() {
                   className="mono"
                   value={a.model ?? ''}
                   onChange={(e) => patch(i, { model: e.target.value.trim() === '' ? null : e.target.value })}
-                  placeholder="default"
+                  placeholder={a.kind === 'open' ? `${DEFAULT_OPENROUTER_MODEL} (default)` : 'default'}
                 />
               </label>
             </div>

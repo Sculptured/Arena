@@ -54,7 +54,7 @@ export function modesLine(h: Health | null): string {
   return [
     h.claude && 'Claude Code',
     h.codex && 'Codex',
-    h.open_available ? 'Open' : 'Open (needs key)',
+    h.open_available ? 'OpenRouter' : 'OpenRouter (needs key)',
   ].filter(Boolean).join(' · ');
 }
 

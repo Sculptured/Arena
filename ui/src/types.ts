@@ -1,6 +1,9 @@
 // Mirrors arenad's model.rs / fork.rs / compare.rs (serde snake_case).
 
 export type AgentKind = 'claude_code' | 'codex' | 'open';
+
+/** Model arenad uses for an OpenRouter agent with no model set (`agents/open.rs`). */
+export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-chat-v3.1';
 export type BranchStatus = 'running' | 'passed' | 'failed' | 'infra_error' | 'interrupted';
 export type EventKind =
   | 'run_start'

@@ -22,12 +22,12 @@ Or build the UI and let arenad serve it:
     cd ui && npm install && npm run build
     cd ../core && ARENA_UI_DIST=../ui/dist cargo run -p arenad    # UI and API on :4510
 
-`GET /api/health` shows which CLIs were found and whether open mode is available.
+`GET /api/health` shows which CLIs were found and whether OpenRouter mode is available.
 
 ## The two modes
 
 - **CLI mode** (Claude Code or Codex): the arena starts the CLI headless and gives it only the retail tools through an MCP endpoint of arenad. It records every tool call (arguments, result, rows read and written), the handoff note, and the tokens and cost the CLI reports. It does not see the raw model calls.
-- **Open mode**: arenad runs the agent loop and sends each model call through its gateway to OpenRouter. It records everything CLI mode does, plus every model call. It needs `OPENROUTER_API_KEY`. No open-mode run has been measured yet (no key was set for the measurements below).
+- **OpenRouter mode** (`kind: "open"` in the API): arenad runs the agent loop and sends each model call through its gateway to OpenRouter. It records everything CLI mode does, plus every model call. It needs `OPENROUTER_API_KEY`. No OpenRouter run has been measured yet (no key was set for the measurements below).
 
 Isolation of the CLI agents (from the Task 8 live checks):
 - Claude Code: settings sources empty, strict MCP config, slash commands off, built-in tools off (`--tools ""`), so the only tools are the retail MCP tools.
@@ -47,7 +47,7 @@ You choose a step N and a change (prompt, model, or kind of one agent).
 
 ## Cost labels
 
-- `openrouter`: the cost OpenRouter reports (open mode).
+- `openrouter`: the cost OpenRouter reports (OpenRouter mode).
 - `api_equivalent_estimate`: Claude Code's own `total_cost_usd`. It is what the same tokens would cost at API prices, not what a subscription pays.
 - No label and no dollar figure: Codex reports tokens only.
 - Dollars are shown only when every agent in the branch has a dollar figure; otherwise only tokens are shown. Tokens are always summed. When agents have different sources the label is `mixed`.
@@ -65,7 +65,7 @@ Live runs on task 27 (2026-10-30), through the HTTP API, one run each. "A" is th
 | B: triage Claude Code, resolver Codex (new run, model unset) | passed | 50.708 | 166583 | $0.0407897 (api_equivalent_estimate, triage only, from its agent_end; Codex has no dollar figure, so the compare output shows no dollars for B) |
 | C1: fork of A at step 12, resolver kind changed to `codex`, model left as `sonnet` | infra_error | 1.725 | 0 | none |
 | C2: same fork, resolver kind `codex` and model `gpt-6.1-sol` | passed | 29.159 | 106955 | none (Codex reports tokens only) |
-| Open mode | not run | | | no `OPENROUTER_API_KEY` set; `open_available` was false |
+| OpenRouter mode | not run | | | no `OPENROUTER_API_KEY` set; `open_available` was false |
 
 Notes:
 - The two fork rows (and C1/C2) cover the resolver only. For comparison, A's resolver alone was 8.796 s, 45932 tokens, $0.0508491 (from the agent_end event).
@@ -80,7 +80,7 @@ Environment variables, read once at startup:
 - `ARENA_PG_URL`: Postgres connection (default `postgres://arena:arena@127.0.0.1:5544/postgres`).
 - `ARENA_DATA`: folder with the retail data (default `../data/retail`, relative to `core`).
 - `ARENA_PORT`: HTTP port (default 4510).
-- `OPENROUTER_API_KEY`: turns on open mode.
+- `OPENROUTER_API_KEY`: turns on OpenRouter mode. Pick the model per agent on the Team page (or per fork in "Change and rerun") by typing an OpenRouter model id such as `deepseek/deepseek-chat-v3.1`, the default when the field is empty.
 - `ARENA_UI_DIST`: a built UI folder for arenad to serve.
 - `ARENA_MAX_DB_BYTES`: disk limit, see below (default 5 GiB).
 

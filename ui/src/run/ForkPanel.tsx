@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { fork } from '../api';
 import { changedFields } from './timeline';
+import { DEFAULT_OPENROUTER_MODEL } from '../types';
 import type { AgentKind, BranchDetail, Change, ForkResponse } from '../types';
 
 const MODES: { id: AgentKind; label: string }[] = [
   { id: 'claude_code', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
-  { id: 'open', label: 'Open' },
+  { id: 'open', label: 'OpenRouter' },
 ];
 
 export default function ForkPanel({ branch, seq, onForked }: {
@@ -47,7 +48,7 @@ export default function ForkPanel({ branch, seq, onForked }: {
               </label>
               <label className="field grow">
                 <span className="label">Model</span>
-                <input value={e.model ?? a.model ?? ''} placeholder="default" onChange={(ev) => set(a.id, { model: ev.target.value })} />
+                <input value={e.model ?? a.model ?? ''} placeholder={(e.kind ?? a.kind) === 'open' ? `${DEFAULT_OPENROUTER_MODEL} (default)` : 'default'} onChange={(ev) => set(a.id, { model: ev.target.value })} />
               </label>
             </div>
             <label className="field">
