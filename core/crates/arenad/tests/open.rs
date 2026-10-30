@@ -1,0 +1,227 @@
+#[path = "support/fake_upstream.rs"]
+mod fake_upstream;
+
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
+
+use arenad::{
+    agents::{open::OpenDriver, AgentRun, Driver},
+    app::{self, AppState, Config},
+    exec::BranchCtx,
+    model::*,
+    store::Store,
+};
+use fake_upstream::FakeUpstream;
+use serde_json::{json, Value};
+use tokio::sync::OnceCell;
+use world::{
+    schema::load_base,
+    snapshot::{Source, Worlds},
+    testing,
+};
+
+static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+
+fn run<F: Future>(f: F) -> F::Output {
+    RT.block_on(f)
+}
+
+static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
+
+fn data_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
+}
+
+async fn worlds() -> Arc<Worlds> {
+    WORLDS
+        .get_or_init(|| async {
+            let w = Worlds::new(testing::admin());
+            load_base(w.admin(), &data_dir()).await.unwrap();
+            Arc::new(w)
+        })
+        .await
+        .clone()
+}
+
+fn agent(id: &str, prompt: &str) -> AgentSpec {
+    AgentSpec { id: id.into(), name: id.into(), kind: AgentKind::Open, model: Some("fake/model".into()), prompt: prompt.into() }
+}
+
+struct Fx {
+    state: Arc<AppState>,
+    ctx: Arc<BranchCtx>,
+    meta: String,
+    db: String,
+}
+
+async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx {
+    let worlds = worlds().await;
+    let meta = format!("arena_test_open_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
+    let team = Team { id: "t".into(), name: "T".into(), agents };
+    let run_id = store.create_run("task", &team).await.unwrap();
+    let branch = store.create_branch(&run_id, None, &team, &json!([]), None).await.unwrap();
+    let db = worlds.new_branch(&format!("opentest_{}", branch), Source::Base).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut config = Config::new(data_dir());
+    config.upstream_base = upstream.base_url.clone();
+    config.openrouter_key = None;
+    config.self_base = format!("http://127.0.0.1:{port}");
+    let state = Arc::new(AppState::new(store, worlds, config));
+    let ctx = Arc::new(BranchCtx::new(branch.clone(), db.clone(), team, "task".into()));
+    state.live.write().unwrap().insert(branch, ctx.clone());
+    let app = app::router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Fx { state, ctx, meta, db }
+}
+
+async fn teardown(fx: Fx) {
+    let Fx { state, meta, db, .. } = fx;
+    let worlds = state.worlds.clone();
+    drop(state);
+    worlds.drop_db(&db).await.unwrap();
+    worlds.admin().drop_db(&meta).await.unwrap();
+}
+
+fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {
+    let tcs: Vec<Value> = calls
+        .into_iter()
+        .map(|(id, name, args)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}}))
+        .collect();
+    json!({"role": "assistant", "content": null, "tool_calls": tcs})
+}
+
+fn text_msg(t: &str) -> Value {
+    json!({"role": "assistant", "content": t})
+}
+
+fn address_args() -> Value {
+    json!({"user_id": "ethan_garcia_1261", "address1": "7 Open Road",
+        "address2": "", "city": "New York", "state": "NY", "country": "USA", "zip": "10001"})
+}
+
+fn driver(fx: &Fx) -> OpenDriver {
+    OpenDriver::new(fx.state.clone())
+}
+
+fn agent_run(fx: &Fx, idx: usize, resume: Option<Vec<Value>>) -> AgentRun {
+    AgentRun {
+        branch: fx.ctx.clone(),
+        spec: fx.ctx.team.agents[idx].clone(),
+        input: "Please help with my order.".into(),
+        resume,
+    }
+}
+
+async fn kinds(fx: &Fx) -> Vec<EventKind> {
+    fx.state.store.events(&fx.ctx.branch_id).await.unwrap().iter().map(|e| e.kind).collect()
+}
+
+#[test]
+fn open_agent_runs_scripted_tools_and_records_model_calls() {
+    run(async {
+        let up = FakeUpstream::start(vec![
+            tool_msg(vec![("c1", "get_order_details", json!({"order_id": "#W0000000"}))]),
+            tool_msg(vec![("c2", "modify_user_address", address_args())]),
+            text_msg("All done."),
+        ])
+        .await;
+        let fx = setup("scripted", vec![agent("solo", "You are the solo agent.")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(r.tokens, json!({"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45}));
+        assert!((r.cost_usd.unwrap() - 0.003).abs() < 1e-9);
+        assert_eq!(r.cost_source.as_deref(), Some("openrouter"));
+        assert_eq!(
+            kinds(&fx).await,
+            vec![EventKind::ModelCall, EventKind::ToolCall, EventKind::ModelCall, EventKind::ToolCall, EventKind::ModelCall]
+        );
+        let evs = fx.state.store.events(&fx.ctx.branch_id).await.unwrap();
+        let mc: ModelCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
+        assert_eq!(mc.cost_usd, Some(0.001));
+        assert_eq!(mc.cost_source.as_deref(), Some("openrouter"));
+        assert_eq!(mc.request["model"], "fake/model");
+        assert_eq!(mc.request["messages"][0], json!({"role": "system", "content": "You are the solo agent."}));
+        assert_eq!(mc.request["messages"][1]["role"], "user");
+        assert!(mc.request["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "get_order_details"));
+        assert!(!mc.request["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "handoff"));
+        assert_eq!(mc.response["choices"][0]["message"]["tool_calls"][0]["id"], "c1");
+        assert_eq!(evs[0].agent.as_deref(), Some("solo"));
+        // The upstream saw exactly what was recorded, and the tool result went back.
+        let reqs = up.requests();
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(reqs[0], mc.request);
+        let last = reqs[1]["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["role"], "tool");
+        assert_eq!(last["tool_call_id"], "c1");
+        let tc: ToolCallPayload = serde_json::from_value(evs[3].payload.clone()).unwrap();
+        assert!(tc.snapshot.is_some());
+        assert_eq!(tc.tool_call_id.as_deref(), Some("c2"));
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn upstream_error_is_recorded_and_agent_fails() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"_status": 500})]).await;
+        let fx = setup("err", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(!r.ok);
+        assert!(r.error.is_some());
+        let evs = fx.state.store.events(&fx.ctx.branch_id).await.unwrap();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].kind, EventKind::ModelCall);
+        let mc: ModelCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
+        assert!(mc.response["error"].is_string() || mc.response["error"].is_object());
+        assert_eq!(mc.cost_usd, None);
+        assert_eq!(mc.cost_source, None);
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn forty_call_cap_stops_the_loop() {
+    run(async {
+        let up = FakeUpstream::start(vec![tool_msg(vec![("c", "get_order_details", json!({"order_id": "#W0000000"}))])]).await;
+        let fx = setup("cap", vec![agent("solo", "p")], &up).await;
+        let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("40"));
+        let k = kinds(&fx).await;
+        assert_eq!(k.iter().filter(|k| **k == EventKind::ModelCall).count(), 40);
+        assert_eq!(up.requests().len(), 40);
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn handoff_stops_loop_and_resume_replaces_system_prompt() {
+    run(async {
+        let up = FakeUpstream::start(vec![
+            tool_msg(vec![("h1", "handoff", json!({"note": "customer wants a new address"}))]),
+            text_msg("unused"),
+        ])
+        .await;
+        let fx = setup("handoff", vec![agent("triage", "NEW PROMPT"), agent("resolver", "r")], &up).await;
+        let resume = vec![
+            json!({"role": "system", "content": "OLD PROMPT"}),
+            json!({"role": "user", "content": "earlier input"}),
+        ];
+        let r = driver(&fx).run(agent_run(&fx, 0, Some(resume))).await;
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(kinds(&fx).await, vec![EventKind::ModelCall, EventKind::Handoff]);
+        assert_eq!(fx.ctx.handoff_note("triage").as_deref(), Some("customer wants a new address"));
+        let reqs = up.requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0]["messages"][0], json!({"role": "system", "content": "NEW PROMPT"}));
+        assert_eq!(reqs[0]["messages"][1]["content"], "earlier input");
+        assert!(reqs[0]["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "handoff"));
+        assert_eq!(reqs[0]["usage"], json!({"include": true}));
+        teardown(fx).await;
+    })
+}

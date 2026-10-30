@@ -67,7 +67,7 @@ async fn setup(tag: &str) -> Fx {
     let state = Arc::new(AppState::new(
         store.clone(),
         worlds.clone(),
-        Config { data_dir: data_dir() },
+        Config::new(data_dir()),
     ));
     state
         .live
