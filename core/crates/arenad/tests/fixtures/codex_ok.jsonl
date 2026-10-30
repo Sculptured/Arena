@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a180c7-eb88-7c12-aff4-b568a8c1e724"}
+{"type":"turn.started"}
+{"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "Submitted and verified the exchange."}}
+{"type": "item.completed", "item": {"id": "item_8", "type": "agent_message", "text": "Submitted and verified the exchange."}}
+{"type": "item.completed", "item": {"id": "item_12", "type": "agent_message", "text": "Submitted and verified the exchange."}}
+{"type":"turn.completed","usage":{"input_tokens":241348,"cached_input_tokens":196096,"cache_write_input_tokens":0,"output_tokens":913,"reasoning_output_tokens":25}}
