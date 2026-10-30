@@ -22,7 +22,11 @@ pub struct ClaudeDriver {
 
 impl ClaudeDriver {
     pub fn new(self_base: impl Into<String>) -> ClaudeDriver {
-        ClaudeDriver { self_base: self_base.into(), binary: "claude".into(), timeout_secs: CLI_TIMEOUT_SECS }
+        ClaudeDriver {
+            self_base: self_base.into(),
+            binary: "claude".into(),
+            timeout_secs: CLI_TIMEOUT_SECS,
+        }
     }
 }
 
@@ -44,7 +48,9 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> 
         .arg(mcp)
         .arg("--disable-slash-commands")
         .args(["--tools", ""])
-        .args(["--allowedTools", "mcp__retail__*"]);
+        .args(["--allowedTools", "mcp__retail__*"])
+        .arg("--no-session-persistence");
+    super::scrub_env(&mut c);
     c
 }
 
@@ -53,7 +59,10 @@ pub fn parse(stdout: &str) -> AgentResult {
     let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) else {
         return AgentResult {
             ok: false,
-            error: Some(format!("unparseable claude output: {}", super::tail(stdout))),
+            error: Some(format!(
+                "unparseable claude output: {}",
+                super::tail(stdout)
+            )),
             tokens: json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
             cost_usd: None,
             cost_source: None,
@@ -62,13 +71,20 @@ pub fn parse(stdout: &str) -> AgentResult {
     };
     let u = &v["usage"];
     let n = |k: &str| u[k].as_i64().unwrap_or(0);
-    let prompt = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+    let prompt =
+        n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
     let completion = n("output_tokens");
     let is_error = v["is_error"].as_bool().unwrap_or(false);
     let text = v["result"].as_str().unwrap_or("").to_string();
     AgentResult {
         ok: !is_error,
-        error: is_error.then(|| if text.is_empty() { "claude reported an error".into() } else { text }),
+        error: is_error.then(|| {
+            if text.is_empty() {
+                "claude reported an error".into()
+            } else {
+                text
+            }
+        }),
         tokens: json!({"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}),
         cost_usd: v["total_cost_usd"].as_f64(),
         cost_source: Some("api_equivalent_estimate".into()),
@@ -86,7 +102,12 @@ impl Driver for ClaudeDriver {
                 Ok(d) => d,
                 Err(e) => return super::fail(format!("cannot create workdir: {e}")),
             };
-            let mut cmd = command_with(&self.binary, &run.spec, &super::mcp_url(&self.self_base, &run), &super::prompt_of(&run));
+            let mut cmd = command_with(
+                &self.binary,
+                &run.spec,
+                &super::mcp_url(&self.self_base, &run),
+                &super::prompt_of(&run),
+            );
             cmd.current_dir(&workdir);
             let r = super::run_cli(cmd, self.timeout_secs, |out, _| parse(out)).await;
             let _ = std::fs::remove_dir_all(&workdir);

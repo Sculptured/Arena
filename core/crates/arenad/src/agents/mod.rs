@@ -94,7 +94,10 @@ pub(crate) async fn run_cli(
             let mut r = parse(&stdout, code);
             r.seconds = seconds;
             if !r.ok && !stderr.trim().is_empty() {
-                let msg = r.error.take().unwrap_or_else(|| format!("exit code {code}"));
+                let msg = r
+                    .error
+                    .take()
+                    .unwrap_or_else(|| format!("exit code {code}"));
                 r.error = Some(format!("{msg}\nstderr: {}", tail(stderr.trim())));
             }
             r
@@ -111,7 +114,12 @@ pub(crate) fn prompt_of(run: &AgentRun) -> String {
 }
 
 pub(crate) fn mcp_url(self_base: &str, run: &AgentRun) -> String {
-    format!("{}/mcp/{}/{}", self_base.trim_end_matches('/'), run.branch.branch_id, run.spec.id)
+    format!(
+        "{}/mcp/{}/{}",
+        self_base.trim_end_matches('/'),
+        run.branch.branch_id,
+        run.spec.id
+    )
 }
 
 pub(crate) fn fresh_workdir() -> std::io::Result<std::path::PathBuf> {
@@ -122,4 +130,27 @@ pub(crate) fn fresh_workdir() -> std::io::Result<std::path::PathBuf> {
 
 pub(crate) fn fail(error: String) -> AgentResult {
     failed(error, 0.0)
+}
+
+/// Remove database/API secrets from a CLI child's environment.
+pub(crate) fn scrub_env(c: &mut std::process::Command) {
+    for (k, _) in std::env::vars_os() {
+        let name = k.to_string_lossy();
+        if name.starts_with("PG")
+            || matches!(
+                name.as_ref(),
+                "ARENA_PG_URL" | "DATABASE_URL" | "OPENROUTER_API_KEY"
+            )
+        {
+            c.env_remove(&k);
+        }
+    }
+    for k in [
+        "ARENA_PG_URL",
+        "DATABASE_URL",
+        "PGPASSWORD",
+        "OPENROUTER_API_KEY",
+    ] {
+        c.env_remove(k);
+    }
 }
