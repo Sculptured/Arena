@@ -64,7 +64,8 @@ async fn gold_changes_match_for_all_68_tasks() {
     let fix = fixture();
     assert_eq!(fix.len(), 68);
     let db = temp_copy(&admin, "gold").await;
-    let base = admin.with_db("world_base", async |c| dump(c).await).await.unwrap();
+    // Dump base from the private copy, never from world_base itself.
+    let base = admin.with_db(&db, async |c| dump(c).await).await.unwrap();
     let mut n = 0;
     for task in tasks().iter().filter(|t| eligible(t)) {
         let id = task["id"].as_str().unwrap();
@@ -96,7 +97,9 @@ async fn gold_changes_match_for_all_68_tasks() {
 #[tokio::test]
 async fn ensure_gold_creates_and_caches() {
     let admin = world::testing::admin();
-    let _ = temp_copy(&admin, "unused").await;
+    let copy = temp_copy(&admin, "unused").await;
+    let base = admin.with_db(&copy, async |c| dump(c).await).await.unwrap();
+    admin.drop_db(&copy).await.unwrap();
     let fix = fixture();
     let task = tasks().into_iter().find(|t| eligible(t)).unwrap();
     let id = task["id"].as_str().unwrap().to_string();
@@ -109,7 +112,6 @@ async fn ensure_gold_creates_and_caches() {
     assert_eq!(got, name);
     let again = world::gold::ensure_gold(&admin, &task).await.unwrap();
     assert_eq!(again, name);
-    let base = admin.with_db("world_base", async |c| dump(c).await).await.unwrap();
     let now = admin.with_db(&name, async |c| dump(c).await).await.unwrap();
     assert_eq!(Value::Object(changed_rows(&base, &now)), fix[&id]);
     admin.drop_db(&name).await.unwrap();
