@@ -121,9 +121,12 @@ impl Admin {
         let mut out = vec![];
         for r in rows {
             let name: String = r.get(0);
-            // pg_database_size errors if the database vanished since the listing.
+            // pg_database_size errors if the database vanished since the listing, and returns
+            // NULL if it is being dropped right now.
             if let Ok(row) = c.query_one("SELECT pg_database_size($1::text)", &[&name]).await {
-                out.push((name, row.get(0)));
+                if let Ok(Some(size)) = row.try_get::<_, Option<i64>>(0) {
+                    out.push((name, size));
+                }
             }
         }
         Ok(out)
