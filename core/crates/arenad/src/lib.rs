@@ -4,6 +4,7 @@ pub mod app;
 pub mod compare;
 pub mod exec;
 pub mod fork;
+pub mod gc;
 pub mod gateway;
 pub mod mcp;
 pub mod model;

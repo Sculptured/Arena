@@ -116,6 +116,14 @@ export interface Health {
   open_available: boolean;
   claude: boolean;
   codex: boolean;
+  disk?: DiskUsage;
+}
+
+/** Space used by the arena's branch, snapshot and gold databases. */
+export interface DiskUsage {
+  databases: number;
+  bytes: number;
+  limit_bytes: number;
 }
 
 export interface TaskSummary {

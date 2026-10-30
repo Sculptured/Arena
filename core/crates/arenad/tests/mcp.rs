@@ -16,7 +16,7 @@ use world::{
     dump,
     schema::load_base,
     snapshot::{Source, Worlds},
-    testing,
+    testing::{self, Cleanup},
 };
 
 static RT: LazyLock<tokio::runtime::Runtime> =
@@ -50,7 +50,7 @@ fn agent(id: &str) -> AgentSpec {
 struct Fx {
     store: Arc<Store>,
     worlds: Arc<Worlds>,
-    meta: String,
+    _clean: Cleanup,
     branch: String,
     db: String,
     url: String,
@@ -59,6 +59,8 @@ struct Fx {
 async fn setup(tag: &str) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_mcp_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let clean = Cleanup::new();
+    clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let team = Team { id: "t".into(), name: "T".into(), agents: vec![agent("triage"), agent("resolver")] };
     let run_id = store.create_run("task", &team).await.unwrap();
@@ -77,17 +79,16 @@ async fn setup(tag: &str) -> Fx {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app::router(state)).await.unwrap() });
-    Fx { store, worlds, meta, branch, db, url: format!("http://127.0.0.1:{port}/mcp") }
+    Fx { store, worlds, _clean: clean, branch, db, url: format!("http://127.0.0.1:{port}/mcp") }
 }
 
 async fn teardown(fx: Fx, extra: &[String]) {
-    let Fx { store, worlds, meta, db, .. } = fx;
+    let Fx { store, worlds, db, .. } = fx;
     drop(store);
     worlds.drop_db(&db).await.unwrap();
     for d in extra {
         worlds.drop_db(d).await.unwrap();
     }
-    worlds.admin().drop_db(&meta).await.unwrap();
 }
 
 async fn rpc(fx: &Fx, agent: &str, body: Value) -> (u16, Value) {

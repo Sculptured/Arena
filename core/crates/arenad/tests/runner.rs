@@ -24,7 +24,7 @@ use tokio::sync::OnceCell;
 use world::{
     schema::load_base,
     snapshot::{Source, Worlds},
-    testing,
+    testing::{self, Cleanup},
 };
 
 static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
@@ -69,12 +69,14 @@ impl Driver for Fail {
 
 struct Fx {
     state: Arc<AppState>,
-    meta: String,
+    _clean: Cleanup,
 }
 
 async fn setup(tag: &str, upstream: Option<&FakeUpstream>, failing: bool) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_runner_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let clean = Cleanup::new();
+    clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -89,7 +91,7 @@ async fn setup(tag: &str, upstream: Option<&FakeUpstream>, failing: bool) -> Fx 
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, meta }
+    Fx { state, _clean: clean }
 }
 
 async fn teardown(fx: Fx, branches: &[&str]) {
@@ -98,7 +100,6 @@ async fn teardown(fx: Fx, branches: &[&str]) {
         worlds.drop_db(&format!("branch_{b}")).await.unwrap();
     }
     drop(fx.state);
-    worlds.admin().drop_db(&fx.meta).await.unwrap();
 }
 
 async fn finished(fx: &Fx, branch: &str) -> Branch {

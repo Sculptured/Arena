@@ -222,6 +222,64 @@ impl Store {
             .collect())
     }
 
+    /// Every database the store refers to: `branch_<id>` for each branch and each snapshot
+    /// named by a `ToolCall` event.
+    pub async fn referenced_dbs(&self) -> Result<std::collections::HashSet<String>> {
+        let mut out = std::collections::HashSet::new();
+        for r in self.client.query("SELECT id FROM branches", &[]).await? {
+            out.insert(format!("branch_{}", r.get::<_, String>(0)));
+        }
+        out.extend(self.snapshots_where("TRUE", &[]).await?);
+        Ok(out)
+    }
+
+    async fn snapshots_where(&self, cond: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> Result<Vec<String>> {
+        let sql = format!(
+            "SELECT DISTINCT payload->>'snapshot' FROM events
+             WHERE kind = 'tool_call' AND payload->>'snapshot' IS NOT NULL AND {cond}"
+        );
+        Ok(self.client.query(&sql, params).await?.iter().map(|r| r.get(0)).collect())
+    }
+
+    /// Deletes the run's branches, events and the run itself, and returns every database
+    /// they referenced (`branch_<id>` and the snapshots its events name).
+    pub async fn delete_run(&self, run_id: &str) -> Result<Vec<String>> {
+        let ids: Vec<String> = self
+            .client
+            .query("SELECT id FROM branches WHERE run_id = $1", &[&run_id])
+            .await?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        let mut dbs: Vec<String> = ids.iter().map(|i| format!("branch_{i}")).collect();
+        dbs.extend(self.snapshots_where("branch_id = ANY($1)", &[&ids]).await?);
+        dbs.sort();
+        dbs.dedup();
+        // One statement, so the branch/parent foreign keys are checked at its end.
+        self.client
+            .execute(
+                "WITH ev AS (DELETE FROM events WHERE branch_id = ANY($2)),
+                      br AS (DELETE FROM branches WHERE run_id = $1)
+                 DELETE FROM runs WHERE id = $1",
+                &[&run_id, &ids],
+            )
+            .await?;
+        Ok(dbs)
+    }
+
+    /// True if some branch of the run has status `running`.
+    pub async fn run_has_running(&self, run_id: &str) -> Result<bool> {
+        Ok(self
+            .client
+            .query_one("SELECT EXISTS (SELECT 1 FROM branches WHERE run_id = $1 AND status = 'running')", &[&run_id])
+            .await?
+            .get(0))
+    }
+
+    pub async fn run_exists(&self, run_id: &str) -> Result<bool> {
+        Ok(self.client.query_one("SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1)", &[&run_id]).await?.get(0))
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
     }

@@ -37,6 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/tasks", get(tasks))
         .route("/api/team/default", get(default_team))
         .route("/api/runs", get(list_runs).post(create_run))
+        .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/branches/{id}", get(get_branch))
         .route("/api/branches/{id}/stream", get(stream))
         .route("/api/branches/{id}/rows", get(rows))
@@ -56,6 +57,9 @@ impl ApiError {
     }
     fn not_found(msg: impl Into<String>) -> ApiError {
         ApiError(StatusCode::NOT_FOUND, msg.into())
+    }
+    fn insufficient_storage(msg: impl Into<String>) -> ApiError {
+        ApiError(StatusCode::INSUFFICIENT_STORAGE, msg.into())
     }
     fn conflict(msg: impl Into<String>) -> ApiError {
         ApiError(StatusCode::CONFLICT, msg.into())
@@ -152,8 +156,48 @@ pub fn on_path(name: &str) -> bool {
     })
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({"open_available": state.config.open_available(), "claude": on_path("claude"), "codex": on_path("codex")}))
+async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
+    let (databases, bytes) = crate::gc::usage(&state.worlds).await?;
+    Ok(Json(json!({
+        "open_available": state.config.open_available(),
+        "claude": on_path("claude"),
+        "codex": on_path("codex"),
+        "disk": {"databases": databases, "bytes": bytes, "limit_bytes": state.config.max_db_bytes},
+    })))
+}
+
+/// 507 when the arena's databases already use at least the configured limit.
+async fn check_disk(state: &AppState) -> Result<(), ApiError> {
+    let (_, bytes) = crate::gc::usage(&state.worlds).await?;
+    if bytes as u64 >= state.config.max_db_bytes {
+        return Err(ApiError::insufficient_storage("the arena's databases use more than the limit; delete old runs"));
+    }
+    Ok(())
+}
+
+async fn delete_run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> ApiResult<Value> {
+    if !state.store.run_exists(&id).await? {
+        return Err(ApiError::not_found(format!("there is no run \"{id}\"")));
+    }
+    let live = state.live.read().unwrap().keys().cloned().collect::<Vec<_>>();
+    let running = state.store.run_has_running(&id).await?
+        || state.store.runs().await?.iter().filter(|r| r.id == id).flat_map(|r| &r.branches).any(|b| live.contains(&b.id));
+    if running {
+        return Err(ApiError::conflict("the run still has a running branch"));
+    }
+    detached(async move {
+        let dbs = state.store.delete_run(&id).await?;
+        let mut dropped = 0;
+        for db in &dbs {
+            match state.worlds.drop_db(db).await {
+                Ok(()) => dropped += 1,
+                Err(e) => eprintln!("delete run {id}: could not drop {db}: {e:#}"),
+            }
+        }
+        state.dumps.lock().unwrap().retain(|b, _| !dbs.contains(&format!("branch_{b}")));
+        Ok(Json(json!({"dropped": dropped})))
+    })
+    .await
 }
 
 async fn tasks(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
@@ -182,6 +226,7 @@ async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResul
         return Err(ApiError::not_found(format!("unknown task {}", req.task_id)));
     }
     validate_team(&state, &req.team)?;
+    check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move { Ok(runner::start_run(&state, &req.task_id, req.team).await?) }).await?;
     Ok(Json(json!({"run_id": run_id, "branch_id": branch_id})))
 }
@@ -206,6 +251,7 @@ async fn fork_branch(State(state): State<Arc<AppState>>, Path(id): Path<String>,
     if req.changes.values().any(|c| c.kind == Some(AgentKind::Open)) {
         open_check(&state)?;
     }
+    check_disk(&state).await?;
     let resp = detached(async move { Ok(fork::fork(&state, &id, req.at_seq, req.changes).await?) }).await?;
     Ok(Json(resp))
 }

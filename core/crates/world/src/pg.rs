@@ -106,3 +106,38 @@ impl Admin {
         Ok(())
     }
 }
+
+impl Admin {
+    /// Databases whose name starts with `prefix` (plain text, not a LIKE pattern) with their
+    /// sizes in bytes, ordered by name. A database dropped mid-query is skipped.
+    pub async fn list_prefix(&self, prefix: &str) -> Result<Vec<(String, i64)>> {
+        let c = self.client().await?;
+        let rows = c
+            .query(
+                "SELECT datname FROM pg_database WHERE left(datname, length($1::text)) = $1::text ORDER BY 1",
+                &[&prefix],
+            )
+            .await?;
+        let mut out = vec![];
+        for r in rows {
+            let name: String = r.get(0);
+            // pg_database_size errors if the database vanished since the listing.
+            if let Ok(row) = c.query_one("SELECT pg_database_size($1::text)", &[&name]).await {
+                out.push((name, row.get(0)));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Databases with a name in `prefixes`' namespaces: (count, total bytes).
+    pub async fn usage(&self, prefixes: &[&str]) -> Result<(usize, i64)> {
+        let mut n = 0;
+        let mut bytes = 0;
+        for p in prefixes {
+            let list = self.list_prefix(p).await?;
+            n += list.len();
+            bytes += list.iter().map(|x| x.1).sum::<i64>();
+        }
+        Ok((n, bytes))
+    }
+}

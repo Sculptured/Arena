@@ -26,7 +26,11 @@ pub struct Config {
     pub openrouter_key: Option<String>,
     /// This service's own base URL (e.g. `http://127.0.0.1:8787`), used by the open agent loop.
     pub self_base: String,
+    /// New runs and forks are refused (507) once the arena's databases use at least this many bytes.
+    pub max_db_bytes: u64,
 }
+
+pub const DEFAULT_MAX_DB_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 
@@ -42,6 +46,7 @@ impl std::fmt::Debug for Config {
             .field("upstream_base", &self.upstream_base)
             .field("openrouter_key", &self.openrouter_key.as_ref().map(|_| "<redacted>"))
             .field("self_base", &self.self_base)
+            .field("max_db_bytes", &self.max_db_bytes)
             .finish()
     }
 }
@@ -54,6 +59,10 @@ impl Config {
             upstream_base: OPENROUTER_BASE.to_string(),
             openrouter_key: std::env::var("OPENROUTER_API_KEY").ok().filter(|k| !k.is_empty()),
             self_base: String::new(),
+            max_db_bytes: std::env::var("ARENA_MAX_DB_BYTES")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(DEFAULT_MAX_DB_BYTES),
         }
     }
 

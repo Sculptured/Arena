@@ -100,6 +100,11 @@ impl Worlds {
         self.drop_db(db).await
     }
 
+    /// Names and sizes (bytes) of the databases whose name starts with `prefix`.
+    pub async fn list(&self, prefix: &str) -> Result<Vec<(String, i64)>> {
+        self.admin.list_prefix(prefix).await
+    }
+
     pub async fn drop_db(&self, db: &str) -> Result<()> {
         check_name(db)?;
         let _g = self.lock_for(db).lock_owned().await;

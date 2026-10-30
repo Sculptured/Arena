@@ -2,7 +2,8 @@
 //! `../data/retail`, relative to the current directory.
 //!
 //! Environment: `ARENA_PG_URL`, `ARENA_DATA`, `ARENA_PORT` (4510), `OPENROUTER_API_KEY`,
-//! `ARENA_UI_DIST` (serve the built UI at `/`).
+//! `ARENA_UI_DIST` (serve the built UI at `/`),
+//! `ARENA_MAX_DB_BYTES` (default 5 GiB: new runs and forks are refused above it).
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -26,9 +27,12 @@ async fn main() -> anyhow::Result<()> {
     let admin = Admin::connect(&url).await?;
     let store = Arc::new(Store::open(&admin).await?);
     world::schema::load_base(&admin, &data_dir).await?;
+    let worlds = Arc::new(Worlds::new(admin));
+    // Before anything can create a database: drop orphans from crashes and aborted tests.
+    arenad::gc::run_startup_gc(&store, &worlds).await?;
     let mut config = Config::new(data_dir);
     config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, Arc::new(Worlds::new(admin)), config));
+    let state = Arc::new(AppState::new(store, worlds, config));
     state.tasks()?; // fail at startup if the task data is missing
     app::install_default_drivers(&state);
 

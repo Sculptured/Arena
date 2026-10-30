@@ -20,7 +20,7 @@ use tokio::sync::OnceCell;
 use world::{
     schema::load_base,
     snapshot::{Source, Worlds},
-    testing,
+    testing::{self, Cleanup},
 };
 
 static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
@@ -53,13 +53,15 @@ fn agent(id: &str, prompt: &str) -> AgentSpec {
 struct Fx {
     state: Arc<AppState>,
     ctx: Arc<BranchCtx>,
-    meta: String,
+    _clean: Cleanup,
     db: String,
 }
 
 async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_open_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let clean = Cleanup::new();
+    clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let team = Team { id: "t".into(), name: "T".into(), agents };
     let run_id = store.create_run("task", &team).await.unwrap();
@@ -76,15 +78,14 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
     state.live.write().unwrap().insert(branch, ctx.clone());
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, ctx, meta, db }
+    Fx { state, ctx, _clean: clean, db }
 }
 
 async fn teardown(fx: Fx) {
-    let Fx { state, meta, db, .. } = fx;
+    let Fx { state, db, .. } = fx;
     let worlds = state.worlds.clone();
     drop(state);
     worlds.drop_db(&db).await.unwrap();
-    worlds.admin().drop_db(&meta).await.unwrap();
 }
 
 fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {

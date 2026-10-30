@@ -29,22 +29,24 @@ fn db_name(tag: &str) -> String {
     format!("arena_test_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8])
 }
 
-async fn fresh(tag: &str) -> (Admin, String, Store) {
+async fn fresh(tag: &str) -> (Admin, String, Store, testing::Cleanup) {
     let admin = testing::admin();
     let name = db_name(tag);
+    let clean = testing::Cleanup::new();
+    clean.meta(&name);
     let store = Store::open_named(&admin, &name).await.unwrap();
-    (admin, name, store)
+    (admin, name, store, clean)
 }
 
-async fn done(admin: Admin, name: String, store: Store) {
+/// The `Cleanup` guard returned by `fresh` drops the database when the test ends.
+async fn done(_admin: Admin, _name: String, store: Store) {
     drop(store);
-    admin.drop_db(&name).await.unwrap();
 }
 
 #[test]
 fn append_assigns_increasing_seq() {
     run(async {
-        let (admin, name, store) = fresh("append").await;
+        let (admin, name, store, _g) = fresh("append").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
         let b = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
         let mut rx = store.subscribe();
@@ -93,7 +95,7 @@ fn append_assigns_increasing_seq() {
 #[test]
 fn copy_prefix_keeps_seqs_and_new_events_continue_after() {
     run(async {
-        let (admin, name, store) = fresh("copy").await;
+        let (admin, name, store, _g) = fresh("copy").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
         let parent = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
         for i in 0..5 {
@@ -120,7 +122,7 @@ fn copy_prefix_keeps_seqs_and_new_events_continue_after() {
 #[test]
 fn open_marks_running_branches_interrupted() {
     run(async {
-        let (admin, name, store) = fresh("interrupt").await;
+        let (admin, name, store, _g) = fresh("interrupt").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
         let running = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
         let passed = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();

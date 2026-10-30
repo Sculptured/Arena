@@ -21,7 +21,7 @@ use arenad::{
 use fake_upstream::FakeUpstream;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
-use world::{schema::load_base, snapshot::Worlds, testing};
+use world::{schema::load_base, snapshot::Worlds, testing::{self, Cleanup}};
 
 static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
@@ -56,12 +56,14 @@ fn team() -> Team {
 
 struct Fx {
     state: Arc<AppState>,
-    meta: String,
+    _clean: Cleanup,
 }
 
 async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_fork_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let clean = Cleanup::new();
+    clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -74,7 +76,7 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, meta }
+    Fx { state, _clean: clean }
 }
 
 /// Drops the branches' databases, the snapshots their events name, and the metadata database.
@@ -97,7 +99,6 @@ async fn teardown(fx: Fx, branches: &[&str]) {
         worlds.drop_db(&format!("branch_{b}")).await.unwrap();
     }
     drop(fx.state);
-    worlds.admin().drop_db(&fx.meta).await.unwrap();
 }
 
 async fn finished(fx: &Fx, branch: &str) -> Branch {
@@ -369,7 +370,6 @@ fn fork_while_running_is_409() {
         assert_eq!(runs[0].branches.len(), 1);
         assert!(up.requests().is_empty());
         drop(fx.state);
-        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
     })
 }
 
@@ -383,7 +383,6 @@ fn fork_of_unknown_branch_is_unknown_branch() {
         assert!(e.to_string().contains("nosuchbranch"));
         assert!(fx.state.store.find_branch("nosuchbranch").await.unwrap().is_none());
         drop(fx.state);
-        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
     })
 }
 

@@ -18,7 +18,7 @@ use arenad::{
 use fake_upstream::FakeUpstream;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
-use world::{schema::load_base, snapshot::Worlds, testing};
+use world::{schema::load_base, snapshot::Worlds, testing::{self, Cleanup}};
 
 static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
@@ -53,7 +53,7 @@ fn team() -> Team {
 
 struct Fx {
     state: Arc<AppState>,
-    meta: String,
+    _clean: Cleanup,
     base: String,
     http: reqwest::Client,
 }
@@ -65,6 +65,8 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
 async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
     let worlds = worlds().await;
     let meta = format!("arena_test_api_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let clean = Cleanup::new();
+    clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -78,7 +80,7 @@ async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut 
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, meta, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() }
+    Fx { state, _clean: clean, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() }
 }
 
 /// Drops the branches' databases, the snapshots their events name, and the metadata database.
@@ -101,7 +103,6 @@ async fn teardown(fx: Fx, branches: &[&str]) {
         worlds.drop_db(&format!("branch_{b}")).await.unwrap();
     }
     drop(fx.state);
-    worlds.admin().drop_db(&fx.meta).await.unwrap();
 }
 
 impl Fx {
@@ -406,7 +407,6 @@ fn open_mode_is_rejected_without_a_key() {
         assert_eq!((st, v["error"].as_str()), (400, Some("open mode needs OPENROUTER_API_KEY")));
         assert!(fx.state.store.runs().await.unwrap().is_empty(), "no run was created");
         drop(fx.state);
-        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
     })
 }
 
@@ -425,6 +425,5 @@ fn stream_ends_when_shutdown_fires() {
         let ended = tokio::time::timeout(Duration::from_secs(5), async { while resp.chunk().await.unwrap().is_some() {} }).await;
         assert!(ended.is_ok(), "stream did not end on shutdown");
         drop(fx.state);
-        worlds().await.admin().drop_db(&fx.meta).await.unwrap();
     })
 }

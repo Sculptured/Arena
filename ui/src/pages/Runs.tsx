@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { runs as fetchRuns, startRun, tasks as fetchTasks } from '../api';
-import { StatusChip, formatTime } from '../components';
+import { deleteRun, runs as fetchRuns, startRun, tasks as fetchTasks } from '../api';
+import { DISK_CHANGED, StatusChip, formatTime } from '../components';
 import { loadTeam } from '../team';
 import type { Branch, RunSummary, TaskSummary } from '../types';
 
@@ -62,6 +62,49 @@ function NewRun({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string 
   );
 }
 
+/** "Delete run" with an inline two-step confirm; disabled while a branch of the run is running. */
+function DeleteRun({ run, onDone, onError }: { run: RunSummary; onDone: () => void; onError: (m: string | null) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const running = run.branches.some((b) => b.status === 'running');
+
+  const remove = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      await deleteRun(run.id);
+      window.dispatchEvent(new Event(DISK_CHANGED));
+      onDone();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <button
+        className="btn btn-sm"
+        onClick={() => setConfirming(true)}
+        disabled={running}
+        title={running ? 'A branch of this run is still running' : 'Delete this run and free its databases'}
+      >
+        Delete run
+      </button>
+    );
+  }
+  return (
+    <span className="confirm">
+      <span className="muted small">Delete this run and all its branches?</span>
+      <button className="btn btn-sm danger" onClick={remove} disabled={busy}>
+        {busy ? 'Deleting…' : 'Yes, delete'}
+      </button>
+      <button className="btn btn-sm" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
+    </span>
+  );
+}
+
 export default function Runs() {
   const nav = useNavigate();
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
@@ -105,6 +148,8 @@ export default function Runs() {
               <span className="mono run-task">{run.task_id}</span>
               <span className="muted small">{formatTime(run.created_at)}</span>
               <span className="muted small mono">{run.id.slice(0, 8)}</span>
+              <span className="spacer" />
+              <DeleteRun run={run} onDone={refresh} onError={setError} />
             </div>
             <ul className="tree">
               {branchTree(run.branches).map(({ branch: b, depth }) => (

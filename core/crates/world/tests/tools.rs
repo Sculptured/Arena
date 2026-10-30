@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use world::{dump, schema::load_base, tools};
+use world::{dump, schema::load_base, testing::Cleanup, tools};
 
 // Serializes the world_base copy step (Postgres refuses to copy a template in use).
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -19,13 +19,16 @@ fn fixture() -> serde_json::Map<String, Value> {
     serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
 }
 
-async fn temp_copy(admin: &world::pg::Admin, tag: &str) -> String {
+/// A private copy of `world_base`; the guard drops it when the test ends, even by panic.
+async fn temp_copy(admin: &world::pg::Admin, tag: &str) -> (String, Cleanup) {
     let _g = LOCK.lock().await;
     load_base(admin, &data_dir()).await.unwrap();
     let name = format!("world_tools_{}_{}", std::process::id(), tag);
+    let guard = Cleanup::new();
+    guard.add(&name);
     admin.drop_db(&name).await.unwrap();
     admin.create_db_from(&name, "world_base").await.unwrap();
-    name
+    (name, guard)
 }
 
 fn changed_rows(base: &Value, now: &Value) -> serde_json::Map<String, Value> {
@@ -63,7 +66,7 @@ async fn gold_changes_match_for_all_68_tasks() {
     let admin = world::testing::admin();
     let fix = fixture();
     assert_eq!(fix.len(), 68);
-    let db = temp_copy(&admin, "gold").await;
+    let (db, _gdb) = temp_copy(&admin, "gold").await;
     // Dump base from the private copy, never from world_base itself.
     let base = admin.with_db(&db, async |c| dump(c).await).await.unwrap();
     let mut n = 0;
@@ -97,13 +100,15 @@ async fn gold_changes_match_for_all_68_tasks() {
 #[tokio::test]
 async fn ensure_gold_creates_and_caches() {
     let admin = world::testing::admin();
-    let copy = temp_copy(&admin, "unused").await;
+    let (copy, _gcopy) = temp_copy(&admin, "unused").await;
     let base = admin.with_db(&copy, async |c| dump(c).await).await.unwrap();
     admin.drop_db(&copy).await.unwrap();
     let fix = fixture();
     let task = tasks().into_iter().find(|t| eligible(t)).unwrap();
     let id = task["id"].as_str().unwrap().to_string();
     let name = format!("gold_{id}");
+    let _gold_guard = Cleanup::new();
+    _gold_guard.add(&name);
     admin.drop_db(&name).await.unwrap();
     let got = {
         let _g = LOCK.lock().await;
@@ -120,7 +125,7 @@ async fn ensure_gold_creates_and_caches() {
 #[tokio::test]
 async fn reads_and_writes_are_recorded() {
     let admin = world::testing::admin();
-    let db = temp_copy(&admin, "rw").await;
+    let (db, _gdb) = temp_copy(&admin, "rw").await;
     admin
         .with_db(&db, async |c| {
             let out = tools::call(c, "get_order_details", &json!({"order_id": "#W2378156"})).await?;
@@ -143,7 +148,7 @@ async fn reads_and_writes_are_recorded() {
 #[tokio::test]
 async fn unknown_tool_and_bad_args_are_tool_errors() {
     let admin = world::testing::admin();
-    let db = temp_copy(&admin, "err").await;
+    let (db, _gdb) = temp_copy(&admin, "err").await;
     admin
         .with_db(&db, async |c| {
             let out = tools::call(c, "nope", &json!({})).await?;

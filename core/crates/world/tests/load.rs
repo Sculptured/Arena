@@ -34,6 +34,8 @@ async fn copy_right_after_load_succeeds() {
     let admin = world::testing::admin();
     load_base(&admin, &data_dir()).await.unwrap();
     let name = format!("world_tmp_{}", std::process::id());
+    let _guard = world::testing::Cleanup::new();
+    _guard.add(&name);
     admin.drop_db(&name).await.unwrap();
     admin.create_db_from(&name, "world_base").await.unwrap();
     assert!(admin.exists(&name).await.unwrap());

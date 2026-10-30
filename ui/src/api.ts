@@ -28,6 +28,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body: unknown) =>
   call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+export const deleteRun = (id: string) =>
+  call<{ dropped: number }>(`/api/runs/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const health = () => call<Health>('/api/health');
 export const tasks = () => call<TaskSummary[]>('/api/tasks');
 export const defaultTeam = () => call<Team>('/api/team/default');

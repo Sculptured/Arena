@@ -11,7 +11,8 @@ use world::{
     dump,
     schema::load_base,
     snapshot::{Source, Worlds},
-    testing, tools,
+    testing::{self, Cleanup},
+    tools,
 };
 
 // One runtime for every test: Admin's connection task lives on the runtime that first
@@ -58,9 +59,12 @@ async fn write(w: &Worlds, db: &str, n: usize) {
 fn snapshot_then_restore_round_trips() {
     run(async {
         let w = worlds().await;
+        let g = Cleanup::new();
+        g.branches_containing(&pid_id("rt"));
         let b = w.new_branch(&pid_id("rt"), Source::Base).await.unwrap();
         write(&w, &b, 1).await;
         let snap = w.snapshot(&b).await.unwrap();
+        g.add(&snap);
         let expected = w.with_client(&b, async |c| dump(c).await).await.unwrap();
         write(&w, &b, 2).await;
         let after = w.with_client(&b, async |c| dump(c).await).await.unwrap();
@@ -81,12 +85,17 @@ fn snapshot_then_restore_round_trips() {
 fn concurrent_snapshots_of_two_branches_succeed() {
     run(async {
         let w = worlds().await;
+        let g = Cleanup::new();
+        g.branches_containing(&pid_id("ca"));
+        g.branches_containing(&pid_id("cb"));
         let a = w.new_branch(&pid_id("ca"), Source::Base).await.unwrap();
         let b = w.new_branch(&pid_id("cb"), Source::Base).await.unwrap();
-        async fn cycles(w: &Worlds, db: &str) -> anyhow::Result<Vec<String>> {
+        async fn cycles(w: &Worlds, g: &Cleanup, db: &str) -> anyhow::Result<Vec<String>> {
             let mut snaps = vec![];
             for n in 0..10 {
-                snaps.push(w.snapshot(db).await?);
+                let snap = w.snapshot(db).await?;
+                g.add(&snap);
+                snaps.push(snap);
                 let args = json!({"user_id": "ethan_garcia_1261", "address1": format!("{n} Road"),
                 "address2": "", "city": "New York", "state": "NY", "country": "USA", "zip": "10001"});
                 w.with_client(db, async |c| {
@@ -96,7 +105,7 @@ fn concurrent_snapshots_of_two_branches_succeed() {
             }
             Ok(snaps)
         }
-        let (ra, rb) = tokio::join!(cycles(&w, &a), cycles(&w, &b));
+        let (ra, rb) = tokio::join!(cycles(&w, &g, &a), cycles(&w, &g, &b));
         let mut all = vec![a, b];
         all.extend(ra.unwrap());
         all.extend(rb.unwrap());
@@ -110,12 +119,16 @@ fn concurrent_snapshots_of_two_branches_succeed() {
 fn snapshot_time_is_reported() {
     run(async {
         let w = worlds().await;
+        let g = Cleanup::new();
+        g.branches_containing(&pid_id("tm"));
         let b = w.new_branch(&pid_id("tm"), Source::Base).await.unwrap();
         let mut times = vec![];
         let mut snaps = vec![];
         for _ in 0..10 {
             let t = Instant::now();
-            snaps.push(w.snapshot(&b).await.unwrap());
+            let snap = w.snapshot(&b).await.unwrap();
+            g.add(&snap);
+            snaps.push(snap);
             times.push(t.elapsed());
         }
         times.sort();

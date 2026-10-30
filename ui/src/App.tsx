@@ -1,5 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { modesLine, useHealth } from './components';
+import { diskLine, modesLine, useHealth } from './components';
 import Compare from './pages/Compare';
 import Run from './pages/Run';
 import Runs from './pages/Runs';
@@ -25,6 +25,12 @@ export default function App() {
           <NavLink to="/team">Team</NavLink>
         </nav>
         <span className="spacer" />
+        <span
+          className={`modes${h?.disk && h.disk.bytes >= h.disk.limit_bytes ? ' disk-full' : ''}`}
+          title="Space used by run databases, and the limit above which new runs are refused"
+        >
+          {diskLine(h)}
+        </span>
         <span className="modes" title="Agent modes available on this machine">{modesLine(h)}</span>
       </div>
       <Routes>
