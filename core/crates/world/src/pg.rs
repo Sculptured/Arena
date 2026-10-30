@@ -98,3 +98,11 @@ fn strip_db(url: &str) -> String {
         None => url.to_string(),
     }
 }
+
+impl Admin {
+    pub async fn rename_db(&self, from: &str, to: &str) -> Result<()> {
+        let sql = format!("ALTER DATABASE {} RENAME TO {}", quote(from), quote(to));
+        self.client().await?.batch_execute(&sql).await?;
+        Ok(())
+    }
+}
