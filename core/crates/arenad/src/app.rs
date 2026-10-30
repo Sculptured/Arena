@@ -1,13 +1,21 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 use axum::Router;
 use world::snapshot::Worlds;
 
-use crate::{exec::BranchCtx, store::Store};
+use crate::{
+    agents::{claude::ClaudeDriver, codex::CodexDriver, open::OpenDriver, Driver},
+    exec::BranchCtx,
+    model::AgentKind,
+    store::Store,
+    tasks::Tasks,
+};
+
+pub type Drivers = HashMap<AgentKind, Arc<dyn Driver>>;
 
 #[derive(Clone)]
 pub struct Config {
@@ -67,6 +75,9 @@ pub struct AppState {
     pub config: Config,
     /// Shared HTTP client (gateway upstream and open agent loop).
     pub http: reqwest::Client,
+    /// Set once, after the `Arc<AppState>` exists (the open driver holds a `Weak` to it).
+    pub drivers: OnceLock<Drivers>,
+    tasks: OnceLock<Tasks>,
 }
 
 impl AppState {
@@ -76,8 +87,34 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("http client");
-        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http }
+        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new() }
     }
+}
+
+impl AppState {
+    /// The tasks under `config.data_dir`, loaded on first use.
+    pub fn tasks(&self) -> anyhow::Result<&Tasks> {
+        if let Some(t) = self.tasks.get() {
+            return Ok(t);
+        }
+        let loaded = Tasks::load(&self.config.data_dir)?;
+        Ok(self.tasks.get_or_init(|| loaded))
+    }
+
+    /// Installs the driver map; false if one was already installed.
+    pub fn install_drivers(&self, drivers: Drivers) -> bool {
+        self.drivers.set(drivers).is_ok()
+    }
+}
+
+/// The real drivers for every agent kind. Call once, after `config.self_base` is final.
+pub fn install_default_drivers(state: &Arc<AppState>) -> bool {
+    let base = state.config.self_base.clone();
+    let mut m: Drivers = HashMap::new();
+    m.insert(AgentKind::Open, Arc::new(OpenDriver::new(state.clone())));
+    m.insert(AgentKind::ClaudeCode, Arc::new(ClaudeDriver::new(base.clone())));
+    m.insert(AgentKind::Codex, Arc::new(CodexDriver::new(base)));
+    state.install_drivers(m)
 }
 
 #[cfg(test)]

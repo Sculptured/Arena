@@ -4,4 +4,7 @@ pub mod exec;
 pub mod gateway;
 pub mod mcp;
 pub mod model;
+pub mod prompts;
+pub mod runner;
 pub mod store;
+pub mod tasks;

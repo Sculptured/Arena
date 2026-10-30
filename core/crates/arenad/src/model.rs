@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     ClaudeCode,
@@ -164,7 +164,8 @@ pub struct HandoffPayload {
 pub struct CheckPayload {
     pub passed: bool,
     pub gold_db: Option<String>,
-    pub differing_rows: Option<i64>,
+    /// Keys (`<table>/<id>`) whose documents differ from the gold database, sorted.
+    pub differing_rows: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

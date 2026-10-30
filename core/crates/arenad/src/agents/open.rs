@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc, time::Instant};
+use std::{future::Future, pin::Pin, sync::{Arc, Weak}, time::Instant};
 
 use serde_json::{json, Value};
 use world::tools;
@@ -13,12 +13,13 @@ pub const MAX_MODEL_CALLS: usize = 40;
 
 /// Our own agent loop: every model call goes through the recording gateway.
 pub struct OpenDriver {
-    state: Arc<AppState>,
+    // Weak: `AppState` owns the drivers, so a strong reference would be a cycle.
+    state: Weak<AppState>,
 }
 
 impl OpenDriver {
     pub fn new(state: Arc<AppState>) -> OpenDriver {
-        OpenDriver { state }
+        OpenDriver { state: Arc::downgrade(&state) }
     }
 }
 
@@ -71,17 +72,18 @@ impl OpenDriver {
     }
 
     async fn drive(&self, run: &AgentRun, totals: &mut [i64; 3], cost: &mut Option<f64>) -> Result<(), String> {
+        let state = self.state.upgrade().ok_or("server is shutting down")?;
         let agent = run.spec.id.as_str();
         let url = format!(
             "{}/gateway/{}/{}/v1/chat/completions",
-            self.state.config.self_base.trim_end_matches('/'),
+            state.config.self_base.trim_end_matches('/'),
             run.branch.branch_id,
             agent
         );
         let tools = openai_tools(!run.branch.is_last(agent));
         let mut messages = initial_messages(run);
-        let exec = ToolExec::new(self.state.store.clone(), self.state.worlds.clone());
-        let http = &self.state.http;
+        let exec = ToolExec::new(state.store.clone(), state.worlds.clone());
+        let http = &state.http;
         for _ in 0..MAX_MODEL_CALLS {
             let mut body = json!({"messages": messages, "tools": tools});
             if let Some(m) = &run.spec.model {
