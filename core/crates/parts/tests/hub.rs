@@ -4,15 +4,24 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-const ARENA: &str = "/home/alexsky2/MLSys/Sculptured/arena";
-const BIN_DIR: &str = "/home/alexsky2/MLSys/Sculptured/arena/core/target/debug";
+/// The arena folder (this crate is core/crates/parts).
+fn arena() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap()
+}
+
+fn bin_dir() -> PathBuf {
+    arena().join("core/target/debug")
+}
 
 fn build_counter() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let st = Command::new("cargo")
             .args(["build", "--example", "counter", "-p", "arena-part"])
-            .current_dir(ARENA)
+            .current_dir(arena())
             .status()
             .unwrap();
         assert!(st.success());
@@ -41,7 +50,7 @@ fn write_pkg(root: &Path, name: &str, command: &str) {
 fn hub_for(roots: &[PathBuf], saves: &Path) -> Hub {
     Hub::new(
         Registry::scan(roots).unwrap(),
-        BIN_DIR.into(),
+        bin_dir(),
         saves.to_path_buf(),
     )
 }
@@ -128,7 +137,7 @@ async fn hub_spawns_rust_counter_and_saves() {
 async fn hub_spawns_python_counter() {
     let saves = temp("py-saves");
     // kits/python/examples holds the manifest, so kits/python is the package root
-    let hub = hub_for(&[PathBuf::from(ARENA).join("kits/python")], &saves);
+    let hub = hub_for(&[arena().join("kits/python")], &saves);
     exercise(&hub, "counter-py").await;
     drop(hub);
     std::fs::remove_dir_all(&saves).unwrap();
@@ -197,5 +206,90 @@ async fn command_mode_clears_environment() {
         other => panic!("{other:?}"),
     }
     std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}
+
+fn slow_part(root: &Path) {
+    write_pkg(
+        root,
+        "slow",
+        r#"["sh", "-c", "while read l; do sleep 0.3; id=$(echo \"$l\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/'); echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{}}\"; done"]"#,
+    );
+}
+
+#[tokio::test]
+async fn dropped_call_leaves_nothing_behind() {
+    let (root, saves) = (temp("slow"), temp("slow-saves"));
+    slow_part(&root);
+    let hub = hub_for(std::slice::from_ref(&root), &saves);
+    let c = hub.client("slow").await.unwrap();
+    let r = tokio::time::timeout(
+        std::time::Duration::from_millis(10),
+        c.call::<Value>("usage", json!({})),
+    )
+    .await;
+    assert!(r.is_err(), "the call should still be waiting");
+    assert_eq!(c.pending_len(), 0);
+    let _: Value = c.call("usage", json!({})).await.unwrap();
+    assert_eq!(c.pending_len(), 0);
+    drop((c, hub));
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}
+
+#[tokio::test]
+async fn timeout_is_reported_and_cleaned() {
+    let (root, saves) = (temp("to"), temp("to-saves"));
+    slow_part(&root);
+    let m = Manifest::load(&root.join("slow")).unwrap();
+    let c = parts::Client::spawn(&m, &bin_dir(), &saves)
+        .await
+        .unwrap()
+        .with_timeout(std::time::Duration::from_millis(20));
+    assert!(matches!(
+        c.call::<Value>("usage", json!({})).await,
+        Err(CallError::Timeout)
+    ));
+    assert_eq!(c.pending_len(), 0);
+    drop(c);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}
+
+fn group_alive(pgid: u32) -> bool {
+    Command::new("pgrep")
+        .args(["-g", &pgid.to_string()])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[tokio::test]
+async fn killed_uv_python_respawns_and_leaves_no_process() {
+    let saves = temp("uvkill-saves");
+    let hub = hub_for(&[arena().join("kits/python")], &saves);
+    let c = hub.client("counter-py").await.unwrap();
+    let _: Value = c.call("usage", json!({})).await.unwrap();
+    Command::new("kill")
+        .args(["-9", &c.pid().to_string()])
+        .status()
+        .unwrap();
+    let start = std::time::Instant::now();
+    while !c.is_stopped() {
+        assert!(
+            start.elapsed().as_secs() < 5,
+            "client never noticed the exit"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let c2 = hub.client("counter-py").await.unwrap();
+    assert_ne!(c.pid(), c2.pid());
+    let _: Value = c2.call("usage", json!({})).await.unwrap();
+    assert!(!group_alive(c.pid()), "old process group still running");
+    let pgid = c2.pid();
+    drop((c, c2, hub));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!group_alive(pgid), "dropping the client left processes");
     std::fs::remove_dir_all(&saves).unwrap();
 }

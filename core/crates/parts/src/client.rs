@@ -7,11 +7,12 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::process::Command;
+use tokio::sync::{mpsc, oneshot};
 
 const STDERR_LINES: usize = 20;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -53,16 +54,41 @@ pub struct Client {
     pid: u32,
     next_id: Mutex<u64>,
     state: Arc<Mutex<State>>,
-    stdin: AsyncMutex<ChildStdin>,
+    /// Whole request lines for the single writer task.
+    lines: mpsc::UnboundedSender<String>,
     timeout: Duration,
-    _child: Child,
+    /// Container name in image mode, removed on drop.
+    container: Option<String>,
+}
+
+/// Removes a call's pending entry when the call finishes or its future is dropped.
+struct PendingGuard<'a> {
+    state: &'a Mutex<State>,
+    id: u64,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.state.lock().unwrap().pending.remove(&self.id);
+    }
+}
+
+fn kill_group(pid: u32) {
+    if pid > 0 {
+        // The program leads its own process group, so this takes grandchildren too.
+        unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+    }
 }
 
 fn substitute(arg: &str, bin_dir: &Path) -> String {
     arg.replace("${ARENA_BIN_DIR}", &bin_dir.to_string_lossy())
 }
 
-fn command_for(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Command> {
+fn command_for(
+    m: &Manifest,
+    bin_dir: &Path,
+    saves_root: &Path,
+) -> Result<(Command, Option<String>)> {
     match &m.run {
         Run::Command(argv) => {
             let mut args: Vec<String> = argv.iter().map(|a| substitute(a, bin_dir)).collect();
@@ -84,13 +110,20 @@ fn command_for(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Comman
                 }
             }
             c.env("ARENA_SAVES", saves_root);
-            Ok(c)
+            Ok((c, None))
         }
         Run::Image(image) => {
             let mine = saves_root.join(&m.name);
             std::fs::create_dir_all(&mine)?;
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let name = format!(
+                "arena-part-{}-{}-{}",
+                m.name,
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            );
             let mut c = Command::new("docker");
-            c.args(["run", "-i", "--rm", "--network"]);
+            c.args(["run", "-i", "--rm", "--name", &name, "--network"]);
             if m.needs.network.as_deref() == Some("host") {
                 eprintln!("parts: {} runs with host networking", m.name);
                 c.arg("host");
@@ -104,7 +137,7 @@ fn command_for(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Comman
             if let Some(p) = std::env::var_os("PATH") {
                 c.env("PATH", p); // docker itself needs to be found; the container gets nothing
             }
-            Ok(c)
+            Ok((c, Some(name)))
         }
     }
 }
@@ -112,19 +145,29 @@ fn command_for(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Comman
 impl Client {
     /// Starts the program. Command mode runs in the manifest's folder with a cleared environment.
     pub async fn spawn(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Client> {
-        let mut cmd = command_for(m, bin_dir, saves_root)?;
+        let (mut cmd, container) = command_for(m, bin_dir, saves_root)?;
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .kill_on_drop(true);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("starting {}", m.name))?;
         let pid = child.id().unwrap_or(0);
-        let stdin = child.stdin.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let state = Arc::new(Mutex::new(State::default()));
+
+        let (lines, mut rx) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(l) = rx.recv().await {
+                if stdin.write_all(l.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                    break; // the waiter task reports the exit
+                }
+            }
+        });
 
         let tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
         let tail2 = tail.clone();
@@ -163,7 +206,13 @@ impl Client {
                     let _ = tx.send(reply);
                 }
             }
-            let _ = err_task.await; // stderr closes with the program
+        });
+        // The direct child exiting is what stops the client, even if a grandchild keeps the pipes open.
+        let state3 = state.clone();
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            kill_group(pid);
+            let _ = tokio::time::timeout(Duration::from_secs(2), err_task).await;
             let msg = tail
                 .lock()
                 .unwrap()
@@ -171,7 +220,7 @@ impl Client {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
-            let mut st = state2.lock().unwrap();
+            let mut st = state3.lock().unwrap();
             st.stopped = Some(msg.clone());
             for (_, tx) in st.pending.drain() {
                 let _ = tx.send(Err(CallError::Stopped(msg.clone())));
@@ -181,9 +230,9 @@ impl Client {
             pid,
             next_id: Mutex::new(0),
             state,
-            stdin: AsyncMutex::new(stdin),
+            lines,
             timeout: DEFAULT_TIMEOUT,
-            _child: child,
+            container,
         })
     }
 
@@ -220,28 +269,49 @@ impl Client {
             }
             st.pending.insert(id, tx);
         }
+        let _guard = PendingGuard {
+            state: &self.state,
+            id,
+        };
         let mut line =
             json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
         line.push('\n');
-        {
-            // A failed write means the program is gone: the reader task then answers with the stderr tail.
-            let mut w = self.stdin.lock().await;
-            if w.write_all(line.as_bytes()).await.is_ok() {
-                let _ = w.flush().await;
-            }
-        }
+        // A dead program is reported by the waiter task, with the stderr tail.
+        let _ = self.lines.send(line);
         let reply = match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(CallError::Stopped(String::new())),
-            Err(_) => {
-                self.state.lock().unwrap().pending.remove(&id);
-                Err(CallError::Timeout)
-            }
+            Err(_) => Err(CallError::Timeout),
         };
         let v = reply?;
         serde_json::from_value(v).map_err(|e| CallError::Part {
             code: -32603,
             message: format!("bad result: {e}"),
         })
+    }
+
+    /// Calls waiting for an answer (for tests).
+    pub fn pending_len(&self) -> usize {
+        self.state.lock().unwrap().pending.len()
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        kill_group(self.pid);
+        if let Some(name) = &self.container {
+            // Best effort: a container must not outlive its client.
+            if let Ok(mut c) = std::process::Command::new("docker")
+                .args(["rm", "-f", name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                std::thread::spawn(move || {
+                    let _ = c.wait();
+                });
+            }
+        }
     }
 }
