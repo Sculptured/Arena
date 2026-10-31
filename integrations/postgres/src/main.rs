@@ -1,4 +1,8 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    arena_part::serve(arena_postgres::Postgres::from_env()).await
+    let mut p = arena_postgres::Postgres::from_env();
+    if std::env::args().any(|a| a == "--sql-tools") {
+        p = p.with_sql_tools();
+    }
+    arena_part::serve(p).await
 }

@@ -20,8 +20,10 @@ const DEFAULT_URL: &str = "postgres://arena:arena@127.0.0.1:5544/postgres";
 pub struct Postgres {
     pg: Templates,
     ns: String,
-    /// Instance database name -> whether `sql_*` tools are on. Instances started by this process.
-    live: Mutex<HashMap<String, bool>>,
+    /// `arena-postgres --sql-tools`: list and serve `sql_query` and `sql_execute`.
+    sql_tools: bool,
+    /// Instance databases started by this process.
+    live: Mutex<HashSet<String>>,
 }
 
 fn is_legacy(name: &str) -> bool {
@@ -52,7 +54,8 @@ impl Postgres {
         Postgres {
             pg: Templates::new(url),
             ns: ns.into(),
-            live: Mutex::new(HashMap::new()),
+            sql_tools: false,
+            live: Mutex::new(HashSet::new()),
         }
     }
 
@@ -98,8 +101,10 @@ impl Postgres {
         }
     }
 
-    fn sql_tools_on(&self, db: &str) -> bool {
-        self.live.lock().unwrap().get(db).copied().unwrap_or(false)
+    /// Turns on the `sql_query` and `sql_execute` tools (for the conformance check and simple worlds).
+    pub fn with_sql_tools(mut self) -> Postgres {
+        self.sql_tools = true;
+        self
     }
 }
 
@@ -327,8 +332,6 @@ impl Part for Postgres {
             })
             .await
             .map_err(internal)?;
-        // describe has no config, so the tools are always listed; call_tool refuses them in
-        // instances whose config didn't turn `sql_tools` on.
         Ok(Describe {
             name: "postgres".into(),
             version: "0.1.0".into(),
@@ -339,7 +342,10 @@ impl Part for Postgres {
             },
             uses_clock: false,
             fingerprint: json!({"server_version": version}),
-            tools: vec![
+            tools: if !self.sql_tools {
+                vec![]
+            } else {
+                vec![
                 tool(
                     "sql_query",
                     "Run a SELECT and get the rows as JSON objects.",
@@ -350,7 +356,8 @@ impl Part for Postgres {
                     "Run an INSERT, UPDATE, DELETE or other statement and get the rows affected.",
                     Effect::Write,
                 ),
-            ],
+            ]
+            },
         })
     }
 
@@ -376,12 +383,7 @@ impl Part for Postgres {
                 }
             }
         }
-        let tools = p
-            .config
-            .get("sql_tools")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        self.live.lock().unwrap().insert(db, tools);
+        self.live.lock().unwrap().insert(db);
         Ok(())
     }
 
@@ -398,8 +400,8 @@ impl Part for Postgres {
             "sql_execute" => false,
             o => return fail(format!("unknown tool {o}")),
         };
-        if !self.sql_tools_on(&db) {
-            return fail("the sql tools are off in this world (config sql_tools)".into());
+        if !self.sql_tools {
+            return fail(format!("unknown tool {}", p.name));
         }
         let Some(sql) = p.args.get("sql").and_then(Value::as_str) else {
             return fail("sql must be a string".into());
@@ -485,17 +487,17 @@ impl Part for Postgres {
     }
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
-        // The database stays (inspect after a run); `gc` drops it once nobody asks for it.
-        self.live.lock().unwrap().remove(&self.pi(&p.instance));
-        Ok(())
+        // arenad saves what it wants to keep before it stops an instance.
+        let db = self.pi(&p.instance);
+        self.live.lock().unwrap().remove(&db);
+        self.pg.drop(&db).await.map_err(internal)
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
-        // Saves only: live instances are working copies, and the conformance check requires the
-        // figure to fall back once its saves are dropped while its instances still run.
-        let mut prefixes = vec![format!("ps_{}", self.ns)];
+        let mut prefixes = vec![format!("pi_{}", self.ns), format!("ps_{}", self.ns)];
         if self.ns.is_empty() {
             prefixes.push("snap_".into());
+            prefixes.push("branch_".into());
         }
         let mut bytes = 0i64;
         for p in prefixes {
@@ -510,7 +512,7 @@ impl Part for Postgres {
 
     async fn gc(&self, p: GcParams) -> Result<GcResult, PartError> {
         let keep: HashSet<&str> = p.keep.iter().map(String::as_str).collect();
-        let live: HashSet<String> = self.live.lock().unwrap().keys().cloned().collect();
+        let live: HashSet<String> = self.live.lock().unwrap().clone();
         let mut out = GcResult::default();
         let mut doomed = vec![];
         // (prefix, is instance)

@@ -18,8 +18,8 @@ const STEPS: &[&str] = &[
     "restore",
     "diff_self",
     "replay",
-    "drop_saves",
     "stop",
+    "drop_saves",
 ];
 const SEED: u64 = 1;
 /// How far a clock part is advanced before the second save, to exercise clock state.
@@ -353,7 +353,17 @@ impl Run<'_> {
                 .push("replay: the part restores from saves".into());
         }
 
-        // 10. drop saves; usage must not grow
+        // 10. stop everything (a part may free an instance's storage on stop)
+        let r = async {
+            for i in self.live.clone() {
+                self.stop(i).await?;
+            }
+            Ok("all instances stopped".to_string())
+        }
+        .await;
+        self.step("stop", r)?;
+
+        // 11. drop saves; with every instance stopped, usage must be back to where it started
         let r = async {
             while let Some(s) = self.saves.first().copied() {
                 self.call("drop_save", json!({"save": s}))
@@ -364,23 +374,13 @@ impl Run<'_> {
             let after = self.usage().await?;
             if after > usage_before + USAGE_ALLOWANCE {
                 return Err(format!(
-                    "usage grew from {usage_before} to {after} bytes after dropping the saves"
+                    "usage grew from {usage_before} to {after} bytes after stopping the instances and dropping the saves"
                 ));
             }
             Ok(format!("usage {usage_before} -> {after} bytes"))
         }
         .await;
-        self.step("drop_saves", r)?;
-
-        // 11. stop everything
-        let r = async {
-            for i in self.live.clone() {
-                self.stop(i).await?;
-            }
-            Ok("all instances stopped".to_string())
-        }
-        .await;
-        self.step("stop", r)
+        self.step("drop_saves", r)
     }
 
     async fn usage(&self) -> Res<u64> {

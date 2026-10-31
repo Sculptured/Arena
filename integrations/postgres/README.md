@@ -1,0 +1,19 @@
+# postgres integration
+
+Each instance is a database `pi_<instance>`; each save is a copy of it, `ps_<save>`, made with
+`CREATE DATABASE .. TEMPLATE`. Saves are kept by Postgres itself (the `dir` of `save` is ignored) and
+restore exactly. `stop` drops the instance's database, so save first. `usage` counts the sizes of
+`pi_*` and `ps_*` databases, and `gc {keep}` drops saves not kept and instances not running.
+
+- Start with config `init_sql` runs it in a fresh empty database; start `from` a save copies it.
+- `inspect` keys are `<table>/<primary key>` (tables with a one-column primary key); `diff` compares all rows.
+- `connect` gives `{url}` for benchmarks to use.
+- The server is `ARENA_PG_URL` (default `postgres://arena:arena@127.0.0.1:5544/postgres`).
+- No tools by default, so agents get none from this package. `arena-postgres --sql-tools` lists and serves
+  `sql_query` and `sql_execute`.
+- Old runs: an id naming an existing `snap_*`, `branch_*`, `gold_*` database or `world_base` is used as it is;
+  `usage` and `gc` also cover `snap_*` and `branch_*`.
+- Namespace: env `ARENA_PG_NS`, or `?arena_ns=<ns>` on `ARENA_PG_URL`, puts `<ns>` after `pi_`/`ps_` and turns
+  legacy names off, so tests never touch anyone else's databases.
+- Conformance: `check/arena-package.toml` is the package `postgres-check`, this program with `--sql-tools` and
+  example calls: `arena-part-check integrations/postgres/check --config check.json`.

@@ -1,0 +1,16 @@
+# The conformance target of the postgres integration: the same program with its SQL tools on.
+# Run: arena-part-check integrations/postgres/check --config '{"init_sql": "CREATE TABLE t(id int primary key, v text)"}'
+kind = "integration"
+name = "postgres-check"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-postgres", "--sql-tools"] }
+needs = { gpu_vram_gb = 0, services = [] }
+
+[[example]]
+tool = "sql_execute"
+args = { sql = "INSERT INTO t(id, v) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET v = t.v || 'a'" }
+
+[[example]]
+tool = "sql_query"
+args = { sql = "SELECT * FROM t" }

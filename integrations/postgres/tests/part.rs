@@ -87,7 +87,7 @@ async fn query(p: &Postgres, inst: &str, sql: &str) -> ToolOutput {
 }
 
 fn cfg() -> Value {
-    json!({"init_sql": "CREATE TABLE t(id int primary key, v text)", "sql_tools": true})
+    json!({"init_sql": "CREATE TABLE t(id int primary key, v text)"})
 }
 
 async fn save(p: &Postgres, inst: &str, save: &str) -> Saved {
@@ -105,7 +105,7 @@ async fn save_restore_roundtrip() {
     let ns = ns();
     let n = ns.clone();
     with_cleanup(&ns, &[], move || async move {
-        let p = Postgres::new(&url(), &n);
+        let p = Postgres::new(&url(), &n).with_sql_tools();
         p.start(start("a", cfg(), None)).await.unwrap();
         let w = exec(&p, "a", "INSERT INTO t(id, v) VALUES (1, 'x')").await;
         assert_eq!(w.error, None);
@@ -157,7 +157,7 @@ async fn diff_reports_changed_row() {
     let ns = ns();
     let n = ns.clone();
     with_cleanup(&ns, &[], move || async move {
-        let p = Postgres::new(&url(), &n);
+        let p = Postgres::new(&url(), &n).with_sql_tools();
         p.start(start("a", cfg(), None)).await.unwrap();
         exec(&p, "a", "INSERT INTO t(id, v) VALUES (1, 'x'), (2, 'y')").await;
         save(&p, "a", "s1").await;
@@ -226,7 +226,7 @@ async fn legacy_snap_name_accepted() {
         })
         .await
         .unwrap();
-        let p = Postgres::new(&url(), "");
+        let p = Postgres::new(&url(), "").with_sql_tools();
         let docs = p
             .inspect(InspectParams {
                 target: Target::Save { save: nm.clone() },
@@ -240,7 +240,7 @@ async fn legacy_snap_name_accepted() {
         let inst = format!("t5_{}_li", std::process::id());
         p.start(StartParams {
             instance: inst.clone(),
-            config: json!({"sql_tools": true}),
+            config: json!({}),
             seed: 1,
             clock_ms: 0,
             from: Some(FromSave {
@@ -273,31 +273,31 @@ async fn gc_keeps_listed() {
     let ns = ns();
     let n = ns.clone();
     with_cleanup(&ns, &[], move || async move {
-        let p = Postgres::new(&url(), &n);
+        let p = Postgres::new(&url(), &n).with_sql_tools();
         p.start(start("live", cfg(), None)).await.unwrap();
-        p.start(start("gone", cfg(), None)).await.unwrap();
+        p.start(start("orphan", cfg(), None)).await.unwrap();
         save(&p, "live", "keep").await;
         save(&p, "live", "toss").await;
-        p.stop(IdParams {
-            instance: "gone".into(),
-        })
-        .await
-        .unwrap();
-        // a second process (no live instances) sees `live` as unused too
-        let r = p
+        // a fresh process (as after a respawn) has no live instances, so it drops both
+        let p2 = Postgres::new(&url(), &n);
+        let r = p2
             .gc(GcParams {
                 keep: vec!["keep".into()],
             })
             .await
             .unwrap();
-        // `toss` goes, `gone` (stopped, so not live) goes; `live` stays
-        assert_eq!(r.dropped, 2, "{r:?}");
+        assert_eq!(r.dropped, 3, "{r:?}");
         assert!(r.bytes > 0);
         let t = Templates::new(&url());
         assert!(t.exists(&format!("ps_{n}keep")).await.unwrap());
         assert!(!t.exists(&format!("ps_{n}toss")).await.unwrap());
-        assert!(t.exists(&format!("pi_{n}live")).await.unwrap());
-        assert!(!t.exists(&format!("pi_{n}gone")).await.unwrap());
+        assert!(!t.exists(&format!("pi_{n}live")).await.unwrap());
+        assert!(!t.exists(&format!("pi_{n}orphan")).await.unwrap());
+        // a live instance survives its own process's gc
+        p.start(start("mine", cfg(), None)).await.unwrap();
+        let r = p.gc(GcParams { keep: vec![] }).await.unwrap();
+        assert_eq!(r.dropped, 1, "{r:?}");
+        assert!(t.exists(&format!("pi_{n}mine")).await.unwrap());
     })
     .await;
 }
@@ -333,7 +333,7 @@ async fn conformance_check_passes() {
     with_cleanup(&ns, &[], move || async move {
         let out = tokio::task::spawn_blocking(move || {
             Command::new(a.join("core/target/debug/arena-part-check"))
-                .arg(a.join("integrations/postgres"))
+                .arg(a.join("integrations/postgres/check"))
                 .arg("--config")
                 .arg(&cf)
                 .env("ARENA_BIN_DIR", a.join("core/target/debug"))
@@ -354,4 +354,36 @@ async fn conformance_check_passes() {
     .await;
     let _ = std::fs::remove_file(&cfgfile);
     let _ = std::fs::remove_dir_all(&saves);
+}
+
+#[tokio::test]
+async fn stop_drops_instance_and_no_tools_by_default() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n);
+        assert!(p.describe().await.unwrap().tools.is_empty());
+        assert_eq!(
+            Postgres::new(&url(), &n)
+                .with_sql_tools()
+                .describe()
+                .await
+                .unwrap()
+                .tools
+                .len(),
+            2
+        );
+        p.start(start("a", cfg(), None)).await.unwrap();
+        let r = query(&p, "a", "SELECT 1").await;
+        assert!(r.error.is_some(), "tools are off without --sql-tools");
+        let t = Templates::new(&url());
+        assert!(t.exists(&format!("pi_{n}a")).await.unwrap());
+        p.stop(IdParams {
+            instance: "a".into(),
+        })
+        .await
+        .unwrap();
+        assert!(!t.exists(&format!("pi_{n}a")).await.unwrap());
+    })
+    .await;
 }
