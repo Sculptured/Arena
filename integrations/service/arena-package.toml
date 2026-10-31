@@ -1,0 +1,7 @@
+kind = "integration"
+name = "service"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-service"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", required = ["compose_file", "volumes"], properties = { compose_file = { type = "string", description = "Path of the Docker Compose file" }, volumes = { type = "array", items = { type = "string" }, description = "Volumes of the compose file that a save holds" }, helper_image = { type = "string", description = "Image with tar that copies volumes (default redis:6.2-alpine, never pulled)" }, env = { type = "object", description = "Extra environment for docker compose" } } }

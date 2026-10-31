@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kits/rust", "integrations/postgres", "benchmarks/retail"]
+members = ["kits/rust", "integrations/postgres", "integrations/folder", "integrations/service", "benchmarks/retail"]
 exclude = ["core"]
 
 [workspace.dependencies]
@@ -9,6 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 async-trait = "0.1"
+sha2 = "0.11"
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
 
 [workspace.lints.clippy]

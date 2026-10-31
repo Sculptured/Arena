@@ -5,10 +5,14 @@ edition = "2021"
 description = "Kit for writing arena integrations (protocol arena-part/1)"
 
 [features]
+default = ["folder"]
+folder = ["dep:sha2"]
+compose = ["folder"]
 postgres = ["dep:tokio-postgres"]
 
 [dependencies]
 tokio-postgres = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

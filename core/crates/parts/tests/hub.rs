@@ -328,3 +328,17 @@ async fn killed_uv_python_respawns_and_leaves_no_process() {
     assert!(!group_alive(pgid), "dropping the client left processes");
     std::fs::remove_dir_all(&saves).unwrap();
 }
+
+#[test]
+fn save_dirs_skips_dot_folders() {
+    let (root, saves) = (temp("dots"), temp("dots-saves"));
+    write_pkg(&root, "counter", r#"["${ARENA_BIN_DIR}/examples/counter"]"#);
+    let hub = hub_for(std::slice::from_ref(&root), &saves);
+    for dir in ["s1", ".live/a", ".tmp"] {
+        std::fs::create_dir_all(saves.join("counter").join(dir)).unwrap();
+    }
+    assert_eq!(hub.save_dirs("counter"), ["s1"]);
+    drop(hub);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}

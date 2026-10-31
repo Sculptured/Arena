@@ -1,0 +1,20 @@
+# The conformance target of the folder integration.
+# Run: arena-part-check integrations/folder/check
+kind = "integration"
+name = "folder-check"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-folder"] }
+needs = { gpu_vram_gb = 0, services = [] }
+
+[[example]]
+tool = "write_file"
+args = { path = "notes/a.txt", content = "first" }
+
+[[example]]
+tool = "read_file"
+args = { path = "notes/a.txt" }
+
+[[example]]
+tool = "list_files"
+args = {}
