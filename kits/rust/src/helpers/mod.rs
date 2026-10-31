@@ -7,5 +7,7 @@ pub mod folder;
 pub mod pg;
 #[cfg(feature = "folder")]
 pub mod save_dirs;
+#[cfg(feature = "compose")]
+pub mod tar_digest;
 #[cfg(feature = "folder")]
 pub mod temp_dir;

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-const COMPOSE: &str = "services:\n  redis:\n    image: redis:6.2-alpine\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\n";
+const COMPOSE: &str = "services:\n  redis:\n    image: redis:6.2-alpine\n    entrypoint: [redis-server]\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\n";
 
 /// The test's folder and compose projects; dropping it removes them all.
 struct World {
@@ -36,14 +36,10 @@ impl World {
         json!({"compose_file": self.dir.join("compose.yml"), "volumes": ["data"]})
     }
 
-    /// The instance's project is removed on drop; named before it exists, so a failure is covered.
-    fn track(&mut self, instance: &str) {
-        self.projects.push(format!("arena_{instance}"));
-    }
-
-    fn redis(&self, instance: &str, args: &[&str]) -> String {
+    /// Runs `args` in the instance's container and returns its trimmed output.
+    fn exec(&self, instance: &str, args: &[&str]) -> String {
         let out = Command::new("docker")
-            .args(["exec", &format!("arena_{instance}-redis-1"), "redis-cli"])
+            .args(["exec", &format!("arena_{instance}-redis-1")])
             .args(args)
             .output()
             .unwrap();
@@ -53,6 +49,17 @@ impl World {
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn redis(&self, instance: &str, args: &[&str]) -> String {
+        let cli = [&["redis-cli"], args].concat();
+        self.exec(instance, &cli)
+    }
+
+    /// Starts instance `id` (tracked for removal) from `from`.
+    async fn start(&mut self, p: &Service, id: &str, from: Option<&str>) {
+        self.projects.push(format!("arena_{id}"));
+        p.start(start(id, self.config(), from)).await.unwrap();
     }
 }
 
@@ -93,56 +100,80 @@ async fn differing(p: &Service, a: Target, b: Target) -> Vec<String> {
     p.diff(DiffParams { a, b }).await.unwrap().differing
 }
 
+async fn save_to(w: &World, p: &Service, instance: &str, id: &str) -> PathBuf {
+    let dir = w.dir.join("saves/service").join(id);
+    let params = SaveParams {
+        instance: instance.into(),
+        save: id.into(),
+        dir: dir.to_string_lossy().into(),
+    };
+    let saved = p.save(params).await.unwrap();
+    assert!(saved.exact && saved.bytes > 0, "{saved:?}");
+    dir
+}
+
+/// Sets a key and a file with an unusual owner in instance `a`, then saves it as `s1`.
+async fn first_save(w: &World, a: &str) -> PathBuf {
+    assert_eq!(w.redis(a, &["set", "k", "before"]), "OK");
+    w.exec(
+        a,
+        &["sh", "-c", "echo x > /data/own; chown 1234:4321 /data/own"],
+    );
+    // a program restarted since the instance began still saves it
+    save_to(w, &w.part(), a, "s1").await
+}
+
+/// Changes `a` after the save: the change stays out of the save.
+async fn diverge(w: &World, p: &Service, a: &str) {
+    // the project runs again after the save
+    assert_eq!(w.redis(a, &["get", "k"]), "before");
+    assert_eq!(w.redis(a, &["set", "k", "after"]), "OK");
+    assert_eq!(w.redis(a, &["save"]), "OK"); // a live diff sees what is on disk
+    assert_eq!(differing(p, instance(a), save("s1")).await, ["volume/data"]);
+}
+
+/// The instance `b`, started from `s1`, has the saved key, the saved owner and the saved content.
+async fn check_restored(w: &World, p: &Service, b: &str) {
+    assert_eq!(w.redis(b, &["get", "k"]), "before");
+    assert_eq!(
+        w.exec(b, &["stat", "-c", "%u:%g", "/data/own"]),
+        "1234:4321"
+    );
+    let same = differing(p, instance(b), save("s1")).await;
+    assert!(same.is_empty(), "{same:?}");
+    let keys = vec!["volume/data".into(), "volume/nope".into()];
+    let docs = p
+        .inspect(InspectParams {
+            target: save("s1"),
+            keys,
+        })
+        .await
+        .unwrap()
+        .docs;
+    assert!(docs["volume/data"]["files"].as_u64().unwrap() >= 2);
+    assert_eq!(docs["volume/nope"], Value::Null);
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_service_roundtrip() {
     let id = std::process::id();
     let (a, b) = (format!("t10_{id}_a"), format!("t10_{id}_b"));
     let mut w = World::new();
-    w.track(&a);
-    w.track(&b);
     let p = w.part();
-    p.start(start(&a, w.config(), None)).await.unwrap();
-    assert_eq!(w.redis(&a, &["set", "k", "before"]), "OK");
-    let dir = w.dir.join("saves/service/s1");
-    let saved = p
-        .save(SaveParams {
-            instance: a.clone(),
-            save: "s1".into(),
-            dir: dir.to_string_lossy().into(),
-        })
-        .await
-        .unwrap();
-    assert!(saved.exact && saved.bytes > 0, "{saved:?}");
-    // the project runs again after the save, and changes now stay out of the save
-    assert_eq!(w.redis(&a, &["get", "k"]), "before");
-    assert_eq!(w.redis(&a, &["set", "k", "after"]), "OK");
-    assert_eq!(w.redis(&a, &["save"]), "OK"); // a live diff sees what is on disk
-    assert_eq!(
-        differing(&p, instance(&a), save("s1")).await,
-        ["volume/data"]
-    );
-    p.start(start(&b, w.config(), Some("s1"))).await.unwrap();
-    assert_eq!(w.redis(&b, &["get", "k"]), "before");
+    w.start(&p, &a, None).await;
+    let dir = first_save(&w, &a).await;
+    diverge(&w, &p, &a).await;
+    w.start(&p, &b, Some("s1")).await;
+    check_restored(&w, &p, &b).await;
     assert_eq!(w.redis(&a, &["get", "k"]), "after");
-    assert!(differing(&p, instance(&b), save("s1")).await.is_empty());
-    let docs = p
-        .inspect(InspectParams {
-            target: save("s1"),
-            keys: vec!["volume/data".into(), "volume/nope".into()],
-        })
-        .await
-        .unwrap()
-        .docs;
-    assert!(docs["volume/data"]["files"].as_u64().unwrap() >= 1);
-    assert!(docs["volume/data"]["bytes"].as_u64().unwrap() > 0);
-    assert_eq!(docs["volume/nope"], Value::Null);
     for i in [&a, &b] {
-        p.stop(IdParams {
-            instance: i.clone(),
-        })
-        .await
-        .unwrap();
+        w.part()
+            .stop(IdParams {
+                instance: i.clone(),
+            })
+            .await
+            .unwrap();
     }
     p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
     assert!(!dir.exists());

@@ -2,7 +2,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use arena_part::helpers::folder::{self, Digest};
+use arena_part::helpers::folder::Digest;
+use arena_part::helpers::tar_digest;
 use arena_part::proto::Docs;
 use arena_part::PartError;
 use serde_json::{json, Map, Value};
@@ -16,18 +17,22 @@ pub fn volume_key(volume: &str) -> String {
     format!("volume/{volume}")
 }
 
-/// The digest of every volume folder under `root` (a save, or a live export), by key.
-pub fn digests(root: &Path) -> Result<BTreeMap<String, Digest>, PartError> {
+/// The digest of every volume archive (`<volume>.tar`) in `root` (a save, or a live export), by key.
+pub fn digests(root: &Path) -> Result<DigestMap, PartError> {
     let mut out = BTreeMap::new();
     for entry in std::fs::read_dir(root).map_err(internal)? {
-        let entry = entry.map_err(internal)?;
-        if entry.path().is_dir() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            out.insert(
-                volume_key(&name),
-                folder::digest(&entry.path()).map_err(internal)?,
-            );
-        }
+        let path = entry.map_err(internal)?.path();
+        let Some(volume) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".tar"))
+        else {
+            continue;
+        };
+        out.insert(
+            volume_key(volume),
+            tar_digest::digest(&path).map_err(internal)?,
+        );
     }
     Ok(out)
 }

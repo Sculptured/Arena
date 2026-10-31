@@ -1,17 +1,17 @@
 //! The `service` integration: each instance is a Docker Compose project `arena_<instance>`, and a
 //! save holds copies of the volumes the config names.
 //!
-//! A save stops the project, copies the volumes to `<save>/<volume>/` (hard-linking files that
-//! have not changed since the instance's last save) and starts it again, so it is exact. Starting
-//! from a save makes a new project whose volumes are filled from the save. Live volumes are not
-//! counted by `usage`: `stop` removes them.
+//! A save stops the project, writes each volume to `<save>/<volume>.tar` exactly as the helper
+//! container streams it (owners, modes and mtimes kept) and starts it again, so it is exact.
+//! Starting from a save makes a new project whose volumes are filled from the archives. Each
+//! running instance's config is kept in `.live/<instance>.json`, so a restarted program still
+//! knows its instances. Live volumes are not counted by `usage`: `stop` removes them.
 mod config;
+mod live;
 mod view;
 mod volumes;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 
 use arena_part::helpers::compose::Project;
 use arena_part::helpers::save_dirs::SaveDirs;
@@ -20,6 +20,7 @@ use arena_part::proto::*;
 use arena_part::{Part, PartError};
 use async_trait::async_trait;
 use config::Config;
+use live::Live;
 use serde_json::json;
 use volumes::Instance;
 
@@ -27,7 +28,7 @@ const PACKAGE: &str = "service";
 
 pub struct Service {
     saves: SaveDirs,
-    live: Mutex<HashMap<String, Instance>>,
+    live: Live,
 }
 
 fn internal(e: impl std::fmt::Display) -> PartError {
@@ -56,20 +57,18 @@ impl Service {
 
     fn with(saves: SaveDirs) -> Service {
         Service {
+            live: Live::new(saves.root().join(".live")),
             saves,
-            live: Mutex::new(HashMap::new()),
         }
     }
 
-    fn instances(&self) -> MutexGuard<'_, HashMap<String, Instance>> {
-        self.live.lock().expect("instance map lock")
-    }
-
+    /// The running instance `id`, rebuilt from the config recorded when it started.
     fn instance(&self, id: &str) -> Result<Instance, PartError> {
-        match self.instances().get(id) {
-            Some(i) => Ok(i.clone()),
-            None => Err(PartError::unknown(format!("no instance {id}"))),
-        }
+        let config = self
+            .live
+            .config(id)
+            .ok_or_else(|| PartError::unknown(format!("no instance {id}")))?;
+        new_instance(id, &Config::parse(&config)?)
     }
 
     fn save_dir(&self, save: &str) -> Result<PathBuf, PartError> {
@@ -99,14 +98,13 @@ impl Service {
     }
 }
 
-/// The instance `p` describes, its project not yet run.
-fn new_instance(p: &StartParams, config: &Config) -> Result<Instance, PartError> {
-    let name = format!("arena_{}", p.instance);
+/// The instance `id` with `config`, its project not yet run.
+fn new_instance(id: &str, config: &Config) -> Result<Instance, PartError> {
+    let name = format!("arena_{id}");
     let project = Project::new(&name, &config.compose_file, &config.env).map_err(internal)?;
     Ok(Instance {
         project: project.with_helper(config.helper()),
         volumes: config.volumes.clone(),
-        prev_save: None,
     })
 }
 
@@ -143,16 +141,13 @@ impl Part for Service {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
-        let mut inst = new_instance(&p, &Config::parse(&p.config)?)?;
+        let inst = new_instance(&p.instance, &Config::parse(&p.config)?)?;
         let from = match &p.from {
             Some(f) => Some(self.save_dir(&f.save)?),
             None => None,
         };
-        inst.prev_save = from.clone();
-        let up = inst.clone();
-        blocking(move || bring_up(&up, from.as_deref())).await?;
-        self.instances().insert(p.instance, inst);
-        Ok(())
+        blocking(move || bring_up(&inst, from.as_deref())).await?;
+        self.live.record(&p.instance, &p.config).map_err(internal)
     }
 
     async fn call_tool(&self, p: CallToolParams) -> Result<ToolOutput, PartError> {
@@ -165,14 +160,10 @@ impl Part for Service {
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
         let inst = self.instance(&p.instance)?;
-        let (dir, scratch) = (PathBuf::from(&p.dir), self.scratch());
+        let dir = PathBuf::from(&p.dir);
         let to = dir.clone();
-        let bytes =
-            blocking(move || volumes::save_all(&inst, &to, &scratch).map_err(internal)).await?;
+        let bytes = blocking(move || volumes::save_all(&inst, &to).map_err(internal)).await?;
         self.saves.note(&p.save, &dir);
-        if let Some(i) = self.instances().get_mut(&p.instance) {
-            i.prev_save = Some(dir);
-        }
         Ok(Saved { bytes, exact: true })
     }
 
@@ -194,7 +185,7 @@ impl Part for Service {
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
         let inst = self.instance(&p.instance)?;
         blocking(move || inst.project.down_with_volumes().map_err(internal)).await?;
-        self.instances().remove(&p.instance);
+        self.live.forget(&p.instance);
         Ok(())
     }
 

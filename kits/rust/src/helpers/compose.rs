@@ -1,10 +1,11 @@
 //! Docker Compose projects as instances: run them, and move their volumes to and from folders.
 //!
-//! Volumes are copied as tar streams through a throwaway helper container, so files on the host
-//! belong to the current user and need no root access to Docker's own folders.
+//! Volumes are copied as tar streams through a throwaway helper container, so no root access to
+//! Docker's own folders is needed and owners, modes and mtimes survive in the archive.
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 use anyhow::{bail, Context, Result};
 
@@ -50,23 +51,6 @@ fn check(out: &Output, what: &str) -> Result<()> {
     bail!(
         "{what} failed: {}",
         String::from_utf8_lossy(&out.stderr).trim()
-    )
-}
-
-/// Runs `from` with its output fed to `to`'s input; both must succeed.
-fn pipe(mut from: Command, mut to: Command, what: &str) -> Result<()> {
-    let mut producer = from
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("{what}: cannot run"))?;
-    let stream = producer.stdout.take().expect("producer stdout is piped");
-    let consumed = to.stdin(Stdio::from(stream)).stdout(Stdio::null()).output();
-    let produced = producer.wait_with_output()?;
-    check(&produced, what)?;
-    check(
-        &consumed.with_context(|| format!("{what}: cannot run"))?,
-        what,
     )
 }
 
@@ -144,20 +128,20 @@ impl Project {
         Ok(cmd)
     }
 
-    /// Copies the contents of the volume into the existing folder `dest`, as the current user.
+    /// Writes the volume to the tar archive `dest`, as streamed by the helper: owners (numeric),
+    /// modes and mtimes are kept.
     pub fn export_volume(&self, volume: &str, dest: &Path) -> Result<()> {
-        let from = self.helper_tar(volume, &["-cf", "-", "."], false)?;
-        let mut to = Command::new("tar");
-        to.arg("-C").arg(dest).args(["-xf", "-"]);
-        pipe(from, to, "export volume")
+        let mut cmd = self.helper_tar(volume, &["-cpf", "-", "--numeric-owner", "."], false)?;
+        cmd.stdout(File::create(dest)?);
+        run(cmd, "export volume")
     }
 
-    /// Fills the volume with the contents of the folder `src`.
+    /// Fills the volume from the tar archive `src` (made by `export_volume`), as root, so files
+    /// keep their original owners.
     pub fn import_volume(&self, volume: &str, src: &Path) -> Result<()> {
-        let mut from = Command::new("tar");
-        from.arg("-C").arg(src).args(["-cf", "-", "."]);
-        let to = self.helper_tar(volume, &["-xof", "-"], true)?;
-        pipe(from, to, "import volume")
+        let mut cmd = self.helper_tar(volume, &["-xpf", "-", "--numeric-owner"], true)?;
+        cmd.stdin(File::open(src)?);
+        run(cmd, "import volume")
     }
 }
 

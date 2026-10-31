@@ -1,7 +1,7 @@
 use arena_folder::Folder;
 use arena_part::proto::*;
 use arena_part::Part;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -143,6 +143,18 @@ async fn tools_write_read_list() {
     assert!(missing.error.is_some());
 }
 
+async fn differing(p: &Folder, a: Target, b: Target) -> Vec<String> {
+    p.diff(DiffParams { a, b }).await.unwrap().differing
+}
+
+async fn inspect_keys(p: &Folder, target: Target, keys: &[&str]) -> Map<String, Value> {
+    let keys = keys.iter().map(|k| k.to_string()).collect();
+    p.inspect(InspectParams { target, keys })
+        .await
+        .unwrap()
+        .docs
+}
+
 #[tokio::test]
 async fn save_restore_inspect_diff() {
     let s = Saves::new("roundtrip");
@@ -153,37 +165,19 @@ async fn save_restore_inspect_diff() {
     assert!(saved.exact && saved.bytes == 1);
     write(&p, "a", "one.txt", "changed").await;
     write(&p, "a", "two.txt", "2").await;
-    let d = |a, b| DiffParams { a, b };
-    let diff = p.diff(d(target_i("a"), target_s("s1"))).await.unwrap();
-    assert_eq!(diff.differing, ["file/one.txt", "file/two.txt"]);
+    let diff = differing(&p, target_i("a"), target_s("s1")).await;
+    assert_eq!(diff, ["file/one.txt", "file/two.txt"]);
     p.start(start("b", json!({}), Some("s1"))).await.unwrap();
-    assert!(p
-        .diff(d(target_i("b"), target_s("s1")))
+    assert!(differing(&p, target_i("b"), target_s("s1"))
         .await
-        .unwrap()
-        .differing
         .is_empty());
-    let keys = vec![
-        "file/one.txt".to_string(),
-        "file/zzz".into(),
-        "other/x".into(),
-    ];
-    let docs = p
-        .inspect(InspectParams {
-            target: target_s("s1"),
-            keys,
-        })
-        .await
-        .unwrap()
-        .docs;
+    let docs = inspect_keys(&p, target_s("s1"), &["file/one.txt", "file/zzz", "other/x"]).await;
     assert_eq!(docs["file/one.txt"]["content"], "1");
-    assert_eq!(docs["file/zzz"], Value::Null);
-    assert_eq!(docs["other/x"], Value::Null);
-    let all = InspectParams {
-        target: target_i("a"),
-        keys: vec![],
-    };
-    assert_eq!(p.inspect(all).await.unwrap().docs.len(), 2);
+    assert_eq!(
+        (&docs["file/zzz"], &docs["other/x"]),
+        (&Value::Null, &Value::Null)
+    );
+    assert_eq!(inspect_keys(&p, target_i("a"), &[]).await.len(), 2);
     // the live folder never writes through to a save
     write(&p, "b", "one.txt", "edited").await;
     assert_eq!(
