@@ -304,7 +304,7 @@
 
 **Files:**
 - Modify: `core/crates/arenad/src/{world.rs,exec.rs,runner.rs,fork.rs,api.rs,model.rs,store.rs}`
-- Test: `core/crates/arenad/tests/{restore.rs (new),fork.rs}`; a test integration `core/crates/arenad/tests/support/parts/` with manifests for the Rust `counter` example in three flavours via config: `exact` (save), `replay_only`, `approx_and_replay`. The counter example takes `config.flavour` to change what `describe` reports (add this to the example in this task).
+- Test: `core/crates/arenad/tests/{restore.rs (new),fork.rs}`; a test integration `core/crates/arenad/tests/support/parts/` with manifests for the Rust `counter` example in three flavours: `exact` (save), `replay_only`, `approx_and_replay`. The counter example takes `--flavour <name>` (Task 1) to change what `describe` reports; test manifests pick it in `run.command`.
 
 **Interfaces:**
 - `BranchClock {base_ms: i64, speed: f64}`:
