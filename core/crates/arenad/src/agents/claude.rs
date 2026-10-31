@@ -58,18 +58,10 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> 
 /// Parse `--output-format json` stdout. `seconds` is left 0 for the caller.
 pub fn parse(stdout: &str) -> AgentResult {
     let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) else {
-        return AgentResult {
-            ok: false,
-            error: Some(format!(
-                "unparseable claude output: {}",
-                super::tail(stdout)
-            )),
-            tokens: json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
-            cost_usd: None,
-            cost_source: None,
-            seconds: 0.0,
-            failure: None,
-        };
+        return super::fail(format!(
+            "unparseable claude output: {}",
+            super::tail(stdout)
+        ));
     };
     let u = &v["usage"];
     let n = |k: &str| u[k].as_i64().unwrap_or(0);
@@ -87,7 +79,7 @@ pub fn parse(stdout: &str) -> AgentResult {
                 text
             }
         }),
-        tokens: json!({"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}),
+        tokens: super::tokens_json(prompt, completion, prompt + completion),
         cost_usd: v["total_cost_usd"].as_f64(),
         cost_source: Some("api_equivalent_estimate".into()),
         seconds: 0.0,
@@ -98,23 +90,14 @@ pub fn parse(stdout: &str) -> AgentResult {
 impl Driver for ClaudeDriver {
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async move {
-            if run.resume.is_some() {
-                return super::resume_unsupported();
-            }
-            let workdir = match super::fresh_workdir() {
-                Ok(d) => d,
-                Err(e) => return super::fail(format!("cannot create workdir: {e}")),
+            let url = super::mcp_url(&self.self_base, &run);
+            let prompt = super::prompt_of(&run);
+            let build = |workdir: &std::path::Path| {
+                let mut cmd = command_with(&self.binary, &run.spec, &url, &prompt);
+                cmd.current_dir(workdir);
+                cmd
             };
-            let mut cmd = command_with(
-                &self.binary,
-                &run.spec,
-                &super::mcp_url(&self.self_base, &run),
-                &super::prompt_of(&run),
-            );
-            cmd.current_dir(&workdir);
-            let r = super::run_cli(cmd, self.timeout_secs, |out, _| parse(out)).await;
-            let _ = std::fs::remove_dir_all(&workdir);
-            r
+            super::run_in_workdir(&run, self.timeout_secs, build, |out, _| parse(out)).await
         })
     }
 }

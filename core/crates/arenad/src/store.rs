@@ -224,18 +224,7 @@ impl Store {
                 &[],
             )
             .await?;
-        let branches = self
-            .client
-            .query(
-                &format!("SELECT {BRANCH_COLS} FROM branches ORDER BY created_at, id"),
-                &[],
-            )
-            .await?;
-        let mut by_run: HashMap<String, Vec<Branch>> = HashMap::new();
-        for r in &branches {
-            let b = branch_from(r)?;
-            by_run.entry(b.run_id.clone()).or_default().push(b);
-        }
+        let mut by_run = self.branches_by_run().await?;
         Ok(runs
             .iter()
             .map(|r| {
@@ -248,6 +237,23 @@ impl Store {
                 }
             })
             .collect())
+    }
+
+    /// Every branch, grouped by its run, oldest first.
+    async fn branches_by_run(&self) -> Result<HashMap<String, Vec<Branch>>> {
+        let rows = self
+            .client
+            .query(
+                &format!("SELECT {BRANCH_COLS} FROM branches ORDER BY created_at, id"),
+                &[],
+            )
+            .await?;
+        let mut by_run: HashMap<String, Vec<Branch>> = HashMap::new();
+        for r in &rows {
+            let b = branch_from(r)?;
+            by_run.entry(b.run_id.clone()).or_default().push(b);
+        }
+        Ok(by_run)
     }
 
     /// Every database the store refers to: `branch_<id>` for each branch and each snapshot

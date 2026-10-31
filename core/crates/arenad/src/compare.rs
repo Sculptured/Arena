@@ -8,42 +8,36 @@ use crate::{model::*, runner::differing_rows};
 /// own events count (`seq >= start_seq`): the inherited prefix belongs to its parent.
 pub fn summary(branch: &Branch, events: &[Event]) -> Value {
     let from = branch.start_seq.unwrap_or(0);
-    let mut tokens = 0i64;
-    let mut cost = Some(0.0f64);
-    let mut sources: Vec<String> = vec![];
-    for e in events
+    let ends = events
         .iter()
         .filter(|e| e.seq >= from && e.kind == EventKind::AgentEnd)
-    {
-        let Ok(end) = serde_json::from_value::<AgentEndPayload>(e.payload.clone()) else {
-            continue;
-        };
-        tokens += end.tokens.unwrap_or(0);
-        cost = match (cost, end.cost_usd) {
-            (Some(a), Some(b)) => Some(a + b),
-            _ => None,
-        };
-        if let Some(s) = end.cost_source {
-            if !sources.contains(&s) {
-                sources.push(s);
-            }
-        }
-    }
-    let cost_source = match sources.len() {
-        0 => Value::Null,
-        1 => json!(sources[0]),
-        _ => json!("mixed"),
-    };
+        .filter_map(|e| serde_json::from_value::<AgentEndPayload>(e.payload.clone()).ok())
+        .collect::<Vec<_>>();
     let seconds = branch
         .ended_at
         .map(|t| (t - branch.created_at).num_milliseconds() as f64 / 1000.0);
     json!({
         "status": branch.status,
         "seconds": seconds,
-        "tokens": tokens,
-        "cost_usd": cost,
-        "cost_source": cost_source,
+        "tokens": ends.iter().map(|e| e.tokens.unwrap_or(0)).sum::<i64>(),
+        "cost_usd": ends.iter().fold(Some(0.0f64), |c, e| add_cost(c, e.cost_usd)),
+        "cost_source": combined_source(&ends),
     })
+}
+
+/// The one cost source of all the agents, `"mixed"` for several, null for none.
+fn combined_source(ends: &[AgentEndPayload]) -> Value {
+    let mut sources: Vec<&String> = vec![];
+    for s in ends.iter().filter_map(|e| e.cost_source.as_ref()) {
+        if !sources.contains(&s) {
+            sources.push(s);
+        }
+    }
+    match sources.len() {
+        0 => Value::Null,
+        1 => json!(sources[0]),
+        _ => json!("mixed"),
+    }
 }
 
 fn signature(e: &Event) -> (Option<&str>, EventKind, &Value, &Value) {

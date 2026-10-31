@@ -116,6 +116,184 @@ fn is_change(c: &Change, spec: &AgentSpec) -> bool {
     c.prompt.is_some() || changes_model(c, spec) || changes_kind(c, spec)
 }
 
+/// Where the new branch starts, and the resume messages it carries (open agents only).
+struct Start {
+    seq: i64,
+    reason: Option<&'static str>,
+    agent: usize,
+    resume: Option<Vec<Value>>,
+}
+
+/// What a plan reads: the branch's events and team, and the fork point.
+struct Planner<'a> {
+    events: &'a [Event],
+    team: &'a Team,
+    at_seq: i64,
+    at: &'a Event,
+}
+
+impl Planner<'_> {
+    fn index_of(&self, id: &str) -> Option<usize> {
+        self.team.agents.iter().position(|a| a.id == id)
+    }
+
+    /// An agent's real start: its first AgentStart (a resumed agent has a second one).
+    fn first_start(&self, i: usize) -> Result<i64, ForkError> {
+        let id = self.team.agents[i].id.as_str();
+        self.events
+            .iter()
+            .find(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some(id))
+            .map(|e| e.seq)
+            .ok_or(ForkError::UnknownSeq)
+    }
+
+    /// An agent has finished at `at_seq` once its AgentEnd is at or before it.
+    fn finished(&self, i: usize) -> bool {
+        let id = self.team.agents[i].id.as_str();
+        self.events.iter().any(|e| {
+            e.seq <= self.at_seq && e.kind == EventKind::AgentEnd && e.agent.as_deref() == Some(id)
+        })
+    }
+
+    /// 1. The agent active at `at_seq`.
+    fn active_agent(&self) -> Result<usize, ForkError> {
+        let last_start = self
+            .events
+            .iter()
+            .rev()
+            .find(|e| e.seq <= self.at_seq && e.kind == EventKind::AgentStart);
+        match (self.at.kind, last_start) {
+            (EventKind::RunStart, _) | (_, None) => Ok(0),
+            (_, Some(s)) => {
+                let id = s.agent.clone().unwrap_or_default();
+                self.index_of(&id).ok_or(ForkError::UnknownAgent(id))
+            }
+        }
+    }
+
+    /// Restart agent `i` from its first start, for `reason`.
+    fn restart(&self, i: usize, reason: &'static str) -> Result<Start, ForkError> {
+        Ok(Start {
+            seq: self.first_start(i)?,
+            reason: Some(reason),
+            agent: i,
+            resume: None,
+        })
+    }
+
+    /// 2 to 4. Where the fork starts, given the agents `changed` and the active agent `a`.
+    fn start_for(
+        &self,
+        changes: &HashMap<String, Change>,
+        changed: &[usize],
+        a: usize,
+    ) -> Result<Start, ForkError> {
+        // A change to an agent that has finished (including `a`): restart from it.
+        let earliest = changed
+            .iter()
+            .copied()
+            .filter(|&i| i < a || self.finished(i))
+            .min();
+        if let Some(e) = earliest {
+            return self.restart(e, REASON_EARLIER);
+        }
+        let spec = &self.team.agents[a];
+        // Mode change, or a CLI agent: restart the agent.
+        if changes.get(&spec.id).is_some_and(|c| changes_kind(c, spec)) {
+            return self.restart(a, REASON_KIND);
+        }
+        if spec.kind != AgentKind::Open {
+            return self.restart(a, REASON_CLI);
+        }
+        match self.at.kind {
+            // Begin with the first agent (or right after RunStart if it never began).
+            EventKind::RunStart => Ok(Start {
+                seq: self.first_start(0).unwrap_or(self.at_seq + 1),
+                reason: Some(REASON_RUN_START),
+                agent: a,
+                resume: None,
+            }),
+            EventKind::AgentStart => self.restart(a, REASON_AGENT_RESTART),
+            _ => self.resume_from_model_call(a),
+        }
+    }
+
+    /// The model call an open agent resumes from: the one at the fork point, else the agent's
+    /// last one before it.
+    fn model_call_before(&self, a: usize, agent_start: i64) -> Option<&Event> {
+        if self.at.kind == EventKind::ModelCall {
+            return Some(self.at);
+        }
+        let id = self.team.agents[a].id.as_str();
+        self.events.iter().rev().find(|e| {
+            e.seq <= self.at_seq
+                && e.seq > agent_start
+                && e.kind == EventKind::ModelCall
+                && e.agent.as_deref() == Some(id)
+        })
+    }
+
+    /// 4. Open agent: resume from a model call.
+    fn resume_from_model_call(&self, a: usize) -> Result<Start, ForkError> {
+        let agent_start = self.first_start(a)?;
+        let model_call = self.model_call_before(a, agent_start);
+        let messages =
+            model_call.and_then(|m| m.payload["request"]["messages"].as_array().cloned());
+        let (seq, reason, resume) = match (model_call, messages) {
+            (Some(m), Some(msgs)) => {
+                let why = match self.at.kind {
+                    EventKind::ModelCall => None,
+                    EventKind::ToolCall | EventKind::Handoff => Some(REASON_TOOL),
+                    _ => Some(REASON_LAST_MODEL_CALL),
+                };
+                (m.seq, why, Some(msgs))
+            }
+            _ => (agent_start, Some(REASON_NO_MODEL_CALL), None),
+        };
+        Ok(Start {
+            seq,
+            reason,
+            agent: a,
+            resume,
+        })
+    }
+
+    /// 6. The recorded handoff notes of the agents before `a`.
+    fn handoff_notes(&self, a: usize, start_seq: i64) -> Result<Vec<String>, ForkError> {
+        self.team.agents[..a]
+            .iter()
+            .map(|spec| {
+                self.events
+                    .iter()
+                    .rev()
+                    .find(|e| {
+                        e.seq < start_seq
+                            && e.kind == EventKind::Handoff
+                            && e.agent.as_deref() == Some(spec.id.as_str())
+                    })
+                    .and_then(|e| e.payload["note"].as_str().map(str::to_string))
+                    .ok_or_else(|| ForkError::MissingHandoff(spec.id.clone()))
+            })
+            .collect()
+    }
+}
+
+/// The agents (by index) that `changes` really changes; an unknown agent is an error.
+fn changed_agents(team: &Team, changes: &HashMap<String, Change>) -> Result<Vec<usize>, ForkError> {
+    let mut changed = vec![];
+    for (id, c) in changes {
+        let i = team
+            .agents
+            .iter()
+            .position(|a| &a.id == id)
+            .ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
+        if is_change(c, &team.agents[i]) {
+            changed.push(i);
+        }
+    }
+    Ok(changed)
+}
+
 /// Plans a fork of a branch (its full event list, `team` its effective team) at `at_seq`.
 /// Empty changes (no field set, or only the agent's current kind) are ignored.
 pub fn plan_fork(
@@ -127,144 +305,41 @@ pub fn plan_fork(
     if team.agents.is_empty() {
         return Err(ForkError::UnknownAgent(String::new()));
     }
-    let index_of = |id: &str| team.agents.iter().position(|a| a.id == id);
-    let mut changed: Vec<usize> = vec![];
-    for (id, c) in changes {
-        let i = index_of(id).ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
-        if is_change(c, &team.agents[i]) {
-            changed.push(i);
-        }
-    }
+    let changed = changed_agents(team, changes)?;
     let at = events
         .iter()
         .find(|e| e.seq == at_seq)
         .ok_or(ForkError::UnknownSeq)?;
-    // An agent's real start: its first AgentStart (a resumed agent has a second one).
-    let first_start = |i: usize| {
-        events
-            .iter()
-            .find(|e| {
-                e.kind == EventKind::AgentStart
-                    && e.agent.as_deref() == Some(team.agents[i].id.as_str())
-            })
-            .map(|e| e.seq)
-            .ok_or(ForkError::UnknownSeq)
+    let planner = Planner {
+        events,
+        team,
+        at_seq,
+        at,
     };
-
-    // 1. The agent active at `at_seq`.
-    let last_start = events
-        .iter()
-        .rev()
-        .find(|e| e.seq <= at_seq && e.kind == EventKind::AgentStart);
-    let mut a = match (at.kind, last_start) {
-        (EventKind::RunStart, _) | (_, None) => 0,
-        (_, Some(s)) => {
-            let id = s.agent.clone().unwrap_or_default();
-            index_of(&id).ok_or(ForkError::UnknownAgent(id))?
-        }
-    };
-
-    // An agent has finished at `at_seq` once its AgentEnd is at or before it.
-    let finished = |i: usize| {
-        events.iter().any(|e| {
-            e.seq <= at_seq
-                && e.kind == EventKind::AgentEnd
-                && e.agent.as_deref() == Some(team.agents[i].id.as_str())
-        })
-    };
-
-    let mut resume = None;
-    let earliest_finished_change = changed
-        .iter()
-        .copied()
-        .filter(|&i| i < a || finished(i))
-        .min();
-    let (start_seq, reason): (i64, Option<&str>) = if let Some(e) = earliest_finished_change {
-        // 2. A change to an agent that has finished (including `a`): restart from it.
-        a = e;
-        (first_start(a)?, Some(REASON_EARLIER))
-    } else if changes
-        .get(&team.agents[a].id)
-        .is_some_and(|c| changes_kind(c, &team.agents[a]))
-    {
-        // 3. Mode change, or a CLI agent: restart the agent.
-        (first_start(a)?, Some(REASON_KIND))
-    } else if team.agents[a].kind != AgentKind::Open {
-        (first_start(a)?, Some(REASON_CLI))
-    } else if at.kind == EventKind::RunStart {
-        // The run's start: begin with the first agent (or right after RunStart if it never began).
-        (first_start(0).unwrap_or(at_seq + 1), Some(REASON_RUN_START))
-    } else if at.kind == EventKind::AgentStart {
-        (first_start(a)?, Some(REASON_AGENT_RESTART))
-    } else {
-        // 4. Open agent: resume from a model call.
-        let agent_start = first_start(a)?;
-        let model_call = if at.kind == EventKind::ModelCall {
-            Some(at)
-        } else {
-            let id = team.agents[a].id.as_str();
-            events.iter().rev().find(|e| {
-                e.seq <= at_seq
-                    && e.seq > agent_start
-                    && e.kind == EventKind::ModelCall
-                    && e.agent.as_deref() == Some(id)
-            })
-        };
-        let messages =
-            model_call.and_then(|m| m.payload["request"]["messages"].as_array().cloned());
-        match (model_call, messages) {
-            (Some(m), Some(msgs)) => {
-                resume = Some(msgs);
-                let why = match at.kind {
-                    EventKind::ModelCall => None,
-                    EventKind::ToolCall | EventKind::Handoff => Some(REASON_TOOL),
-                    _ => Some(REASON_LAST_MODEL_CALL),
-                };
-                (m.seq, why)
-            }
-            _ => (agent_start, Some(REASON_NO_MODEL_CALL)),
-        }
-    };
-    if start_seq == first_start(a).unwrap_or(i64::MIN) {
-        resume = None;
+    let active = planner.active_agent()?;
+    let mut start = planner.start_for(changes, &changed, active)?;
+    let a = start.agent;
+    if start.seq == planner.first_start(a).unwrap_or(i64::MIN) {
+        start.resume = None;
     }
-
-    // 5. The world just before `start_seq`: per part, the save of its last write before it.
-    let restore = saves_at(events, start_seq - 1, &run_info(events).base)
+    // 5. The world just before the start: per part, the save of its last write before it.
+    let restore = saves_at(events, start.seq - 1, &run_info(events).base)
         .map_err(|n| ForkError::NoRestorePoint { seq: n.seq })?;
+    let notes = planner.handoff_notes(a, start.seq)?;
+    Ok(finish_plan(start, at_seq, restore, notes))
+}
 
-    // 6. The recorded handoff notes of the agents before `a`.
-    let notes = team.agents[..a]
-        .iter()
-        .map(|spec| {
-            events
-                .iter()
-                .rev()
-                .find(|e| {
-                    e.seq < start_seq
-                        && e.kind == EventKind::Handoff
-                        && e.agent.as_deref() == Some(spec.id.as_str())
-                })
-                .and_then(|e| e.payload["note"].as_str().map(str::to_string))
-                .ok_or_else(|| ForkError::MissingHandoff(spec.id.clone()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // 7.
-    let moved = start_seq != at_seq;
-    Ok(ForkPlan {
-        start_seq,
+fn finish_plan(start: Start, at_seq: i64, restore: Saves, notes: Vec<String>) -> ForkPlan {
+    let moved = start.seq != at_seq;
+    ForkPlan {
+        start_seq: start.seq,
         moved_from: moved.then_some(at_seq),
-        reason: if moved {
-            reason.map(str::to_string)
-        } else {
-            None
-        },
-        agent_index: a,
+        reason: start.reason.filter(|_| moved).map(str::to_string),
+        agent_index: start.agent,
         restore,
-        resume,
+        resume: start.resume,
         notes,
-    })
+    }
 }
 
 /// `team` with each agent's prompt/model/kind replaced where `changes` sets them.

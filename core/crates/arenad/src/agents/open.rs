@@ -11,6 +11,7 @@ use super::{AgentResult, AgentRun, Driver, FailureKind};
 use crate::{
     app::AppState,
     exec::{tool_schemas, ToolExec},
+    model::add_cost,
     world::World,
 };
 
@@ -77,76 +78,109 @@ impl Driver for OpenDriver {
     }
 }
 
+/// Token and cost totals over a run's model calls.
+struct Totals {
+    tokens: [i64; 3],
+    /// `None` once a call reports no cost.
+    cost: Option<f64>,
+}
+
+impl Totals {
+    fn new() -> Totals {
+        Totals {
+            tokens: [0; 3],
+            cost: Some(0.0),
+        }
+    }
+
+    fn add(&mut self, usage: &Value) {
+        for (total, k) in
+            self.tokens
+                .iter_mut()
+                .zip(["prompt_tokens", "completion_tokens", "total_tokens"])
+        {
+            *total += usage[k].as_i64().unwrap_or(0);
+        }
+        self.cost = add_cost(self.cost, usage["cost"].as_f64());
+    }
+}
+
+/// The arguments of a tool call: `{}` for none, `None` when they are not a JSON object.
+fn parse_tool_args(raw: &str) -> Option<Value> {
+    if raw.trim().is_empty() {
+        return Some(json!({}));
+    }
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(Value::is_object)
+}
+
+fn tool_message(id: &str, content: String) -> Value {
+    json!({"role": "tool", "tool_call_id": id, "content": content})
+}
+
+/// One model call through the gateway; the parsed response.
+async fn model_call(http: &reqwest::Client, url: &str, body: &Value) -> Result<Value, Fault> {
+    let resp = http
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("gateway request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("gateway response unreadable: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("model call failed ({status}): {text}").into());
+    }
+    Ok(serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?)
+}
+
+/// The recording gateway's address for this agent.
+fn gateway_url(state: &AppState, run: &AgentRun) -> String {
+    format!(
+        "{}/gateway/{}/{}/v1/chat/completions",
+        state.config.self_base.trim_end_matches('/'),
+        run.branch.branch_id,
+        run.spec.id
+    )
+}
+
 impl OpenDriver {
     async fn run_inner(&self, run: AgentRun) -> AgentResult {
         let start = Instant::now();
-        let mut totals = [0i64; 3];
-        let mut cost = Some(0.0f64);
-        let outcome = self.drive(&run, &mut totals, &mut cost).await;
+        let mut totals = Totals::new();
+        let outcome = self.drive(&run, &mut totals).await;
         let (error, failure) = match outcome {
             Ok(()) => (None, None),
             Err(Fault::Model(e)) => (Some(e), Some(FailureKind::Model)),
             Err(Fault::Infra(e)) => (Some(e), None),
         };
+        let [prompt, completion, total] = totals.tokens;
         AgentResult {
             ok: error.is_none(),
             error,
             failure,
-            tokens: json!({"prompt_tokens": totals[0], "completion_tokens": totals[1], "total_tokens": totals[2]}),
-            cost_source: cost.map(|_| "openrouter".to_string()),
-            cost_usd: cost,
+            tokens: super::tokens_json(prompt, completion, total),
+            cost_source: totals.cost.map(|_| "openrouter".to_string()),
+            cost_usd: totals.cost,
             seconds: start.elapsed().as_secs_f64(),
         }
     }
 
-    async fn drive(
-        &self,
-        run: &AgentRun,
-        totals: &mut [i64; 3],
-        cost: &mut Option<f64>,
-    ) -> Result<(), Fault> {
+    async fn drive(&self, run: &AgentRun, totals: &mut Totals) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
-        let agent = run.spec.id.as_str();
-        let url = format!(
-            "{}/gateway/{}/{}/v1/chat/completions",
-            state.config.self_base.trim_end_matches('/'),
-            run.branch.branch_id,
-            agent
-        );
-        let tools = openai_tools(&run.branch.world, !run.branch.is_last(agent));
+        let url = gateway_url(&state, run);
+        let tools = openai_tools(&run.branch.world, !run.branch.is_last(&run.spec.id));
+        let model = run.spec.model.as_deref().unwrap_or(DEFAULT_OPEN_MODEL);
         let mut messages = initial_messages(run);
         let exec = ToolExec::new(state.store.clone());
-        let http = &state.http;
         for _ in 0..MAX_MODEL_CALLS {
-            let mut body = json!({"messages": messages, "tools": tools});
-            body["model"] = json!(run.spec.model.as_deref().unwrap_or(DEFAULT_OPEN_MODEL));
-            let resp = http
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| format!("gateway request failed: {e}"))?;
-            let status = resp.status();
-            let text = resp
-                .text()
-                .await
-                .map_err(|e| format!("gateway response unreadable: {e}"))?;
-            if !status.is_success() {
-                return Err(format!("model call failed ({status}): {text}").into());
-            }
-            let v: Value =
-                serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?;
-            let usage = &v["usage"];
-            for (i, k) in ["prompt_tokens", "completion_tokens", "total_tokens"]
-                .iter()
-                .enumerate()
-            {
-                totals[i] += usage[k].as_i64().unwrap_or(0);
-            }
-            *cost = match (*cost, usage["cost"].as_f64()) {
-                (Some(a), Some(b)) => Some(a + b),
-                _ => None,
-            };
+            let body = json!({"messages": messages, "tools": tools, "model": model});
+            let v = model_call(&state.http, &url, &body).await?;
+            totals.add(&v["usage"]);
             let msg = v["choices"][0]["message"].clone();
             if !msg.is_object() {
                 return Err("model response has no message".into());
@@ -154,49 +188,59 @@ impl OpenDriver {
             messages.push(msg.clone());
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
             if calls.is_empty() {
-                if v["choices"][0]["finish_reason"] == "length" {
-                    return Err(Fault::Model("model output was cut off".into()));
-                }
-                return Ok(());
+                return end_without_calls(&v);
             }
-            for call in calls {
-                let id = call["id"].as_str().unwrap_or("").to_string();
-                let name = call["function"]["name"].as_str().unwrap_or("").to_string();
-                let raw = call["function"]["arguments"].as_str().unwrap_or("");
-                let parsed = if raw.trim().is_empty() {
-                    Some(json!({}))
-                } else {
-                    serde_json::from_str::<Value>(raw)
-                        .ok()
-                        .filter(Value::is_object)
-                };
-                let Some(args) = parsed else {
-                    let content = json!({"error": format!(
-                        "arguments for {name} were not valid JSON (the output may have been cut off); the tool was not run")});
-                    messages.push(
-                        json!({"role": "tool", "tool_call_id": id, "content": content.to_string()}),
-                    );
-                    continue;
-                };
-                let res = exec
-                    .run_outcome(&run.branch, agent, &name, args, Some(id.clone()))
-                    .await;
-                let content = match &res {
-                    Ok(v) => v.to_string(),
-                    Err(e) => json!({"error": e}).to_string(),
-                };
-                messages.push(json!({"role": "tool", "tool_call_id": id, "content": content}));
-                if name == "handoff" && res.is_ok() {
-                    return Ok(());
-                }
-                // A world program stopped: the branch can't go on.
-                if let Some(f) = run.branch.fatal() {
-                    return Err(Fault::Infra(f));
-                }
+            if run_calls(&exec, run, calls, &mut messages).await? {
+                return Ok(());
             }
         }
         Err(Fault::Model(format!(
             "agent exceeded {MAX_MODEL_CALLS} model calls"
         )))
     }
+}
+
+/// The model answered with no tool calls: done, unless its output was cut off.
+fn end_without_calls(response: &Value) -> Result<(), Fault> {
+    if response["choices"][0]["finish_reason"] == "length" {
+        return Err(Fault::Model("model output was cut off".into()));
+    }
+    Ok(())
+}
+
+/// Runs each tool call, appending the tool messages. `Ok(true)` when the agent handed off.
+async fn run_calls(
+    exec: &ToolExec,
+    run: &AgentRun,
+    calls: Vec<Value>,
+    messages: &mut Vec<Value>,
+) -> Result<bool, Fault> {
+    let agent = run.spec.id.as_str();
+    for call in calls {
+        let id = call["id"].as_str().unwrap_or("").to_string();
+        let name = call["function"]["name"].as_str().unwrap_or("").to_string();
+        let raw = call["function"]["arguments"].as_str().unwrap_or("");
+        let Some(args) = parse_tool_args(raw) else {
+            let content = json!({"error": format!(
+                "arguments for {name} were not valid JSON (the output may have been cut off); the tool was not run")});
+            messages.push(tool_message(&id, content.to_string()));
+            continue;
+        };
+        let res = exec
+            .run_outcome(&run.branch, agent, &name, args, Some(id.clone()))
+            .await;
+        let content = match &res {
+            Ok(v) => v.to_string(),
+            Err(e) => json!({"error": e}).to_string(),
+        };
+        messages.push(tool_message(&id, content));
+        if name == "handoff" && res.is_ok() {
+            return Ok(true);
+        }
+        // A world program stopped: the branch can't go on.
+        if let Some(f) = run.branch.fatal() {
+            return Err(Fault::Infra(f));
+        }
+    }
+    Ok(false)
 }

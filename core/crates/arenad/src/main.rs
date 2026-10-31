@@ -62,16 +62,44 @@ async fn app_state(url: &str, port: u16) -> anyhow::Result<Arc<AppState>> {
     Ok(Arc::new(AppState::new(store, worlds, hub, config)))
 }
 
+/// `ARENA_PORT`, or 4510.
+fn port_from_env() -> anyhow::Result<u16> {
+    match std::env::var("ARENA_PORT") {
+        Ok(p) => p
+            .parse()
+            .map_err(|_| anyhow::anyhow!("ARENA_PORT {p:?} is not a port number")),
+        Err(_) => Ok(4510),
+    }
+}
+
+/// The modes this machine can run, for the startup line.
+fn available_modes(state: &AppState) -> Vec<&'static str> {
+    [
+        ("claude-code", arenad::api::on_path("claude")),
+        ("codex", arenad::api::on_path("codex")),
+        ("open", state.config.open_available()),
+    ]
+    .into_iter()
+    .filter(|m| m.1)
+    .map(|m| m.0)
+    .collect()
+}
+
+/// Ends the SSE streams on ctrl-c so graceful shutdown can finish; exits anyway after 5 s.
+async fn shutdown_on_ctrl_c(state: Arc<AppState>) {
+    let _ = tokio::signal::ctrl_c().await;
+    let _ = state.shutdown.send(true);
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        std::process::exit(0);
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let url = std::env::var("ARENA_PG_URL")
         .unwrap_or_else(|_| "postgres://arena:arena@127.0.0.1:5544/postgres".to_string());
-    let port: u16 = match std::env::var("ARENA_PORT") {
-        Ok(p) => p
-            .parse()
-            .map_err(|_| anyhow::anyhow!("ARENA_PORT {p:?} is not a port number"))?,
-        Err(_) => 4510,
-    };
+    let port = port_from_env()?;
     let ui_dist = std::env::var("ARENA_UI_DIST")
         .ok()
         .filter(|p| !p.is_empty())
@@ -90,29 +118,15 @@ async fn main() -> anyhow::Result<()> {
         router = arenad::api::with_ui(router, dist.clone());
     }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    let modes = [
-        ("claude-code", arenad::api::on_path("claude")),
-        ("codex", arenad::api::on_path("codex")),
-        ("open", state.config.open_available()),
-    ];
-    let modes: Vec<&str> = modes.iter().filter(|m| m.1).map(|m| m.0).collect();
     println!(
         "arenad: listening on http://127.0.0.1:{port} (benchmark: {} {}; modes: {}; ui: {})",
         bench.name,
         bench.version,
-        modes.join(", "),
+        available_modes(&state).join(", "),
         ui_dist.map_or("api only".to_string(), |d| d.display().to_string())
     );
     axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            // End the SSE streams so graceful shutdown can finish; exit anyway after 5 s.
-            let _ = state.shutdown.send(true);
-            tokio::spawn(async {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                std::process::exit(0);
-            });
-        })
+        .with_graceful_shutdown(shutdown_on_ctrl_c(state))
         .await?;
     Ok(())
 }

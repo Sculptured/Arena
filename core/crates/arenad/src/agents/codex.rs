@@ -88,51 +88,58 @@ fn command_with(
     c
 }
 
-/// Parse `--json` JSONL stdout. `seconds` is left 0 for the caller. `cost_usd` is None
-/// (subscription usage has no per-call price).
-pub fn parse(stdout: &str, returncode: i32) -> AgentResult {
-    let (mut prompt, mut completion) = (0i64, 0i64);
-    let (mut completed, mut error) = (false, None::<String>);
+/// What the JSONL events of a run add up to.
+#[derive(Default)]
+struct Turns {
+    prompt: i64,
+    completion: i64,
+    completed: bool,
+    error: Option<String>,
+}
+
+fn scan_events(stdout: &str) -> Turns {
+    let mut t = Turns::default();
     for line in stdout.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         match v["type"].as_str() {
             Some("turn.completed") => {
-                completed = true;
-                prompt += v["usage"]["input_tokens"].as_i64().unwrap_or(0);
-                completion += v["usage"]["output_tokens"].as_i64().unwrap_or(0);
+                t.completed = true;
+                t.prompt += v["usage"]["input_tokens"].as_i64().unwrap_or(0);
+                t.completion += v["usage"]["output_tokens"].as_i64().unwrap_or(0);
             }
             Some("turn.failed") => {
-                error = Some(
-                    v["error"]["message"]
-                        .as_str()
-                        .unwrap_or("turn failed")
-                        .to_string(),
-                );
+                let m = v["error"]["message"].as_str().unwrap_or("turn failed");
+                t.error = Some(m.to_string());
             }
             Some("error") => {
-                error = Some(v["message"].as_str().unwrap_or("codex error").to_string());
+                t.error = Some(v["message"].as_str().unwrap_or("codex error").to_string());
             }
             _ => {}
         }
     }
-    let ok = returncode == 0 && completed;
-    let error = if ok {
-        None
-    } else {
-        Some(error.unwrap_or_else(|| {
+    t
+}
+
+/// Parse `--json` JSONL stdout. `seconds` is left 0 for the caller. `cost_usd` is None
+/// (subscription usage has no per-call price).
+pub fn parse(stdout: &str, returncode: i32) -> AgentResult {
+    let t = scan_events(stdout);
+    let ok = returncode == 0 && t.completed;
+    let error = (!ok).then(|| {
+        t.error.unwrap_or_else(|| {
             if returncode != 0 {
                 format!("codex exited with code {returncode}")
             } else {
                 "codex produced no completed turn".into()
             }
-        }))
-    };
+        })
+    });
     AgentResult {
         ok,
         error,
-        tokens: json!({"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}),
+        tokens: super::tokens_json(t.prompt, t.completion, t.prompt + t.completion),
         cost_usd: None,
         cost_source: None,
         seconds: 0.0,
@@ -143,23 +150,11 @@ pub fn parse(stdout: &str, returncode: i32) -> AgentResult {
 impl Driver for CodexDriver {
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async move {
-            if run.resume.is_some() {
-                return super::resume_unsupported();
-            }
-            let workdir = match super::fresh_workdir() {
-                Ok(d) => d,
-                Err(e) => return super::fail(format!("cannot create workdir: {e}")),
-            };
-            let cmd = command_with(
-                &self.binary,
-                &run.spec,
-                &super::mcp_url(&self.self_base, &run),
-                &workdir,
-                &super::prompt_of(&run),
-            );
-            let r = super::run_cli(cmd, self.timeout_secs, parse).await;
-            let _ = std::fs::remove_dir_all(&workdir);
-            r
+            let url = super::mcp_url(&self.self_base, &run);
+            let prompt = super::prompt_of(&run);
+            let build =
+                |workdir: &Path| command_with(&self.binary, &run.spec, &url, workdir, &prompt);
+            super::run_in_workdir(&run, self.timeout_secs, build, parse).await
         })
     }
 }

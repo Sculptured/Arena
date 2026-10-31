@@ -59,11 +59,20 @@ pub(crate) fn tail(s: &str) -> &str {
     &s[i..]
 }
 
+/// `{prompt_tokens, completion_tokens, total_tokens}`.
+pub(crate) fn tokens_json(prompt: i64, completion: i64, total: i64) -> Value {
+    serde_json::json!({
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    })
+}
+
 fn failed(error: String, seconds: f64) -> AgentResult {
     AgentResult {
         ok: false,
         error: Some(error),
-        tokens: serde_json::json!({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        tokens: tokens_json(0, 0, 0),
         cost_usd: None,
         cost_source: None,
         seconds,
@@ -97,22 +106,49 @@ pub(crate) async fn run_cli(
     match waited {
         Err(_) => failed(format!("timed out after {timeout_secs} s"), seconds),
         Ok(Err(e)) => failed(format!("CLI failed: {e}"), seconds),
-        Ok(Ok(out)) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let code = out.status.code().unwrap_or(-1);
-            let mut r = parse(&stdout, code);
-            r.seconds = seconds;
-            if !r.ok && !stderr.trim().is_empty() {
-                let msg = r
-                    .error
-                    .take()
-                    .unwrap_or_else(|| format!("exit code {code}"));
-                r.error = Some(format!("{msg}\nstderr: {}", tail(stderr.trim())));
-            }
-            r
-        }
+        Ok(Ok(out)) => finish_cli(&out, seconds, parse),
     }
+}
+
+/// The result of a CLI that ran to completion; a failure carries the tail of its stderr.
+fn finish_cli(
+    out: &std::process::Output,
+    seconds: f64,
+    parse: impl FnOnce(&str, i32) -> AgentResult,
+) -> AgentResult {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let code = out.status.code().unwrap_or(-1);
+    let mut r = parse(&stdout, code);
+    r.seconds = seconds;
+    if !r.ok && !stderr.trim().is_empty() {
+        let msg = r
+            .error
+            .take()
+            .unwrap_or_else(|| format!("exit code {code}"));
+        r.error = Some(format!("{msg}\nstderr: {}", tail(stderr.trim())));
+    }
+    r
+}
+
+/// Runs a CLI agent in a fresh work folder (removed afterwards). `build` makes the command for
+/// that folder; CLI agents can't resume.
+pub(crate) async fn run_in_workdir(
+    run: &AgentRun,
+    timeout_secs: u64,
+    build: impl FnOnce(&std::path::Path) -> std::process::Command,
+    parse: impl FnOnce(&str, i32) -> AgentResult,
+) -> AgentResult {
+    if run.resume.is_some() {
+        return resume_unsupported();
+    }
+    let workdir = match fresh_workdir() {
+        Ok(d) => d,
+        Err(e) => return fail(format!("cannot create workdir: {e}")),
+    };
+    let r = run_cli(build(&workdir), timeout_secs, parse).await;
+    let _ = std::fs::remove_dir_all(&workdir);
+    r
 }
 
 pub(crate) fn resume_unsupported() -> AgentResult {

@@ -44,6 +44,11 @@ pub enum BranchStatus {
     Interrupted,
 }
 
+/// A running cost total: unknown (`None`) as soon as any part of it is unknown.
+pub fn add_cost(total: Option<f64>, more: Option<f64>) -> Option<f64> {
+    Some(total? + more?)
+}
+
 impl BranchStatus {
     pub fn as_str(&self) -> &'static str {
         match self {

@@ -20,7 +20,10 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::{broadcast::error::RecvError, mpsc};
+use tokio::sync::{
+    broadcast::{self, error::RecvError},
+    mpsc,
+};
 use world::snapshot::Source;
 
 use crate::{
@@ -201,12 +204,10 @@ async fn check_disk(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn delete_run(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> ApiResult<Value> {
-    if !state.store.run_exists(&id).await? {
-        return Err(ApiError::not_found(format!("there is no run \"{id}\"")));
+/// True when any branch of the run is running (stored as running, or live in this process).
+async fn run_is_running(state: &AppState, id: &str) -> Result<bool, ApiError> {
+    if state.store.run_has_running(id).await? {
+        return Ok(true);
     }
     let live = state
         .live
@@ -215,32 +216,46 @@ async fn delete_run(
         .keys()
         .cloned()
         .collect::<Vec<_>>();
-    let running = state.store.run_has_running(&id).await?
-        || state
-            .store
-            .runs()
-            .await?
-            .iter()
-            .filter(|r| r.id == id)
-            .flat_map(|r| &r.branches)
-            .any(|b| live.contains(&b.id));
-    if running {
+    Ok(state
+        .store
+        .runs()
+        .await?
+        .iter()
+        .filter(|r| r.id == id)
+        .flat_map(|r| &r.branches)
+        .any(|b| live.contains(&b.id)))
+}
+
+/// Deletes the run's rows, then drops its databases; the number dropped.
+async fn delete_run_data(state: &AppState, id: &str) -> anyhow::Result<usize> {
+    let dbs = state.store.delete_run(id).await?;
+    let mut dropped = 0;
+    for db in &dbs {
+        match state.worlds.drop_db(db).await {
+            Ok(()) => dropped += 1,
+            Err(e) => eprintln!("delete run {id}: could not drop {db}: {e:#}"),
+        }
+    }
+    state
+        .dumps
+        .lock()
+        .unwrap()
+        .retain(|b, _| !dbs.contains(&format!("branch_{b}")));
+    Ok(dropped)
+}
+
+async fn delete_run(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Value> {
+    if !state.store.run_exists(&id).await? {
+        return Err(ApiError::not_found(format!("there is no run \"{id}\"")));
+    }
+    if run_is_running(&state, &id).await? {
         return Err(ApiError::conflict("the run still has a running branch"));
     }
     detached(async move {
-        let dbs = state.store.delete_run(&id).await?;
-        let mut dropped = 0;
-        for db in &dbs {
-            match state.worlds.drop_db(db).await {
-                Ok(()) => dropped += 1,
-                Err(e) => eprintln!("delete run {id}: could not drop {db}: {e:#}"),
-            }
-        }
-        state
-            .dumps
-            .lock()
-            .unwrap()
-            .retain(|b, _| !dbs.contains(&format!("branch_{b}")));
+        let dropped = delete_run_data(&state, &id).await?;
         Ok(Json(json!({"dropped": dropped})))
     })
     .await
@@ -342,6 +357,102 @@ fn sse_event(name: &str, data: &impl serde::Serialize) -> SseEvent {
         .unwrap_or_else(|_| SseEvent::default().event(name).data("null"))
 }
 
+type SseTx = mpsc::Sender<Result<SseEvent, std::convert::Infallible>>;
+
+/// Feeds one branch's events and final status to an SSE client.
+struct Pump {
+    state: Arc<AppState>,
+    id: String,
+    /// The last event seq sent.
+    last: i64,
+    tx: SseTx,
+}
+
+/// What woke the pump.
+enum Wake {
+    Stop,
+    Tick,
+    Ev(Result<Event, RecvError>),
+}
+
+impl Pump {
+    /// Sends the stored events after `last`; false when the client is gone or the store failed.
+    async fn catch_up(&mut self) -> bool {
+        let Ok(events) = self.state.store.events(&self.id).await else {
+            return false;
+        };
+        let from = self.last;
+        for e in events.into_iter().filter(|e| e.seq > from) {
+            self.last = e.seq;
+            if self.tx.send(Ok(sse_event("event", &e))).await.is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Handles one wake-up; `Some(check_status)` to go on, `None` to stop.
+    async fn on_wake(&mut self, wake: Wake) -> Option<bool> {
+        match wake {
+            Wake::Stop => None,
+            Wake::Tick => Some(true),
+            Wake::Ev(Ok(e)) if e.branch_id == self.id => {
+                if e.seq == self.last + 1 {
+                    self.last = e.seq;
+                    self.tx.send(Ok(sse_event("event", &e))).await.ok()?;
+                } else if e.seq > self.last && !self.catch_up().await {
+                    return None;
+                }
+                Some(false)
+            }
+            Wake::Ev(Ok(_)) => Some(false),
+            Wake::Ev(Err(RecvError::Lagged(_))) => self.catch_up().await.then_some(true),
+            Wake::Ev(Err(RecvError::Closed)) => {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                Some(false)
+            }
+        }
+    }
+
+    /// Sends the final `status` once the branch is no longer running; false to stop.
+    async fn status_check(&mut self) -> bool {
+        let Ok(Some(b)) = self.state.store.find_branch(&self.id).await else {
+            return false;
+        };
+        if b.status == BranchStatus::Running {
+            return true;
+        }
+        // Events written just before the status flipped may not have been seen yet.
+        if self.catch_up().await {
+            let status = json!({"status": b.status, "error": b.error});
+            let _ = self.tx.send(Ok(sse_event("status", &status))).await;
+        }
+        false
+    }
+
+    async fn run(mut self, mut rx: broadcast::Receiver<Event>) {
+        let mut shutdown = self.state.shutdown.subscribe();
+        if *shutdown.borrow() || !self.catch_up().await {
+            return;
+        }
+        // Status is checked on its own timer so other branches' events can't starve it,
+        // and once right away so a finished branch gets its `status` immediately.
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            let wake = tokio::select! {
+                _ = shutdown.changed() => Wake::Stop,
+                _ = tick.tick() => Wake::Tick,
+                got = rx.recv() => Wake::Ev(got),
+            };
+            match self.on_wake(wake).await {
+                None => return,
+                Some(true) if !self.status_check().await => return,
+                Some(_) => {}
+            }
+        }
+    }
+}
+
 async fn stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -350,95 +461,17 @@ async fn stream(
         return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
     }
     // Subscribe before reading the stored events so nothing falls between the two.
-    let mut rx = state.store.subscribe();
-    let (tx, out) = mpsc::channel::<Result<SseEvent, std::convert::Infallible>>(64);
-    tokio::spawn(async move {
-        let mut last = 0i64;
-        // Sends the stored events after `last`; false when the client is gone or the store failed.
-        async fn catch_up(
-            state: &AppState,
-            id: &str,
-            last: &mut i64,
-            tx: &mpsc::Sender<Result<SseEvent, std::convert::Infallible>>,
-        ) -> bool {
-            let Ok(events) = state.store.events(id).await else {
-                return false;
-            };
-            let from = *last;
-            for e in events.into_iter().filter(|e| e.seq > from) {
-                *last = e.seq;
-                if tx.send(Ok(sse_event("event", &e))).await.is_err() {
-                    return false;
-                }
-            }
-            true
+    let rx = state.store.subscribe();
+    let (tx, out) = mpsc::channel(64);
+    tokio::spawn(
+        Pump {
+            state,
+            id,
+            last: 0,
+            tx,
         }
-        let mut shutdown = state.shutdown.subscribe();
-        if *shutdown.borrow() {
-            return;
-        }
-        if !catch_up(&state, &id, &mut last, &tx).await {
-            return;
-        }
-        // Status is checked on its own timer so other branches' events can't starve it,
-        // and once right away so a finished branch gets its `status` immediately.
-        let mut tick = tokio::time::interval(Duration::from_millis(250));
-        loop {
-            enum Wake {
-                Stop,
-                Tick,
-                Ev(Result<Event, RecvError>),
-            }
-            let wake = tokio::select! {
-                _ = shutdown.changed() => Wake::Stop,
-                _ = tick.tick() => Wake::Tick,
-                got = rx.recv() => Wake::Ev(got),
-            };
-            let mut check_status = false;
-            match wake {
-                Wake::Stop => return,
-                Wake::Tick => check_status = true,
-                Wake::Ev(Ok(e)) if e.branch_id == id => {
-                    if e.seq == last + 1 {
-                        last = e.seq;
-                        if tx.send(Ok(sse_event("event", &e))).await.is_err() {
-                            return;
-                        }
-                    } else if e.seq > last && !catch_up(&state, &id, &mut last, &tx).await {
-                        return;
-                    }
-                }
-                Wake::Ev(Ok(_)) => {}
-                Wake::Ev(Err(RecvError::Lagged(_))) => {
-                    if !catch_up(&state, &id, &mut last, &tx).await {
-                        return;
-                    }
-                    check_status = true;
-                }
-                Wake::Ev(Err(RecvError::Closed)) => {
-                    tokio::time::sleep(Duration::from_millis(250)).await
-                }
-            }
-            if check_status {
-                let Ok(Some(b)) = state.store.find_branch(&id).await else {
-                    return;
-                };
-                if b.status != BranchStatus::Running {
-                    // Events written just before the status flipped may not have been seen yet.
-                    if !catch_up(&state, &id, &mut last, &tx).await {
-                        return;
-                    }
-                    let _ = tx
-                        .send(Ok(sse_event(
-                            "status",
-                            &json!({"status": b.status, "error": b.error}),
-                        )))
-                        .await;
-                    return;
-                }
-            }
-        }
-    });
+        .run(rx),
+    );
     let stream =
         futures_util::stream::unfold(out, |mut rx| async { rx.recv().await.map(|x| (x, rx)) });
     Ok(Sse::new(stream)
@@ -472,11 +505,8 @@ fn restore_source(events: &[Event], seq: i64) -> Result<Source, ApiError> {
     })
 }
 
-async fn rows(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(q): Query<HashMap<String, String>>,
-) -> ApiResult<Value> {
+/// The `seq` and `keys` of a rows request; at most `MAX_KEYS` keys, each `<table>/<id>`.
+fn parse_rows_query(q: &HashMap<String, String>) -> Result<(i64, Vec<(String, String)>), ApiError> {
     let seq: i64 = q
         .get("seq")
         .and_then(|s| s.parse().ok())
@@ -501,6 +531,49 @@ async fn rows(
             "at most {MAX_KEYS} keys per request"
         )));
     }
+    Ok((seq, keys))
+}
+
+/// The rows at `keys` in a temporary database restored from `source`, dropped afterwards.
+async fn read_rows_at(
+    state: &AppState,
+    id: &str,
+    source: Source,
+    keys: &[(String, String)],
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let name = format!(
+        "rows_{id}_{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
+    let tmp = state.worlds.new_branch(&name, source).await?;
+    let read = state
+        .worlds
+        .with_client(&tmp, async |c| {
+            let mut out = serde_json::Map::new();
+            for (t, i) in keys {
+                let row = c
+                    .query_opt(&format!("SELECT doc FROM {t} WHERE id = $1"), &[i])
+                    .await?;
+                out.insert(
+                    format!("{t}/{i}"),
+                    row.map(|r| r.get::<_, Value>(0)).unwrap_or(Value::Null),
+                );
+            }
+            Ok(out)
+        })
+        .await;
+    let dropped = state.worlds.drop_db(&tmp).await;
+    let out = read?;
+    dropped?;
+    Ok(out)
+}
+
+async fn rows(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Value> {
+    let (seq, keys) = parse_rows_query(&q)?;
     if state.store.find_branch(&id).await?.is_none() {
         return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
     }
@@ -513,35 +586,7 @@ async fn rows(
     let source = restore_source(&events, seq)?;
     // Create, read and drop run detached, so a client disconnect can't leak the temp database.
     detached(async move {
-        let tmp = state
-            .worlds
-            .new_branch(
-                &format!(
-                    "rows_{id}_{}",
-                    &uuid::Uuid::new_v4().simple().to_string()[..8]
-                ),
-                source,
-            )
-            .await?;
-        let read = state
-            .worlds
-            .with_client(&tmp, async |c| {
-                let mut out = serde_json::Map::new();
-                for (t, i) in &keys {
-                    let row = c
-                        .query_opt(&format!("SELECT doc FROM {t} WHERE id = $1"), &[i])
-                        .await?;
-                    out.insert(
-                        format!("{t}/{i}"),
-                        row.map(|r| r.get::<_, Value>(0)).unwrap_or(Value::Null),
-                    );
-                }
-                Ok(out)
-            })
-            .await;
-        let dropped = state.worlds.drop_db(&tmp).await;
-        let out = read?;
-        dropped?;
+        let out = read_rows_at(&state, &id, source, &keys).await?;
         Ok(Json(json!({"seq": seq, "rows": out})))
     })
     .await
@@ -579,25 +624,22 @@ async fn finished_branch(state: &AppState, id: &str) -> Result<Branch, ApiError>
     Ok(b)
 }
 
-async fn compare_branches(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<HashMap<String, String>>,
-) -> ApiResult<Value> {
-    let (a, b) = match (q.get("a"), q.get("b")) {
-        (Some(a), Some(b)) => (a, b),
-        _ => return Err(ApiError::bad("a and b are required")),
-    };
+/// Every id must name a branch (404), be finished (409) and still have its database (409).
+async fn finished_branches_with_db(
+    state: &AppState,
+    ids: [&String; 2],
+) -> Result<[Branch; 2], ApiError> {
     // Existence first (404), then finished (409).
-    for id in [a, b] {
+    for id in ids {
         if state.store.find_branch(id).await?.is_none() {
             return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
         }
     }
-    let (ba, bb) = (
-        finished_branch(&state, a).await?,
-        finished_branch(&state, b).await?,
-    );
-    for id in [a, b] {
+    let branches = [
+        finished_branch(state, ids[0]).await?,
+        finished_branch(state, ids[1]).await?,
+    ];
+    for id in ids {
         let name = format!("branch_{id}");
         if !state
             .worlds
@@ -611,6 +653,18 @@ async fn compare_branches(
             ));
         }
     }
+    Ok(branches)
+}
+
+async fn compare_branches(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Value> {
+    let (a, b) = match (q.get("a"), q.get("b")) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Err(ApiError::bad("a and b are required")),
+    };
+    let [ba, bb] = finished_branches_with_db(&state, [a, b]).await?;
     let (ea, eb) = (state.store.events(a).await?, state.store.events(b).await?);
     let (da, db) = (final_dump(&state, a).await?, final_dump(&state, b).await?);
     Ok(Json(json!({
