@@ -19,6 +19,8 @@ pub struct Hub {
     registry: Registry,
     bin_dir: PathBuf,
     saves_root: PathBuf,
+    /// Extra environment for command-mode programs (e.g. `ARENA_PG_URL`).
+    env: Vec<(String, String)>,
     slots: Mutex<HashMap<String, Slot>>,
 }
 
@@ -28,8 +30,15 @@ impl Hub {
             registry,
             bin_dir,
             saves_root,
+            env: vec![],
             slots: Mutex::default(),
         }
+    }
+
+    /// Sets environment variables every command-mode program gets, over the passed-through ones.
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> Hub {
+        self.env = env;
+        self
     }
 
     pub fn registry(&self) -> &Registry {
@@ -48,7 +57,8 @@ impl Hub {
             .registry
             .get(name)
             .ok_or_else(|| anyhow!("no package named {name}"))?;
-        let client = Arc::new(Client::spawn(m, &self.bin_dir, &self.saves_root).await?);
+        let client =
+            Arc::new(Client::spawn_with_env(m, &self.bin_dir, &self.saves_root, &self.env).await?);
         slots.insert(
             name.to_string(),
             Slot {

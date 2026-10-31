@@ -209,6 +209,32 @@ async fn command_mode_clears_environment() {
     std::fs::remove_dir_all(&saves).unwrap();
 }
 
+#[tokio::test]
+async fn hub_env_overrides_reach_command_programs() {
+    let (root, saves) = (temp("envover"), temp("envover-saves"));
+    write_pkg(
+        &root,
+        "envo",
+        r#"["sh", "-c", "echo ARENA_PG_URL=$ARENA_PG_URL EXTRA=$EXTRA >&2; exit 1"]"#,
+    );
+    let hub = hub_for(std::slice::from_ref(&root), &saves).with_env(vec![
+        ("ARENA_PG_URL".into(), "postgres://x/y?arena_ns=t_".into()),
+        ("EXTRA".into(), "yes".into()),
+    ]);
+    let c = hub.client("envo").await.unwrap();
+    match c.call::<Value>("describe", json!({})).await {
+        Err(CallError::Stopped(m)) => {
+            assert!(
+                m.contains("ARENA_PG_URL=postgres://x/y?arena_ns=t_ EXTRA=yes"),
+                "{m}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}
+
 fn slow_part(root: &Path) {
     write_pkg(
         root,

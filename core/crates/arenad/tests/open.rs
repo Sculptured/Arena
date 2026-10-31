@@ -1,5 +1,7 @@
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "support/packages.rs"]
+mod packages;
 
 use std::{
     future::Future,
@@ -15,11 +17,12 @@ use arenad::{
     store::Store,
 };
 use fake_upstream::FakeUpstream;
+use packages::TestHub;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 use world::{
     schema::load_base,
-    snapshot::{Source, Worlds},
+    snapshot::Worlds,
     testing::{self, Cleanup},
 };
 
@@ -60,12 +63,13 @@ fn agent(id: &str, prompt: &str) -> AgentSpec {
 struct Fx {
     state: Arc<AppState>,
     ctx: Arc<BranchCtx>,
+    _hub: TestHub,
     _clean: Cleanup,
-    db: String,
 }
 
 async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx {
     let worlds = worlds().await;
+    let hub = TestHub::new(&[]);
     let meta = format!(
         "arena_test_open_{}_{}",
         tag,
@@ -84,39 +88,28 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
         .create_branch(&run_id, None, &team, &json!([]), None)
         .await
         .unwrap();
-    let db = worlds
-        .new_branch(&format!("opentest_{}", branch), Source::Base)
-        .await
-        .unwrap();
+    let world = hub.start_world("retail", &branch).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new(data_dir());
+    let mut config = Config::new();
     config.upstream_base = upstream.base_url.clone();
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, worlds, config));
-    let ctx = Arc::new(BranchCtx::new(
-        branch.clone(),
-        db.clone(),
-        team,
-        "task".into(),
-    ));
+    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
+    let ctx = Arc::new(BranchCtx::new(branch.clone(), world, team, "task".into()));
     state.live.write().unwrap().insert(branch, ctx.clone());
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Fx {
         state,
         ctx,
+        _hub: hub,
         _clean: clean,
-        db,
     }
 }
 
 async fn teardown(fx: Fx) {
-    let Fx { state, db, .. } = fx;
-    let worlds = state.worlds.clone();
-    drop(state);
-    worlds.drop_db(&db).await.unwrap();
+    fx.ctx.world.stop().await;
 }
 
 fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {

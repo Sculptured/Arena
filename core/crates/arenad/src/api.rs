@@ -172,10 +172,16 @@ pub fn on_path(name: &str) -> bool {
 
 async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
     let (databases, bytes) = crate::gc::usage(&state.worlds).await?;
+    let benchmark = match state.bench().await {
+        Ok(b) => json!({"name": b.name, "version": b.version, "tasks": b.tasks.len(),
+                        "world": b.world.iter().map(|p| json!({"part": p.part, "integration": p.integration})).collect::<Vec<_>>()}),
+        Err(e) => json!({"name": state.benchmark, "error": format!("{e:#}")}),
+    };
     Ok(Json(json!({
         "open_available": state.config.open_available(),
         "claude": on_path("claude"),
         "codex": on_path("codex"),
+        "benchmark": benchmark,
         "disk": {"databases": databases, "bytes": bytes, "limit_bytes": state.config.max_db_bytes},
     })))
 }
@@ -236,9 +242,15 @@ async fn delete_run(
     .await
 }
 
+/// The benchmark's tasks: `[{id, reason}]`.
 async fn tasks(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
+    let bench = state.bench().await?;
     Ok(Json(
-        serde_json::to_value(state.tasks()?.demo()).map_err(anyhow::Error::from)?,
+        bench
+            .tasks
+            .iter()
+            .map(|t| json!({"id": t.id, "reason": t.reason}))
+            .collect(),
     ))
 }
 
@@ -260,7 +272,13 @@ struct NewRun {
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let req: NewRun = parse_body(&body)?;
-    if state.tasks()?.get(&req.task_id).is_none() {
+    if !state
+        .bench()
+        .await?
+        .tasks
+        .iter()
+        .any(|t| t.id == req.task_id)
+    {
         return Err(ApiError::not_found(format!("unknown task {}", req.task_id)));
     }
     validate_team(&state, &req.team)?;

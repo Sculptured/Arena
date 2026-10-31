@@ -125,11 +125,22 @@ pub struct ToolCallPayload {
     pub error: Option<String>,
     pub reads: Value,
     pub writes: Value,
+    /// `saves["retail"]` when that part was saved, so the old UIs keep working. Runs recorded
+    /// before integrations have only this (read as `saves: {"retail": snapshot}`).
     pub snapshot: Option<String>,
-    /// Set when the write committed but snapshotting it failed.
+    /// Set when the write committed but saving it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_error: Option<String>,
     pub tool_call_id: Option<String>,
+    /// The world part the tool ran on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+    /// `{part: save}` of the parts saved after this call (None when nothing was saved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saves: Option<std::collections::BTreeMap<String, String>>,
+    /// The world clock when the call ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_ms: Option<i64>,
 }
 
 /// Payload of `EventKind::ModelCall`.
@@ -163,9 +174,14 @@ pub struct HandoffPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckPayload {
     pub passed: bool,
+    /// The gold save (of the first part) the world was compared with.
     pub gold_db: Option<String>,
-    /// Keys (`<table>/<id>`) whose documents differ from the gold database, sorted.
+    /// Keys (`<table>/<id>`) whose documents differ from the gold save, sorted; prefixed
+    /// `part:` when the world has more than one part.
     pub differing_rows: Option<Vec<String>>,
+    /// `{part: save}` of every part's final state, saved before its instance stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_saves: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

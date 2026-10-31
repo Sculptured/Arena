@@ -1,5 +1,7 @@
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "support/packages.rs"]
+mod packages;
 
 use std::{
     collections::HashMap,
@@ -16,9 +18,9 @@ use arenad::{
     model::*,
     runner,
     store::Store,
-    tasks::Tasks,
 };
 use fake_upstream::FakeUpstream;
+use packages::{gold_action_args, TestHub};
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 use world::{
@@ -71,11 +73,13 @@ fn team() -> Team {
 
 struct Fx {
     state: Arc<AppState>,
+    hub: TestHub,
     _clean: Cleanup,
 }
 
 async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     let worlds = worlds().await;
+    let hub = TestHub::new(&[]);
     let meta = format!(
         "arena_test_fork_{}_{}",
         tag,
@@ -86,41 +90,25 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new(data_dir());
+    let mut config = Config::new();
     config.upstream_base = upstream.base_url.clone();
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, worlds, config));
+    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
     let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Fx {
         state,
+        hub,
         _clean: clean,
     }
 }
 
-/// Drops the branches' databases, the snapshots their events name, and the metadata database.
-async fn teardown(fx: Fx, branches: &[&str]) {
-    let worlds = fx.state.worlds.clone();
-    let mut snaps = vec![];
-    for b in branches {
-        for e in fx.state.store.events(b).await.unwrap() {
-            if let Some(s) = e.payload.get("snapshot").and_then(Value::as_str) {
-                snaps.push(s.to_string());
-            }
-        }
-    }
-    snaps.sort();
-    snaps.dedup();
-    for s in snaps {
-        worlds.drop_db(&s).await.unwrap();
-    }
-    for b in branches {
-        worlds.drop_db(&format!("branch_{b}")).await.unwrap();
-    }
-    drop(fx.state);
+/// The test's `Cleanup` drops the metadata database; its `TestHub` the instances and saves.
+async fn teardown(fx: Fx, _branches: &[&str]) {
+    drop(fx);
 }
 
 async fn finished(fx: &Fx, branch: &str) -> Branch {
@@ -175,18 +163,10 @@ fn read_user(id: &str) -> Value {
 }
 
 fn gold_write() -> Value {
-    let tasks = Tasks::load(&data_dir()).unwrap();
-    let t = tasks.get("27").unwrap();
-    let a = t["evaluation_criteria"]["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["name"] == "exchange_delivered_order_items")
-        .unwrap();
     tool_msg(vec![(
         "w1",
         "exchange_delivered_order_items",
-        a["arguments"].clone(),
+        gold_action_args("27", "exchange_delivered_order_items"),
     )])
 }
 
@@ -234,16 +214,16 @@ fn system_prompt(req: &Value) -> String {
         .to_string()
 }
 
+/// The order's status in the branch's final saved world.
 async fn order_status_in(fx: &Fx, branch: &str) -> String {
-    let out = fx
-        .state
-        .worlds
-        .with_client(&format!("branch_{branch}"), async |c| {
-            world::tools::call(c, "get_order_details", &json!({"order_id": ORDER})).await
-        })
-        .await
-        .unwrap();
-    out.result.unwrap()["status"].as_str().unwrap().to_string()
+    let evs = fx.state.store.events(branch).await.unwrap();
+    let check: CheckPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
+    let key = format!("orders/{ORDER}");
+    let docs = fx
+        .hub
+        .inspect_save(&check.final_saves.unwrap()["retail"], &[&key])
+        .await;
+    docs[&key]["doc"]["status"].as_str().unwrap().to_string()
 }
 
 #[test]

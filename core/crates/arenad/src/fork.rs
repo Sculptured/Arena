@@ -3,15 +3,17 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use parts::proto::Mode;
 use serde::Serialize;
 use serde_json::Value;
-use world::snapshot::Source;
 
 use crate::{
     app::AppState,
     exec::BranchCtx,
     model::*,
+    recorded::{run_info, saves_at},
     runner::{self, StartPoint},
+    world::{Saves, World, WorldFrom},
 };
 
 pub const REASON_EARLIER: &str = "a change targets an agent that finished earlier";
@@ -25,13 +27,6 @@ pub const REASON_LAST_MODEL_CALL: &str =
 pub const REASON_NO_MODEL_CALL: &str =
     "the agent made no model call to resume from, so it restarts from its start";
 
-/// Where the new branch's database is copied from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Restore {
-    Base,
-    Snapshot(String),
-}
-
 /// Where a fork actually starts, and what it carries over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForkPlan {
@@ -41,7 +36,8 @@ pub struct ForkPlan {
     /// Why the fork point moved (None when it didn't).
     pub reason: Option<String>,
     pub agent_index: usize,
-    pub restore: Restore,
+    /// Per part, the save the new branch's world starts from.
+    pub restore: Saves,
     pub resume: Option<Vec<Value>>,
     /// Recorded handoff notes of the agents before `agent_index`, in chain order.
     pub notes: Vec<String>,
@@ -57,7 +53,7 @@ pub enum ForkError {
     UnknownAgent(String),
     /// The source branch is still running.
     BranchRunning,
-    /// A successful write at `seq` has no snapshot, so the world before the fork point
+    /// A successful write at `seq` has no save, so the world before the fork point
     /// can't be restored exactly.
     NoRestorePoint { seq: i64 },
     /// An agent before the fork point has no recorded handoff note.
@@ -234,20 +230,9 @@ pub fn plan_fork(
         resume = None;
     }
 
-    // 5. The world just before `start_seq`: the snapshot of the last write before it.
-    let mut restore = Ok(Restore::Base);
-    for e in events
-        .iter()
-        .filter(|e| e.seq < start_seq && e.kind == EventKind::ToolCall)
-    {
-        let p = &e.payload;
-        if let Some(s) = p["snapshot"].as_str() {
-            restore = Ok(Restore::Snapshot(s.to_string()));
-        } else if p["error"].is_null() && p["writes"].as_array().is_some_and(|w| !w.is_empty()) {
-            restore = Err(ForkError::NoRestorePoint { seq: e.seq });
-        }
-    }
-    let restore = restore?;
+    // 5. The world just before `start_seq`: per part, the save of its last write before it.
+    let restore = saves_at(events, start_seq - 1, &run_info(events).base)
+        .map_err(|n| ForkError::NoRestorePoint { seq: n.seq })?;
 
     // 6. The recorded handoff notes of the agents before `a`.
     let notes = team.agents[..a]
@@ -313,77 +298,123 @@ pub async fn fork(
     at_seq: i64,
     changes: HashMap<String, Change>,
 ) -> Result<ForkResponse, ForkError> {
-    let parent = state
-        .store
-        .find_branch(branch_id)
-        .await?
-        .ok_or_else(|| ForkError::UnknownBranch(branch_id.to_string()))?;
-    if parent.status == BranchStatus::Running {
-        return Err(ForkError::BranchRunning);
-    }
+    let parent = finished_branch(state, branch_id).await?;
     let events = state.store.events(branch_id).await?;
     let plan = plan_fork(&events, &parent.team, at_seq, &changes)?;
-    let task_id = match events
+    let task_id = task_of(state, &events, &parent).await?;
+    let team = apply_changes(&parent.team, &changes);
+    let new_id = create_child(state, &parent, &plan, &team, &changes).await?;
+    let started = start_world(state, &events, branch_id, &new_id, &plan).await;
+    let world = runner::setup_or_infra_error(state, &new_id, started)
+        .await
+        .map_err(ForkError::Internal)?;
+    let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id);
+    Ok(spawn_child(state, ctx, plan))
+}
+
+/// Runs the new branch from the plan's start point; the response names where it started.
+fn spawn_child(state: &Arc<AppState>, ctx: BranchCtx, plan: ForkPlan) -> ForkResponse {
+    let ForkPlan {
+        start_seq,
+        moved_from,
+        reason,
+        agent_index,
+        resume,
+        notes,
+        ..
+    } = plan;
+    let branch_id = ctx.branch_id.clone();
+    runner::spawn_branch(
+        state,
+        Arc::new(ctx),
+        StartPoint {
+            agent_index,
+            resume,
+            notes,
+        },
+    );
+    ForkResponse {
+        branch_id,
+        start_seq,
+        moved_from,
+        reason,
+    }
+}
+
+/// The branch to fork: it must exist and have finished.
+async fn finished_branch(state: &AppState, branch_id: &str) -> Result<Branch, ForkError> {
+    match state.store.find_branch(branch_id).await? {
+        None => Err(ForkError::UnknownBranch(branch_id.to_string())),
+        Some(b) if b.status == BranchStatus::Running => Err(ForkError::BranchRunning),
+        Some(b) => Ok(b),
+    }
+}
+
+/// Records the new branch: the parent's run, the fork point, the effective team and the changes.
+async fn create_child(
+    state: &AppState,
+    parent: &Branch,
+    plan: &ForkPlan,
+    team: &Team,
+    changes: &HashMap<String, Change>,
+) -> anyhow::Result<String> {
+    let changes_json = serde_json::to_value(changes)?;
+    let from = Some((parent.id.as_str(), plan.start_seq));
+    state
+        .store
+        .create_branch(
+            &parent.run_id,
+            from,
+            team,
+            &changes_json,
+            plan.reason.clone(),
+        )
+        .await
+}
+
+/// The task of the run: from `RunStart`, else from the run row.
+async fn task_of(state: &AppState, events: &[Event], parent: &Branch) -> anyhow::Result<String> {
+    if let Some(t) = events
         .iter()
         .find(|e| e.kind == EventKind::RunStart)
         .and_then(|e| e.payload["task_id"].as_str())
     {
-        Some(t) => t.to_string(),
-        None => state
-            .store
-            .runs()
-            .await?
-            .into_iter()
-            .find(|r| r.id == parent.run_id)
-            .map(|r| r.task_id)
-            .ok_or_else(|| anyhow::anyhow!("no run {} for branch {branch_id}", parent.run_id))?,
-    };
-    let team = apply_changes(&parent.team, &changes);
-    let changes_json = serde_json::to_value(&changes).map_err(anyhow::Error::from)?;
-    let new_id = state
+        return Ok(t.to_string());
+    }
+    let runs = state.store.runs().await?;
+    let run = runs.into_iter().find(|r| r.id == parent.run_id);
+    run.map(|r| r.task_id)
+        .ok_or_else(|| anyhow::anyhow!("no run {} for branch {}", parent.run_id, parent.id))
+}
+
+/// Copies the parent's events before the fork point and starts the new branch's world from the
+/// plan's saves, with the run's benchmark and seed.
+async fn start_world(
+    state: &AppState,
+    events: &[Event],
+    parent: &str,
+    new_id: &str,
+    plan: &ForkPlan,
+) -> anyhow::Result<World> {
+    state
         .store
-        .create_branch(
-            &parent.run_id,
-            Some((branch_id, plan.start_seq)),
-            &team,
-            &changes_json,
-            plan.reason.clone(),
-        )
+        .copy_prefix(parent, new_id, plan.start_seq)
         .await?;
-    let setup = async {
-        state
-            .store
-            .copy_prefix(branch_id, &new_id, plan.start_seq)
-            .await?;
-        let source = match &plan.restore {
-            Restore::Base => Source::Base,
-            Restore::Snapshot(s) => Source::Snapshot(s.clone()),
-        };
-        state.worlds.new_branch(&new_id, source).await
-    };
-    let db = match setup.await {
-        Ok(db) => db,
-        Err(e) => {
-            let _ = state
-                .store
-                .set_status(&new_id, BranchStatus::InfraError, Some(format!("{e:#}")))
-                .await;
-            return Err(ForkError::Internal(e));
-        }
-    };
-    let ctx = Arc::new(BranchCtx::new(new_id.clone(), db, team, task_id));
-    let from = StartPoint {
-        agent_index: plan.agent_index,
-        resume: plan.resume,
-        notes: plan.notes,
-    };
-    runner::spawn_branch(state, ctx, from);
-    Ok(ForkResponse {
-        branch_id: new_id,
-        start_seq: plan.start_seq,
-        moved_from: plan.moved_from,
-        reason: plan.reason,
-    })
+    let run = run_info(events);
+    let bench = state.hub.bench_describe(&run.benchmark).await?;
+    let from = plan
+        .restore
+        .iter()
+        .map(|(p, s)| (p.clone(), (s.clone(), Mode::Exact)))
+        .collect();
+    World::start(
+        state.hub.clone(),
+        &bench,
+        new_id,
+        run.seed,
+        WorldFrom::Saves(from),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -482,6 +513,14 @@ mod tests {
         ]
     }
 
+    fn base() -> Saves {
+        [("retail".to_string(), "world_base".to_string())].into()
+    }
+
+    fn snap(s: &str) -> Saves {
+        [("retail".to_string(), s.to_string())].into()
+    }
+
     fn no_changes() -> HashMap<String, Change> {
         HashMap::new()
     }
@@ -501,7 +540,7 @@ mod tests {
         );
         assert_eq!(p.agent_index, 1);
         assert_eq!(p.resume, None);
-        assert_eq!(p.restore, Restore::Base);
+        assert_eq!(p.restore, base());
         assert_eq!(p.notes, vec!["N1".to_string()]);
     }
 
@@ -516,7 +555,7 @@ mod tests {
         );
         assert_eq!(p.agent_index, 1);
         assert_eq!(p.resume, Some(msgs("m11")));
-        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.restore, snap("snap_a"));
         assert_eq!(p.notes, vec!["N1".to_string()]);
     }
 
@@ -528,7 +567,7 @@ mod tests {
         assert_eq!(p.reason, None);
         assert_eq!(p.agent_index, 1);
         assert_eq!(p.resume, Some(msgs("m11")));
-        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.restore, snap("snap_a"));
         // A prompt change to the active agent doesn't move the fork point.
         let c = change(
             "resolver",
@@ -559,7 +598,7 @@ mod tests {
         );
         assert_eq!(p.agent_index, 0);
         assert_eq!(p.resume, None);
-        assert_eq!(p.restore, Restore::Base);
+        assert_eq!(p.restore, base());
         assert!(p.notes.is_empty());
     }
 
@@ -578,7 +617,7 @@ mod tests {
         assert_eq!(p.reason.as_deref(), Some("the agent's mode changes"));
         assert_eq!(p.agent_index, 1);
         assert_eq!(p.resume, None);
-        assert_eq!(p.restore, Restore::Base);
+        assert_eq!(p.restore, base());
         assert_eq!(p.notes, vec!["N1".to_string()]);
     }
 
@@ -586,12 +625,12 @@ mod tests {
     fn restore_is_last_snapshot_before_start() {
         let t = team(AgentKind::Open);
         let at = |seq| plan_fork(&events(), &t, seq, &no_changes()).unwrap();
-        assert_eq!(at(13).restore, Restore::Snapshot("snap_b".into()));
-        assert_eq!(at(12).restore, Restore::Snapshot("snap_a".into())); // moved to 11
-        assert_eq!(at(11).restore, Restore::Snapshot("snap_a".into()));
-        assert_eq!(at(10).restore, Restore::Base); // moved to 9
-        assert_eq!(at(9).restore, Restore::Base);
-        assert_eq!(at(3).restore, Restore::Base);
+        assert_eq!(at(13).restore, snap("snap_b"));
+        assert_eq!(at(12).restore, snap("snap_a")); // moved to 11
+        assert_eq!(at(11).restore, snap("snap_a"));
+        assert_eq!(at(10).restore, base()); // moved to 9
+        assert_eq!(at(9).restore, base());
+        assert_eq!(at(3).restore, base());
     }
 
     #[test]
@@ -602,12 +641,12 @@ mod tests {
         assert!(matches!(e, ForkError::NoRestorePoint { seq: 12 }), "{e:?}");
         // Before the unsnapshotted write, the earlier snapshot is exact.
         let p = plan_fork(&evs, &team(AgentKind::Open), 11, &no_changes()).unwrap();
-        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.restore, snap("snap_a"));
         // A later snapshot is a full copy, so it is exact past an earlier unsnapshotted write.
         let mut evs = events();
         evs[9] = write(10, "resolver", None);
         let p = plan_fork(&evs, &team(AgentKind::Open), 13, &no_changes()).unwrap();
-        assert_eq!(p.restore, Restore::Snapshot("snap_b".into()));
+        assert_eq!(p.restore, snap("snap_b"));
     }
 
     #[test]
@@ -634,13 +673,10 @@ mod tests {
             (12, Some(13), 1)
         );
         assert_eq!(p.resume, Some(msgs("m12")));
-        assert_eq!(p.restore, Restore::Snapshot("snap_a".into()));
+        assert_eq!(p.restore, snap("snap_a"));
         assert_eq!(p.notes, vec!["N1".to_string()]);
         let p = plan_fork(&evs, &t, 14, &no_changes()).unwrap();
-        assert_eq!(
-            (p.start_seq, p.restore),
-            (14, Restore::Snapshot("snap_c".into()))
-        );
+        assert_eq!((p.start_seq, p.restore), (14, snap("snap_c")));
         // Restarting the agent goes to its real (first) start, before any of its writes.
         let c = change(
             "resolver",
@@ -650,7 +686,7 @@ mod tests {
             },
         );
         let p = plan_fork(&evs, &t, 13, &c).unwrap();
-        assert_eq!((p.start_seq, p.resume, p.restore), (8, None, Restore::Base));
+        assert_eq!((p.start_seq, p.resume, p.restore), (8, None, base()));
         // Forking at the resumed AgentStart restarts the agent from its first start.
         let p = plan_fork(&evs, &t, 11, &no_changes()).unwrap();
         assert_eq!((p.start_seq, p.moved_from, p.resume), (8, Some(11), None));
@@ -691,7 +727,7 @@ mod tests {
         let p = plan_fork(&events(), &t, 15, &no_changes()).unwrap();
         assert_eq!(
             (p.start_seq, p.agent_index, p.restore),
-            (13, 1, Restore::Snapshot("snap_b".into()))
+            (13, 1, snap("snap_b"))
         );
     }
 
@@ -714,7 +750,7 @@ mod tests {
                 "at {at}"
             );
             assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
-            assert_eq!((p.resume, p.restore), (None, Restore::Base));
+            assert_eq!((p.resume, p.restore), (None, base()));
             assert_eq!(p.notes, vec!["N1".to_string()]);
         }
         // Changes to both: the earliest finished one wins.

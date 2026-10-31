@@ -10,14 +10,15 @@ use arenad::{
     exec::BranchCtx,
     model::*,
     store::Store,
+    world::World,
 };
+use parts::{Hub, Registry};
 use serde_json::json;
 use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::{Source, Worlds},
-    testing,
-};
+use world::{schema::load_base, snapshot::Worlds, testing};
+
+#[path = "support/packages.rs"]
+mod packages;
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
@@ -170,7 +171,14 @@ fn bare_run(resume: Option<Vec<serde_json::Value>>) -> AgentRun {
     AgentRun {
         branch: Arc::new(BranchCtx::new(
             "b1".into(),
-            "db".into(),
+            Arc::new(World::empty(
+                Arc::new(Hub::new(
+                    Registry::default(),
+                    PathBuf::new(),
+                    PathBuf::new(),
+                )),
+                "retail",
+            )),
             team,
             "task".into(),
         )),
@@ -241,7 +249,17 @@ fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
 }
 
-async fn live_setup(tag: &str) -> (Arc<Store>, Arc<Worlds>, String, String, String, String) {
+async fn live_setup(
+    tag: &str,
+) -> (
+    Arc<Store>,
+    Arc<Worlds>,
+    String,
+    String,
+    Arc<World>,
+    String,
+    packages::TestHub,
+) {
     let worlds = WORLDS
         .get_or_init(|| async {
             let w = Worlds::new(testing::admin());
@@ -273,26 +291,29 @@ async fn live_setup(tag: &str) -> (Arc<Store>, Arc<Worlds>, String, String, Stri
         .create_branch(&run_id, None, &team, &json!([]), None)
         .await
         .unwrap();
-    let db = worlds
-        .new_branch(&format!("clitest_{}", branch), Source::Base)
-        .await
-        .unwrap();
+    let hub = packages::TestHub::new(&[]);
+    let world = hub.start_world("retail", &branch).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
-    let mut cfg = Config::new(data_dir());
+    let mut cfg = Config::new();
     cfg.self_base = base.clone();
-    let state = Arc::new(AppState::new(store.clone(), worlds.clone(), cfg));
+    let state = Arc::new(AppState::new(
+        store.clone(),
+        worlds.clone(),
+        hub.hub.clone(),
+        cfg,
+    ));
     state.live.write().unwrap().insert(
         branch.clone(),
         Arc::new(BranchCtx::new(
             branch.clone(),
-            db.clone(),
+            world.clone(),
             team,
             "task".into(),
         )),
     );
     tokio::spawn(async move { axum::serve(listener, app::router(state)).await.unwrap() });
-    (store, worlds, meta, branch, db, base)
+    (store, worlds, meta, branch, world, base, hub)
 }
 
 async fn live(tag: &str, mk: impl FnOnce(String) -> Box<dyn Driver>) {
@@ -305,7 +326,7 @@ async fn live_with(
     input: &str,
     want_calls: usize,
 ) {
-    let (store, worlds, meta, branch, db, base) = live_setup(tag).await;
+    let (store, worlds, meta, branch, world, base, _hub) = live_setup(tag).await;
     let driver = mk(base);
     let team = Team {
         id: "t".into(),
@@ -314,7 +335,7 @@ async fn live_with(
     };
     let ctx = Arc::new(BranchCtx::new(
         branch.clone(),
-        db.clone(),
+        world.clone(),
         team,
         "task".into(),
     ));
@@ -338,7 +359,7 @@ async fn live_with(
         println!("EVENT: {:?} {:?} {}", e.kind, e.agent, e.payload);
     }
     drop(store);
-    worlds.drop_db(&db).await.unwrap();
+    world.stop().await;
     worlds.admin().drop_db(&meta).await.unwrap();
     assert!(r.ok, "{:?}", r.error);
     let calls: Vec<_> = evs
@@ -366,7 +387,7 @@ const PROBE: &str = "Do two things and report raw results. (1) List the exact na
 #[ignore]
 fn live_codex_isolation_probe() {
     run(async {
-        let (store, worlds, meta, branch, db, base) = live_setup("probe").await;
+        let (store, worlds, meta, branch, world, base, _hub) = live_setup("probe").await;
         let sp = AgentSpec {
             id: "triage".into(),
             name: "t".into(),
@@ -393,7 +414,7 @@ fn live_codex_isolation_probe() {
             .unwrap_or_default();
         println!("ANSWER:\n{answer}");
         drop(store);
-        worlds.drop_db(&db).await.unwrap();
+        world.stop().await;
         worlds.admin().drop_db(&meta).await.unwrap();
         for bad in [
             "codex_apps",

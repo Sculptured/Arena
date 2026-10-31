@@ -8,11 +8,10 @@ use axum::{
     Json, Router,
 };
 use serde_json::{json, Value};
-use world::tools;
 
 use crate::{
     app::AppState,
-    exec::{handoff_schema, BranchCtx, ToolExec},
+    exec::{tool_schemas, BranchCtx, ToolExec},
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -55,17 +54,14 @@ async fn handle(
             json!({
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "arena-retail", "version": "0.1.0"},
+                "serverInfo": {"name": format!("arena-{}", ctx.world.bench()), "version": "0.1.0"},
             }),
         ),
         "ping" => ok(id, json!({})),
-        "tools/list" => {
-            let mut list = tools::tool_schemas();
-            if !ctx.is_last(&agent) {
-                list.push(handoff_schema());
-            }
-            ok(id, json!({"tools": list}))
-        }
+        "tools/list" => ok(
+            id,
+            json!({"tools": tool_schemas(&ctx.world, !ctx.is_last(&agent))}),
+        ),
         "tools/call" => {
             let name = params
                 .get("name")
@@ -76,7 +72,7 @@ async fn handle(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let exec = ToolExec::new(state.store.clone(), state.worlds.clone());
+            let exec = ToolExec::new(state.store.clone());
             // A missing name is just an unknown tool: it is recorded like any bad call.
             let res = exec
                 .run_outcome(&ctx, &agent, &name, args, Some(id_string(&id)))

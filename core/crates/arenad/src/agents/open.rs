@@ -6,12 +6,12 @@ use std::{
 };
 
 use serde_json::{json, Value};
-use world::tools;
 
 use super::{AgentResult, AgentRun, Driver, FailureKind};
 use crate::{
     app::AppState,
-    exec::{handoff_schema, ToolExec},
+    exec::{tool_schemas, ToolExec},
+    world::World,
 };
 
 pub const MAX_MODEL_CALLS: usize = 40;
@@ -49,12 +49,8 @@ impl OpenDriver {
     }
 }
 
-fn openai_tools(allow_handoff: bool) -> Vec<Value> {
-    let mut schemas = tools::tool_schemas();
-    if allow_handoff {
-        schemas.push(handoff_schema());
-    }
-    schemas
+fn openai_tools(world: &World, allow_handoff: bool) -> Vec<Value> {
+    tool_schemas(world, allow_handoff)
         .into_iter()
         .map(|s| {
             json!({"type": "function", "function": {
@@ -117,9 +113,9 @@ impl OpenDriver {
             run.branch.branch_id,
             agent
         );
-        let tools = openai_tools(!run.branch.is_last(agent));
+        let tools = openai_tools(&run.branch.world, !run.branch.is_last(agent));
         let mut messages = initial_messages(run);
-        let exec = ToolExec::new(state.store.clone(), state.worlds.clone());
+        let exec = ToolExec::new(state.store.clone());
         let http = &state.http;
         for _ in 0..MAX_MODEL_CALLS {
             let mut body = json!({"messages": messages, "tools": tools});
@@ -192,6 +188,10 @@ impl OpenDriver {
                 messages.push(json!({"role": "tool", "tool_call_id": id, "content": content}));
                 if name == "handoff" && res.is_ok() {
                     return Ok(());
+                }
+                // A world program stopped: the branch can't go on.
+                if let Some(f) = run.branch.fatal() {
+                    return Err(Fault::Infra(f));
                 }
             }
         }

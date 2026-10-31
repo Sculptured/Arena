@@ -1,9 +1,17 @@
-//! The arena service. Run it from `arena/core` (`cargo run -p arenad`): `ARENA_DATA` defaults to
-//! `../data/retail`, relative to the current directory.
+//! The arena service (`cargo run -p arenad` from `arena/core`).
 //!
-//! Environment: `ARENA_PG_URL`, `ARENA_DATA`, `ARENA_PORT` (4510), `OPENROUTER_API_KEY`,
+//! Environment: `ARENA_PG_URL`, `ARENA_PORT` (4510), `OPENROUTER_API_KEY`,
 //! `ARENA_UI_DIST` (serve the built UI at `/`),
-//! `ARENA_MAX_DB_BYTES` (default 5 GiB: new runs and forks are refused above it).
+//! `ARENA_MAX_DB_BYTES` (default 5 GiB: new runs and forks are refused above it),
+//! `ARENA_BENCHMARK` (default `retail`), and where the parts are:
+//! - `ARENA_PACKAGES`: `:`-separated folders whose subfolders hold `arena-package.toml`
+//!   (default `<arena>/integrations:<arena>/benchmarks`);
+//! - `ARENA_BIN_DIR`: substituted for `${ARENA_BIN_DIR}` in package commands
+//!   (default `<arena>/core/target/release`; build with `cargo build --release` in `<arena>`);
+//! - `ARENA_SAVES`: save storage (default `<arena>/core/saves`).
+//!
+//! `<arena>` is the folder above `core`, fixed when arenad is built (from `CARGO_MANIFEST_DIR`,
+//! which is `<arena>/core/crates/arenad`), so the defaults hold wherever arenad is started from.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -11,7 +19,48 @@ use arenad::{
     app::{self, AppState, Config},
     store::Store,
 };
+use parts::{Hub, Registry};
 use world::{pg::Admin, snapshot::Worlds};
+
+fn arena_dir() -> PathBuf {
+    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    here.canonicalize().unwrap_or(here)
+}
+
+fn env_path(key: &str, default: PathBuf) -> PathBuf {
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default)
+}
+
+/// The hub over `ARENA_PACKAGES`, `ARENA_BIN_DIR` and `ARENA_SAVES`; programs get `ARENA_PG_URL`.
+fn hub(pg_url: &str) -> anyhow::Result<Hub> {
+    let arena = arena_dir();
+    let roots: Vec<PathBuf> = match std::env::var("ARENA_PACKAGES") {
+        Ok(p) if !p.is_empty() => std::env::split_paths(&p).collect(),
+        _ => vec![arena.join("integrations"), arena.join("benchmarks")],
+    };
+    let bin_dir = env_path("ARENA_BIN_DIR", arena.join("core/target/release"));
+    let saves = env_path("ARENA_SAVES", arena.join("core/saves"));
+    std::fs::create_dir_all(&saves)?;
+    let registry = Registry::scan(&roots)?;
+    Ok(Hub::new(registry, bin_dir, saves)
+        .with_env(vec![("ARENA_PG_URL".into(), pg_url.to_string())]))
+}
+
+/// The store, the old worlds (after the startup sweep of orphans) and the hub.
+async fn app_state(url: &str, port: u16) -> anyhow::Result<Arc<AppState>> {
+    let admin = Admin::connect(url).await?;
+    let store = Arc::new(Store::open(&admin).await?);
+    let worlds = Arc::new(Worlds::new(admin));
+    // Before anything can create a database: drop orphans from crashes and aborted tests.
+    arenad::gc::run_startup_gc(&store, &worlds).await?;
+    let hub = Arc::new(hub(url)?);
+    let mut config = Config::new();
+    config.self_base = format!("http://127.0.0.1:{port}");
+    Ok(Arc::new(AppState::new(store, worlds, hub, config)))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,23 +72,17 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("ARENA_PORT {p:?} is not a port number"))?,
         Err(_) => 4510,
     };
-    let data_dir =
-        PathBuf::from(std::env::var("ARENA_DATA").unwrap_or_else(|_| "../data/retail".to_string()));
     let ui_dist = std::env::var("ARENA_UI_DIST")
         .ok()
         .filter(|p| !p.is_empty())
         .map(PathBuf::from);
 
-    let admin = Admin::connect(&url).await?;
-    let store = Arc::new(Store::open(&admin).await?);
-    world::schema::load_base(&admin, &data_dir).await?;
-    let worlds = Arc::new(Worlds::new(admin));
-    // Before anything can create a database: drop orphans from crashes and aborted tests.
-    arenad::gc::run_startup_gc(&store, &worlds).await?;
-    let mut config = Config::new(data_dir);
-    config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, worlds, config));
-    state.tasks()?; // fail at startup if the task data is missing
+    let state = app_state(&url, port).await?;
+    // Fail at startup if the benchmark can't be described (package missing or not built).
+    let bench = state
+        .bench()
+        .await
+        .map_err(|e| anyhow::anyhow!("benchmark {}: {e:#}", state.benchmark))?;
     app::install_default_drivers(&state);
 
     let mut router = app::router(state.clone());
@@ -54,7 +97,9 @@ async fn main() -> anyhow::Result<()> {
     ];
     let modes: Vec<&str> = modes.iter().filter(|m| m.1).map(|m| m.0).collect();
     println!(
-        "arenad: listening on http://127.0.0.1:{port} (modes: {}; ui: {})",
+        "arenad: listening on http://127.0.0.1:{port} (benchmark: {} {}; modes: {}; ui: {})",
+        bench.name,
+        bench.version,
         modes.join(", "),
         ui_dist.map_or("api only".to_string(), |d| d.display().to_string())
     );

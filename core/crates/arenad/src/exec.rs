@@ -1,30 +1,37 @@
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
 use serde_json::{json, Value};
-use world::{snapshot::Worlds, tools};
 
-use crate::{model::*, store::Store};
+use crate::{
+    model::*,
+    recorded::LEGACY_PART,
+    store::Store,
+    world::{Called, Saves, World, WorldError},
+};
 
-/// One running branch: its database, team and per-agent handoff notes.
+/// One running branch: its world, team and per-agent handoff notes.
 pub struct BranchCtx {
     pub branch_id: String,
-    pub db: String,
+    pub world: Arc<World>,
     pub team: Team,
     pub task_id: String,
     /// agent id -> handoff note, set once the agent has called `handoff`.
     pub handoffs: Mutex<HashMap<String, String>>,
-    /// Held across every tool call so DB order, snapshots and event order agree.
+    /// Set when a program of the world has stopped: the branch ends `infra_error` with it.
+    fatal: Mutex<Option<String>>,
+    /// Held across every tool call so world order, saves and event order agree.
     gate: tokio::sync::Mutex<()>,
 }
 
 impl BranchCtx {
-    pub fn new(branch_id: String, db: String, team: Team, task_id: String) -> BranchCtx {
+    pub fn new(branch_id: String, world: Arc<World>, team: Team, task_id: String) -> BranchCtx {
         BranchCtx {
             branch_id,
-            db,
+            world,
             team,
             task_id,
             handoffs: Mutex::new(HashMap::new()),
+            fatal: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
         }
     }
@@ -40,12 +47,23 @@ impl BranchCtx {
     pub fn handoff_note(&self, agent: &str) -> Option<String> {
         self.handoffs.lock().unwrap().get(agent).cloned()
     }
+
+    /// Why the branch can't go on (a world program stopped), once that has happened.
+    pub fn fatal(&self) -> Option<String> {
+        self.fatal.lock().unwrap().clone()
+    }
+
+    fn set_fatal(&self, msg: &str) {
+        self.fatal
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| msg.to_string());
+    }
 }
 
-/// The single place where tool calls are executed, recorded and snapshotted.
+/// The single place where tool calls are executed, recorded and saved.
 pub struct ToolExec {
     pub store: Arc<Store>,
-    pub worlds: Arc<Worlds>,
 }
 
 pub fn handoff_schema() -> Value {
@@ -56,9 +74,129 @@ pub fn handoff_schema() -> Value {
                            "required": ["note"]}})
 }
 
+/// The world's tools in MCP shape (`name`, `description`, `inputSchema`), plus `handoff` when asked.
+pub fn tool_schemas(world: &World, with_handoff: bool) -> Vec<Value> {
+    let mut list: Vec<Value> = world
+        .tools()
+        .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
+        .collect();
+    if with_handoff {
+        list.push(handoff_schema());
+    }
+    list
+}
+
+/// What running a tool call left to record besides its outcome.
+#[derive(Default)]
+struct CallFacts {
+    part: Option<String>,
+    reads: Vec<String>,
+    writes: Vec<String>,
+    saves: Option<Saves>,
+    save_error: Option<String>,
+    clock_ms: Option<i64>,
+}
+
+fn tool_call_payload(
+    name: &str,
+    args: Value,
+    outcome: &Result<Value, String>,
+    tool_call_id: Option<String>,
+    f: CallFacts,
+) -> ToolCallPayload {
+    ToolCallPayload {
+        name: name.to_string(),
+        args,
+        result: outcome.as_ref().ok().cloned().unwrap_or(Value::Null),
+        error: outcome.as_ref().err().cloned(),
+        reads: json!(f.reads),
+        writes: json!(f.writes),
+        snapshot: f.saves.as_ref().and_then(|s| s.get(LEGACY_PART).cloned()),
+        snapshot_error: f.save_error,
+        tool_call_id,
+        part: f.part,
+        saves: f.saves,
+        clock_ms: f.clock_ms,
+    }
+}
+
+/// Runs a tool call on the branch's world (refusing writes to all but the last agent), and saves
+/// what it wrote.
+async fn execute(
+    branch: &BranchCtx,
+    agent: &str,
+    name: &str,
+    args: &Value,
+) -> (Result<Value, String>, CallFacts) {
+    let world = &branch.world;
+    let mut facts = CallFacts::default();
+    if let Some(f) = branch.fatal() {
+        return (Err(f), facts);
+    }
+    if world.is_write(name) && !branch.is_last(agent) {
+        return (
+            Err("Write tools are not available to this agent".to_string()),
+            facts,
+        );
+    }
+    let clock = world.clock_ms();
+    facts.clock_ms = Some(clock);
+    let Called { output, part } = match world.call_tool(name, args.clone(), clock).await {
+        Ok(c) => c,
+        Err(e) => return (Err(failure(branch, e)), facts),
+    };
+    (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
+    if let Some(e) = output.error {
+        return (Err(e), facts);
+    }
+    if !facts.writes.is_empty() {
+        save_write(branch, &mut facts).await;
+    }
+    (Ok(output.result.unwrap_or(Value::Null)), facts)
+}
+
+/// Saves the part a committed write changed; a failed save is recorded, the call still succeeds.
+async fn save_write(branch: &BranchCtx, facts: &mut CallFacts) {
+    match branch.world.save_changed(facts.part.as_deref()).await {
+        Ok(s) => facts.saves = (!s.is_empty()).then_some(s),
+        Err(e) => facts.save_error = Some(failure(branch, e)),
+    }
+}
+
+/// The message of a failed world call; a stopped program also ends the branch.
+fn failure(branch: &BranchCtx, e: WorldError) -> String {
+    if e.fatal {
+        branch.set_fatal(&e.message);
+        e.message
+    } else {
+        format!("internal error: {e}")
+    }
+}
+
+/// Records `agent`'s handoff note, or says why it can't.
+fn take_handoff(branch: &BranchCtx, agent: &str, args: &Value) -> Result<String, String> {
+    let note = args
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if branch.is_last(agent) {
+        return Err("handoff is not available to the last agent".to_string());
+    }
+    if note.is_empty() {
+        return Err("handoff() requires a non-empty 'note' string".to_string());
+    }
+    let mut h = branch.handoffs.lock().unwrap();
+    if h.contains_key(agent) {
+        return Err("handoff already sent".to_string());
+    }
+    h.insert(agent.to_string(), note.to_string());
+    Ok(note.to_string())
+}
+
 impl ToolExec {
-    pub fn new(store: Arc<Store>, worlds: Arc<Worlds>) -> ToolExec {
-        ToolExec { store, worlds }
+    pub fn new(store: Arc<Store>) -> ToolExec {
+        ToolExec { store }
     }
 
     /// The JSON given back to the agent: the result, or `{"error": msg}`.
@@ -92,49 +230,8 @@ impl ToolExec {
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }
-        let last = branch.is_last(agent);
-        let mut snapshot = None;
-        let mut snapshot_error = None;
-        let mut reads = vec![];
-        let mut writes = vec![];
-        let outcome: Result<Value, String> = if tools::WRITE_TOOLS.contains(&name) && !last {
-            Err("Write tools are not available to this agent".to_string())
-        } else {
-            match self
-                .worlds
-                .with_client(&branch.db, async |c| tools::call(c, name, &args).await)
-                .await
-            {
-                Err(e) => Err(format!("internal error: {e:#}")),
-                Ok(o) => {
-                    reads = o.reads;
-                    writes = o.writes;
-                    match o.error {
-                        Some(e) => Err(e),
-                        None => {
-                            if !writes.is_empty() {
-                                match self.worlds.snapshot(&branch.db).await {
-                                    Ok(s) => snapshot = Some(s),
-                                    Err(e) => snapshot_error = Some(format!("{e:#}")),
-                                }
-                            }
-                            Ok(o.result.unwrap_or(Value::Null))
-                        }
-                    }
-                }
-            }
-        };
-        let payload = ToolCallPayload {
-            name: name.to_string(),
-            args,
-            result: outcome.as_ref().ok().cloned().unwrap_or(Value::Null),
-            error: outcome.as_ref().err().cloned(),
-            reads: json!(reads),
-            writes: json!(writes),
-            snapshot,
-            snapshot_error,
-            tool_call_id,
-        };
+        let (outcome, facts) = execute(branch, agent, name, &args).await;
+        let payload = tool_call_payload(name, args, &outcome, tool_call_id, facts);
         self.record(branch, agent, EventKind::ToolCall, &payload)
             .await?;
         outcome
@@ -147,45 +244,24 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
-        let note = args
-            .get("note")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or("");
-        let outcome: Result<String, String> = if branch.is_last(agent) {
-            Err("handoff is not available to the last agent".to_string())
-        } else if note.is_empty() {
-            Err("handoff() requires a non-empty 'note' string".to_string())
-        } else {
-            let mut h = branch.handoffs.lock().unwrap();
-            if h.contains_key(agent) {
-                Err("handoff already sent".to_string())
-            } else {
-                h.insert(agent.to_string(), note.to_string());
-                Ok(note.to_string())
-            }
-        };
-        match outcome {
+        match take_handoff(branch, agent, &args) {
             Ok(note) => {
                 self.record(branch, agent, EventKind::Handoff, &HandoffPayload { note })
                     .await?;
                 Ok(json!({"ok": true}))
             }
             Err(e) => {
-                let payload = ToolCallPayload {
-                    name: "handoff".into(),
+                let outcome = Err(e);
+                let payload = tool_call_payload(
+                    "handoff",
                     args,
-                    result: Value::Null,
-                    error: Some(e.clone()),
-                    reads: json!([]),
-                    writes: json!([]),
-                    snapshot: None,
-                    snapshot_error: None,
+                    &outcome,
                     tool_call_id,
-                };
+                    CallFacts::default(),
+                );
                 self.record(branch, agent, EventKind::ToolCall, &payload)
                     .await?;
-                Err(e)
+                outcome
             }
         }
     }

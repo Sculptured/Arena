@@ -88,6 +88,7 @@ fn command_for(
     m: &Manifest,
     bin_dir: &Path,
     saves_root: &Path,
+    env: &[(String, String)],
 ) -> Result<(Command, Option<String>)> {
     match &m.run {
         Run::Command(argv) => {
@@ -110,6 +111,9 @@ fn command_for(
                 }
             }
             c.env("ARENA_SAVES", saves_root);
+            for (k, v) in env {
+                c.env(k, v);
+            }
             Ok((c, None))
         }
         Run::Image(image) => {
@@ -145,7 +149,18 @@ fn command_for(
 impl Client {
     /// Starts the program. Command mode runs in the manifest's folder with a cleared environment.
     pub async fn spawn(m: &Manifest, bin_dir: &Path, saves_root: &Path) -> Result<Client> {
-        let (mut cmd, container) = command_for(m, bin_dir, saves_root)?;
+        Client::spawn_with_env(m, bin_dir, saves_root, &[]).await
+    }
+
+    /// Like `spawn`, with extra environment variables for command mode (they override the ones
+    /// passed through). Image mode ignores them: a container gets no environment from arenad.
+    pub async fn spawn_with_env(
+        m: &Manifest,
+        bin_dir: &Path,
+        saves_root: &Path,
+        env: &[(String, String)],
+    ) -> Result<Client> {
+        let (mut cmd, container) = command_for(m, bin_dir, saves_root, env)?;
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

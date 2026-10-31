@@ -1,11 +1,14 @@
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "support/legacy.rs"]
+mod legacy;
+#[path = "support/packages.rs"]
+mod packages;
 
 use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, LazyLock},
-    time::Duration,
 };
 
 use arenad::{
@@ -13,9 +16,10 @@ use arenad::{
     app::{self, AppState, Config},
     model::*,
     store::Store,
-    tasks::Tasks,
 };
 use fake_upstream::FakeUpstream;
+use legacy::legacy_run;
+use packages::TestHub;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 use world::{
@@ -68,6 +72,7 @@ fn team() -> Team {
 
 struct Fx {
     state: Arc<AppState>,
+    _hub: TestHub,
     base: String,
     http: reqwest::Client,
     clean: Cleanup,
@@ -75,6 +80,7 @@ struct Fx {
 
 async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
     let worlds = worlds().await;
+    let hub = TestHub::new(&[]);
     let meta = format!(
         "arena_test_disk_{}_{}",
         tag,
@@ -85,18 +91,19 @@ async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut 
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new(data_dir());
+    let mut config = Config::new();
     config.upstream_base = upstream.base_url.clone();
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
     tweak(&mut config);
-    let state = Arc::new(AppState::new(store, worlds, config));
+    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
     let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Fx {
         state,
+        _hub: hub,
         base: format!("http://127.0.0.1:{port}"),
         http: reqwest::Client::new(),
         clean,
@@ -132,73 +139,10 @@ impl Fx {
             .unwrap();
         (r.status().as_u16(), r.json().await.unwrap())
     }
-    async fn wait(&self, branch: &str) -> Value {
-        for _ in 0..600 {
-            let (_, b) = self.get(&format!("/api/branches/{branch}")).await;
-            if b["status"] != "running" {
-                return b;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("branch still running");
-    }
-}
-
-fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {
-    let tcs: Vec<Value> = calls
-        .into_iter()
-        .map(|(id, name, args)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}}))
-        .collect();
-    json!({"role": "assistant", "content": null, "tool_calls": tcs})
 }
 
 fn text_msg(t: &str) -> Value {
     json!({"role": "assistant", "content": t})
-}
-
-const ORDER: &str = "#W7181492";
-
-fn gold_write() -> Value {
-    let tasks = Tasks::load(&data_dir()).unwrap();
-    let t = tasks.get("27").unwrap();
-    let a = t["evaluation_criteria"]["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["name"] == "exchange_delivered_order_items")
-        .unwrap();
-    tool_msg(vec![(
-        "w1",
-        "exchange_delivered_order_items",
-        a["arguments"].clone(),
-    )])
-}
-
-fn scripted_run() -> Vec<Value> {
-    vec![
-        tool_msg(vec![(
-            "t1",
-            "find_user_id_by_name_zip",
-            json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}),
-        )]),
-        tool_msg(vec![(
-            "t2",
-            "get_order_details",
-            json!({"order_id": ORDER}),
-        )]),
-        tool_msg(vec![(
-            "t3",
-            "handoff",
-            json!({"note": "Exchange an item in #W7181492."}),
-        )]),
-        tool_msg(vec![(
-            "r1",
-            "get_order_details",
-            json!({"order_id": ORDER}),
-        )]),
-        gold_write(),
-        text_msg("Exchanged."),
-    ]
 }
 
 async fn db_exists(fx: &Fx, name: &str) -> bool {
@@ -208,17 +152,22 @@ async fn db_exists(fx: &Fx, name: &str) -> bool {
 #[test]
 fn delete_run_drops_its_databases() {
     run(async {
-        let up = FakeUpstream::start(scripted_run()).await;
+        // Delete still drops the old databases until it moves to the parts: a run recorded before integrations.
+        let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let fx = setup_with("delete", &up, |_| {}).await;
-        let (st, v) = fx
-            .post("/api/runs", json!({"task_id": "27", "team": team()}))
-            .await;
-        assert_eq!(st, 200, "{v}");
-        let (run_id, b) = (
-            v["run_id"].as_str().unwrap().to_string(),
-            v["branch_id"].as_str().unwrap().to_string(),
-        );
-        assert_eq!(fx.wait(&b).await["status"], "passed");
+        let solo = Team {
+            agents: vec![agent("resolver")],
+            ..team()
+        };
+        let gold = packages::gold_action_args("27", "exchange_delivered_order_items");
+        let (run_id, b) = legacy_run(
+            &fx.state.store,
+            &fx.state.worlds,
+            &solo,
+            &[("exchange_delivered_order_items", gold)],
+            BranchStatus::Passed,
+        )
+        .await;
         let snaps: Vec<String> = fx
             .state
             .store

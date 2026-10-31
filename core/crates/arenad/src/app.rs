@@ -1,10 +1,10 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Arc, OnceLock, RwLock},
 };
 
 use axum::Router;
+use parts::{proto::BenchDescribe, Hub};
 use world::snapshot::Worlds;
 
 use crate::{
@@ -12,14 +12,12 @@ use crate::{
     exec::BranchCtx,
     model::AgentKind,
     store::Store,
-    tasks::Tasks,
 };
 
 pub type Drivers = HashMap<AgentKind, Arc<dyn Driver>>;
 
 #[derive(Clone)]
 pub struct Config {
-    pub data_dir: PathBuf,
     /// OpenAI-compatible base the gateway forwards to.
     pub upstream_base: String,
     /// Never logged or recorded.
@@ -43,7 +41,6 @@ pub fn is_openrouter_url(base: &str) -> bool {
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
-            .field("data_dir", &self.data_dir)
             .field("upstream_base", &self.upstream_base)
             .field(
                 "openrouter_key",
@@ -55,11 +52,16 @@ impl std::fmt::Debug for Config {
     }
 }
 
+impl Default for Config {
+    fn default() -> Config {
+        Config::new()
+    }
+}
+
 impl Config {
     /// Defaults plus `OPENROUTER_API_KEY` from the environment.
-    pub fn new(data_dir: PathBuf) -> Config {
+    pub fn new() -> Config {
         Config {
-            data_dir,
             upstream_base: OPENROUTER_BASE.to_string(),
             openrouter_key: std::env::var("OPENROUTER_API_KEY")
                 .ok()
@@ -82,9 +84,16 @@ impl Config {
     }
 }
 
+pub const DEFAULT_BENCHMARK: &str = "retail";
+
 pub struct AppState {
     pub store: Arc<Store>,
+    /// The old Postgres worlds: rows, compare, delete, cleanup and disk of runs still use them.
     pub worlds: Arc<Worlds>,
+    /// The installed integrations and benchmarks, their programs started on first use.
+    pub hub: Arc<Hub>,
+    /// The benchmark new runs use (env `ARENA_BENCHMARK`, default `retail`).
+    pub benchmark: String,
     /// Branches currently running, by branch id.
     pub live: RwLock<HashMap<String, Arc<BranchCtx>>>,
     pub config: Config,
@@ -92,7 +101,6 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Set once, after the `Arc<AppState>` exists (the open driver holds a `Weak` to it).
     pub drivers: OnceLock<Drivers>,
-    tasks: OnceLock<Tasks>,
     /// Set to true when shutdown starts; SSE streams end on it.
     pub shutdown: tokio::sync::watch::Sender<bool>,
     /// Final database dumps of finished branches, by branch id (for compare).
@@ -100,34 +108,41 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(store: Arc<Store>, worlds: Arc<Worlds>, config: Config) -> AppState {
+    pub fn new(store: Arc<Store>, worlds: Arc<Worlds>, hub: Arc<Hub>, config: Config) -> AppState {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("http client");
+        let benchmark = std::env::var("ARENA_BENCHMARK")
+            .ok()
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| DEFAULT_BENCHMARK.to_string());
         AppState {
             store,
             worlds,
+            hub,
+            benchmark,
             live: RwLock::new(HashMap::new()),
             config,
             http,
             drivers: OnceLock::new(),
-            tasks: OnceLock::new(),
             shutdown: tokio::sync::watch::channel(false).0,
             dumps: Default::default(),
         }
     }
+
+    /// Uses `name` as the benchmark of new runs.
+    pub fn with_benchmark(mut self, name: &str) -> AppState {
+        self.benchmark = name.to_string();
+        self
+    }
 }
 
 impl AppState {
-    /// The tasks under `config.data_dir`, loaded on first use.
-    pub fn tasks(&self) -> anyhow::Result<&Tasks> {
-        if let Some(t) = self.tasks.get() {
-            return Ok(t);
-        }
-        let loaded = Tasks::load(&self.config.data_dir)?;
-        Ok(self.tasks.get_or_init(|| loaded))
+    /// The `describe` of the benchmark new runs use: its world, tasks, instructions and tools.
+    pub async fn bench(&self) -> anyhow::Result<BenchDescribe> {
+        self.hub.bench_describe(&self.benchmark).await
     }
 
     /// Installs the driver map; false if one was already installed.
