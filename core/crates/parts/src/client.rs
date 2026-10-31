@@ -84,6 +84,16 @@ fn substitute(arg: &str, bin_dir: &Path) -> String {
     arg.replace("${ARENA_BIN_DIR}", &bin_dir.to_string_lossy())
 }
 
+/// Env vars a command-mode part inherits; everything else is cleared.
+const PASSED_ENV: [&str; 6] = [
+    "PATH",
+    "HOME",
+    "ARENA_PG_URL",
+    "UV_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "RUST_LOG",
+];
+
 fn command_for(
     m: &Manifest,
     bin_dir: &Path,
@@ -91,59 +101,160 @@ fn command_for(
     env: &[(String, String)],
 ) -> Result<(Command, Option<String>)> {
     match &m.run {
-        Run::Command(argv) => {
-            let mut args: Vec<String> = argv.iter().map(|a| substitute(a, bin_dir)).collect();
-            if args[0].contains('/') && Path::new(&args[0]).is_relative() {
-                args[0] = m.dir.join(&args[0]).to_string_lossy().into_owned();
-            }
-            let mut c = Command::new(&args[0]);
-            c.args(&args[1..]).current_dir(&m.dir).env_clear();
-            for k in [
-                "PATH",
-                "HOME",
-                "ARENA_PG_URL",
-                "UV_CACHE_DIR",
-                "XDG_CACHE_HOME",
-                "RUST_LOG",
-            ] {
-                if let Some(v) = std::env::var_os(k) {
-                    c.env(k, v);
-                }
-            }
-            c.env("ARENA_SAVES", saves_root);
-            for (k, v) in env {
-                c.env(k, v);
-            }
-            Ok((c, None))
-        }
+        Run::Command(argv) => Ok((program_command(m, argv, bin_dir, saves_root, env), None)),
         Run::Image(image) => {
-            let mine = saves_root.join(&m.name);
-            std::fs::create_dir_all(&mine)?;
-            static COUNTER: AtomicU64 = AtomicU64::new(0);
-            let name = format!(
-                "arena-part-{}-{}-{}",
-                m.name,
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::Relaxed)
-            );
-            let mut c = Command::new("docker");
-            c.args(["run", "-i", "--rm", "--name", &name, "--network"]);
-            if m.needs.network.as_deref() == Some("host") {
-                eprintln!("parts: {} runs with host networking", m.name);
-                c.arg("host");
-            } else {
-                c.arg("none");
-            }
-            c.arg("-v")
-                .arg(format!("{}:/saves", mine.display()))
-                .arg(image)
-                .env_clear();
-            if let Some(p) = std::env::var_os("PATH") {
-                c.env("PATH", p); // docker itself needs to be found; the container gets nothing
-            }
+            let (c, name) = container_command(m, image, saves_root)?;
             Ok((c, Some(name)))
         }
     }
+}
+
+/// Command mode: the program runs in the manifest's folder with a cleared environment.
+fn program_command(
+    m: &Manifest,
+    argv: &[String],
+    bin_dir: &Path,
+    saves_root: &Path,
+    env: &[(String, String)],
+) -> Command {
+    let mut args: Vec<String> = argv.iter().map(|a| substitute(a, bin_dir)).collect();
+    if args[0].contains('/') && Path::new(&args[0]).is_relative() {
+        args[0] = m.dir.join(&args[0]).to_string_lossy().into_owned();
+    }
+    let mut c = Command::new(&args[0]);
+    c.args(&args[1..]).current_dir(&m.dir).env_clear();
+    for k in PASSED_ENV {
+        if let Some(v) = std::env::var_os(k) {
+            c.env(k, v);
+        }
+    }
+    c.env("ARENA_SAVES", saves_root);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    c
+}
+
+/// Image mode: `docker run` with no network (unless the manifest asks for the host's) and only
+/// this package's saves mounted. Returns the container's name.
+fn container_command(m: &Manifest, image: &str, saves_root: &Path) -> Result<(Command, String)> {
+    let mine = saves_root.join(&m.name);
+    std::fs::create_dir_all(&mine)?;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let name = format!(
+        "arena-part-{}-{}-{}",
+        m.name,
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let mut c = Command::new("docker");
+    c.args(["run", "-i", "--rm", "--name", &name, "--network"]);
+    if m.needs.network.as_deref() == Some("host") {
+        eprintln!("parts: {} runs with host networking", m.name);
+        c.arg("host");
+    } else {
+        c.arg("none");
+    }
+    c.arg("-v")
+        .arg(format!("{}:/saves", mine.display()))
+        .arg(image)
+        .env_clear();
+    if let Some(p) = std::env::var_os("PATH") {
+        c.env("PATH", p); // docker itself needs to be found; the container gets nothing
+    }
+    Ok((c, name))
+}
+
+/// One request line to write to the program, at a time, until it is gone.
+fn spawn_writer(mut stdin: tokio::process::ChildStdin) -> mpsc::UnboundedSender<String> {
+    let (lines, mut rx) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while let Some(l) = rx.recv().await {
+            if stdin.write_all(l.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                break; // the waiter task reports the exit
+            }
+        }
+    });
+    lines
+}
+
+type Tail = Arc<Mutex<VecDeque<String>>>;
+
+/// Keeps the last `STDERR_LINES` lines of stderr.
+fn spawn_stderr_tail(stderr: tokio::process::ChildStderr) -> (Tail, tokio::task::JoinHandle<()>) {
+    let tail = Tail::default();
+    let tail2 = tail.clone();
+    let task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(l)) = lines.next_line().await {
+            let mut t = tail2.lock().unwrap();
+            if t.len() == STDERR_LINES {
+                t.pop_front();
+            }
+            t.push_back(l);
+        }
+    });
+    (tail, task)
+}
+
+/// The reply a response line carries, with the id it answers.
+fn parse_reply(line: &str) -> Option<(u64, Reply)> {
+    let v = serde_json::from_str::<Value>(line).ok()?;
+    let id = v.get("id").and_then(Value::as_u64)?;
+    let reply = match v.get("error") {
+        Some(e) => Err(CallError::Part {
+            code: e.get("code").and_then(Value::as_i64).unwrap_or(0),
+            message: e
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        }),
+        None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
+    };
+    Some((id, reply))
+}
+
+/// Routes each response line to the call waiting for its id.
+fn spawn_reader(stdout: tokio::process::ChildStdout, state: Arc<Mutex<State>>) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(l)) = lines.next_line().await {
+            let Some((id, reply)) = parse_reply(&l) else {
+                continue;
+            };
+            if let Some(tx) = state.lock().unwrap().pending.remove(&id) {
+                let _ = tx.send(reply);
+            }
+        }
+    });
+}
+
+/// The direct child exiting is what stops the client, even if a grandchild keeps the pipes open.
+fn spawn_waiter(
+    mut child: tokio::process::Child,
+    pid: u32,
+    tail: Tail,
+    err_task: tokio::task::JoinHandle<()>,
+    state: Arc<Mutex<State>>,
+) {
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+        kill_group(pid);
+        let _ = tokio::time::timeout(Duration::from_secs(2), err_task).await;
+        let msg = tail
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut st = state.lock().unwrap();
+        st.stopped = Some(msg.clone());
+        for (_, tx) in st.pending.drain() {
+            let _ = tx.send(Err(CallError::Stopped(msg.clone())));
+        }
+    });
 }
 
 impl Client {
@@ -170,77 +281,14 @@ impl Client {
             .spawn()
             .with_context(|| format!("starting {}", m.name))?;
         let pid = child.id().unwrap_or(0);
-        let mut stdin = child.stdin.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let state = Arc::new(Mutex::new(State::default()));
-
-        let (lines, mut rx) = mpsc::unbounded_channel::<String>();
-        tokio::spawn(async move {
-            while let Some(l) = rx.recv().await {
-                if stdin.write_all(l.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
-                    break; // the waiter task reports the exit
-                }
-            }
-        });
-
-        let tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
-        let tail2 = tail.clone();
-        let err_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                let mut t = tail2.lock().unwrap();
-                if t.len() == STDERR_LINES {
-                    t.pop_front();
-                }
-                t.push_back(l);
-            }
-        });
-        let state2 = state.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                let Ok(v) = serde_json::from_str::<Value>(&l) else {
-                    continue;
-                };
-                let Some(id) = v.get("id").and_then(Value::as_u64) else {
-                    continue;
-                };
-                let reply = match v.get("error") {
-                    Some(e) => Err(CallError::Part {
-                        code: e.get("code").and_then(Value::as_i64).unwrap_or(0),
-                        message: e
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string(),
-                    }),
-                    None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
-                };
-                if let Some(tx) = state2.lock().unwrap().pending.remove(&id) {
-                    let _ = tx.send(reply);
-                }
-            }
-        });
-        // The direct child exiting is what stops the client, even if a grandchild keeps the pipes open.
-        let state3 = state.clone();
-        tokio::spawn(async move {
-            let _ = child.wait().await;
-            kill_group(pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), err_task).await;
-            let msg = tail
-                .lock()
-                .unwrap()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut st = state3.lock().unwrap();
-            st.stopped = Some(msg.clone());
-            for (_, tx) in st.pending.drain() {
-                let _ = tx.send(Err(CallError::Stopped(msg.clone())));
-            }
-        });
+        let lines = spawn_writer(stdin);
+        let (tail, err_task) = spawn_stderr_tail(stderr);
+        spawn_reader(stdout, state.clone());
+        spawn_waiter(child, pid, tail, err_task, state.clone());
         Ok(Client {
             pid,
             next_id: Mutex::new(0),
@@ -265,25 +313,29 @@ impl Client {
         self.state.lock().unwrap().stopped.is_some()
     }
 
-    /// One request; concurrent calls are matched to replies by id.
-    pub async fn call<T: DeserializeOwned>(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<T, CallError> {
+    /// A fresh call id and the channel its reply arrives on; refuses once the program is gone.
+    fn register(&self) -> Result<(u64, oneshot::Receiver<Reply>), CallError> {
         let id = {
             let mut n = self.next_id.lock().unwrap();
             *n += 1;
             *n
         };
         let (tx, rx) = oneshot::channel();
-        {
-            let mut st = self.state.lock().unwrap();
-            if let Some(tail) = &st.stopped {
-                return Err(CallError::Stopped(tail.clone()));
-            }
-            st.pending.insert(id, tx);
+        let mut st = self.state.lock().unwrap();
+        if let Some(tail) = &st.stopped {
+            return Err(CallError::Stopped(tail.clone()));
         }
+        st.pending.insert(id, tx);
+        Ok((id, rx))
+    }
+
+    /// One request; concurrent calls are matched to replies by id.
+    pub async fn call<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<T, CallError> {
+        let (id, rx) = self.register()?;
         let _guard = PendingGuard {
             state: &self.state,
             id,

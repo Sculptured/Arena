@@ -57,11 +57,7 @@ impl Manifest {
 
     fn parse(text: &str, dir: &Path) -> Result<Manifest> {
         let v: Value = serde_json::to_value(text.parse::<toml::Table>()?)?;
-        let kind = match str_of(&v, "kind")?.as_str() {
-            "integration" => Kind::Integration,
-            "benchmark" => Kind::Benchmark,
-            k => bail!("kind must be integration or benchmark, not {k:?}"),
-        };
+        let kind = parse_kind(&v)?;
         let name = str_of(&v, "name")?;
         if !valid_package_name(&name) {
             bail!("package name {name:?} must match [a-z0-9-]{{1,40}}");
@@ -70,40 +66,14 @@ impl Manifest {
         if protocol != PROTOCOL {
             bail!("protocol {protocol} is not supported, only {PROTOCOL}");
         }
-        let run = v.get("run").ok_or_else(|| anyhow!("`run` is missing"))?;
-        let run = match (run.get("command"), run.get("image")) {
-            (Some(c), None) => {
-                let c: Vec<String> = serde_json::from_value(c.clone()).context("run.command")?;
-                if c.is_empty() {
-                    bail!("run.command is empty");
-                }
-                Run::Command(c)
-            }
-            (None, Some(i)) => Run::Image(
-                i.as_str()
-                    .ok_or_else(|| anyhow!("run.image must be a string"))?
-                    .into(),
-            ),
-            _ => bail!("run needs exactly one of command or image"),
-        };
-        let needs = match v.get("needs") {
-            None => Needs::default(),
-            Some(n) => Needs {
-                gpu_vram_gb: n.get("gpu_vram_gb").and_then(Value::as_u64).unwrap_or(0) as u32,
-                services: match n.get("services") {
-                    Some(s) => serde_json::from_value(s.clone()).context("needs.services")?,
-                    None => vec![],
-                },
-                network: n.get("network").and_then(Value::as_str).map(str::to_string),
-            },
-        };
+        let run = parse_run(v.get("run").ok_or_else(|| anyhow!("`run` is missing"))?)?;
         Ok(Manifest {
             kind,
             name,
             version: str_of(&v, "version")?,
             protocol,
             run,
-            needs,
+            needs: parse_needs(v.get("needs"))?,
             dir: dir.to_path_buf(),
             examples: v
                 .get("example")
@@ -113,6 +83,46 @@ impl Manifest {
             config_schema: v.get("config_schema").cloned().unwrap_or(Value::Null),
         })
     }
+}
+
+fn parse_kind(v: &Value) -> Result<Kind> {
+    Ok(match str_of(v, "kind")?.as_str() {
+        "integration" => Kind::Integration,
+        "benchmark" => Kind::Benchmark,
+        k => bail!("kind must be integration or benchmark, not {k:?}"),
+    })
+}
+
+fn parse_run(run: &Value) -> Result<Run> {
+    Ok(match (run.get("command"), run.get("image")) {
+        (Some(c), None) => {
+            let c: Vec<String> = serde_json::from_value(c.clone()).context("run.command")?;
+            if c.is_empty() {
+                bail!("run.command is empty");
+            }
+            Run::Command(c)
+        }
+        (None, Some(i)) => Run::Image(
+            i.as_str()
+                .ok_or_else(|| anyhow!("run.image must be a string"))?
+                .into(),
+        ),
+        _ => bail!("run needs exactly one of command or image"),
+    })
+}
+
+fn parse_needs(needs: Option<&Value>) -> Result<Needs> {
+    let Some(n) = needs else {
+        return Ok(Needs::default());
+    };
+    Ok(Needs {
+        gpu_vram_gb: n.get("gpu_vram_gb").and_then(Value::as_u64).unwrap_or(0) as u32,
+        services: match n.get("services") {
+            Some(s) => serde_json::from_value(s.clone()).context("needs.services")?,
+            None => vec![],
+        },
+        network: n.get("network").and_then(Value::as_str).map(str::to_string),
+    })
 }
 
 /// The installed packages, by name.

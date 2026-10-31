@@ -80,9 +80,40 @@ fn tool_name_ok(n: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// The tool and arguments of an `[[example]]` entry.
+fn example_call(ex: &Value) -> Res<(String, Value)> {
+    let tool = ex["tool"].as_str().ok_or("an example has no `tool`")?;
+    let args = ex.get("args").cloned().unwrap_or_else(|| json!({}));
+    Ok((tool.to_string(), args))
+}
+
+/// The `reads` and `writes` keys of a tool output.
+fn touched_keys(out: &Value) -> impl Iterator<Item = &str> {
+    ["reads", "writes"].into_iter().flat_map(|k| {
+        out[k]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+    })
+}
+
 impl Run<'_> {
     async fn call(&self, method: &str, params: Value) -> Result<Value, CallError> {
         self.client.call(method, params).await
+    }
+
+    async fn call_tool(&self, inst: &str, name: &str, args: &Value) -> Result<Value, CallError> {
+        self.call(
+            "call_tool",
+            json!({"instance": inst, "name": name, "args": args, "clock_ms": 0}),
+        )
+        .await
+    }
+
+    async fn advance(&self, inst: &str, clock_ms: i64) -> Result<Value, CallError> {
+        self.call("advance", json!({"instance": inst, "clock_ms": clock_ms}))
+            .await
     }
 
     async fn start(
@@ -113,25 +144,13 @@ impl Run<'_> {
     /// `call_tool` on `chk_a`, recorded for the replay.
     async fn tool(&mut self, name: &str, args: &Value) -> Res<()> {
         let out = self
-            .call(
-                "call_tool",
-                json!({"instance": "chk_a", "name": name, "args": args, "clock_ms": 0}),
-            )
+            .call_tool("chk_a", name, args)
             .await
             .map_err(|e| format!("{name}: {e}"))?;
         if let Some(e) = out.get("error").filter(|e| !e.is_null()) {
             return Err(format!("{name} returned an error: {e}"));
         }
-        for k in ["reads", "writes"] {
-            for key in out[k]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                self.keys.insert(key.to_string());
-            }
-        }
+        self.keys.extend(touched_keys(&out).map(str::to_string));
         self.inputs.push(Input::Call {
             name: name.into(),
             args: args.clone(),
@@ -183,9 +202,15 @@ impl Run<'_> {
         }
     }
 
-    fn step(&mut self, name: &str, r: Res<String>) -> Res<()> {
+    /// Records the step's outcome, with `detail` of its value when it passed.
+    fn step_value<T>(
+        &mut self,
+        name: &str,
+        r: Res<T>,
+        detail: impl FnOnce(&T) -> String,
+    ) -> Res<T> {
         let (ok, detail) = match &r {
-            Ok(d) => (true, d.clone()),
+            Ok(v) => (true, detail(v)),
             Err(e) => (false, e.clone()),
         };
         self.report.steps.push(Step {
@@ -193,167 +218,160 @@ impl Run<'_> {
             ok,
             detail,
         });
-        r.map(|_| ())
+        r
+    }
+
+    fn step(&mut self, name: &str, r: Res<String>) -> Res<()> {
+        self.step_value(name, r, String::clone).map(|_| ())
+    }
+
+    fn skip(&mut self, msg: &str) {
+        self.report.skipped.push(msg.into());
     }
 
     async fn run(&mut self, config: &Value) -> Res<()> {
-        let hub = self.hub;
-        let m = hub.registry().get(&self.package).unwrap().clone();
-
-        // 1. describe
-        let r = async {
-            let d = hub
-                .describe(&self.package)
-                .await
-                .map_err(|e| e.to_string())?;
-            if d.protocol != PROTOCOL {
-                return Err(format!("protocol is {}, not {PROTOCOL}", d.protocol));
-            }
-            let mut seen = HashSet::new();
-            for t in &d.tools {
-                if !tool_name_ok(&t.name) {
-                    return Err(format!("tool name {:?} is not well formed", t.name));
-                }
-                if !seen.insert(&t.name) {
-                    return Err(format!("tool name {:?} appears twice", t.name));
-                }
-            }
-            Ok(d)
-        }
-        .await;
-        let d = match r {
-            Ok(d) => {
-                self.step("describe", Ok(format!("{} tools", d.tools.len())))?;
-                d
-            }
-            Err(e) => return self.step("describe", Err(e)),
-        };
-
-        // 2. start chk_a (usage is read first, to compare after the saves are dropped)
-        let mut usage_before = 0;
-        let r = async {
-            usage_before = self.usage().await?;
-            self.start("chk_a", config, None).await?;
-            Ok("chk_a started".to_string())
-        }
-        .await;
-        self.step("start", r)?;
-
-        // 3. examples
-        let r = async {
-            if m.examples.is_empty() {
-                return Err("no [[example]] entries; the check needs at least one".to_string());
-            }
-            for ex in &m.examples {
-                let tool = ex["tool"]
-                    .as_str()
-                    .ok_or("an example has no `tool`")?
-                    .to_string();
-                let args = ex.get("args").cloned().unwrap_or_else(|| json!({}));
-                if !d.tools.iter().any(|t| t.name == tool) {
-                    return Err(format!("example tool {tool:?} is not in describe"));
-                }
-                self.tool(&tool, &args).await?;
-            }
-            Ok(format!("{} examples ran", m.examples.len()))
-        }
-        .await;
+        let m = self.hub.registry().get(&self.package).unwrap().clone();
+        let d = self.describe_step().await;
+        let d = self.step_value("describe", d, |d| format!("{} tools", d.tools.len()))?;
+        let r = self.start_step(config).await;
+        let usage_before = self.step_value("start", r, |_| "chk_a started".into())?;
+        let r = self.examples_step(&m.examples, &d).await;
         self.step("examples", r)?;
-
-        // 4. save chk_s1
         let r = self.save("chk_s1", &d).await;
-        let have_saves = match r {
-            Ok(b) => {
-                self.step(
-                    "save_1",
-                    Ok(if b { "saved chk_s1" } else { "no saves" }.into()),
-                )?;
-                b
-            }
-            Err(e) => return self.step("save_1", Err(e)),
-        };
+        let have_saves = self.step_value("save_1", r, |saved| {
+            if *saved { "saved chk_s1" } else { "no saves" }.into()
+        })?;
+        self.write_and_second_save(&m.examples, &d, have_saves)
+            .await?;
+        self.restore_and_self_diff(&d, config, have_saves).await?;
+        self.replay_phase(&d, config).await?;
+        self.stop_all_step().await?;
+        self.drop_saves_step(usage_before).await
+    }
 
-        // 5. a write example
-        let write = m.examples.iter().find(|ex| {
+    /// 1. describe, and check what it says.
+    async fn describe_step(&self) -> Res<Describe> {
+        let d = self
+            .hub
+            .describe(&self.package)
+            .await
+            .map_err(|e| e.to_string())?;
+        if d.protocol != PROTOCOL {
+            return Err(format!("protocol is {}, not {PROTOCOL}", d.protocol));
+        }
+        let mut seen = HashSet::new();
+        for t in &d.tools {
+            if !tool_name_ok(&t.name) {
+                return Err(format!("tool name {:?} is not well formed", t.name));
+            }
+            if !seen.insert(&t.name) {
+                return Err(format!("tool name {:?} appears twice", t.name));
+            }
+        }
+        Ok(d)
+    }
+
+    /// 2. start `chk_a`; the usage is read first, to compare after the saves are dropped.
+    async fn start_step(&mut self, config: &Value) -> Res<u64> {
+        let usage_before = self.usage().await?;
+        self.start("chk_a", config, None).await?;
+        Ok(usage_before)
+    }
+
+    /// 3. run every example.
+    async fn examples_step(&mut self, examples: &[Value], d: &Describe) -> Res<String> {
+        if examples.is_empty() {
+            return Err("no [[example]] entries; the check needs at least one".to_string());
+        }
+        for ex in examples {
+            let (tool, args) = example_call(ex)?;
+            if !d.tools.iter().any(|t| t.name == tool) {
+                return Err(format!("example tool {tool:?} is not in describe"));
+            }
+            self.tool(&tool, &args).await?;
+        }
+        Ok(format!("{} examples ran", examples.len()))
+    }
+
+    /// 5 and 6. run a write example (and the clock), then save `chk_s2`.
+    async fn write_and_second_save(
+        &mut self,
+        examples: &[Value],
+        d: &Describe,
+        have_saves: bool,
+    ) -> Res<()> {
+        let write = examples.iter().find(|ex| {
             ex["tool"]
                 .as_str()
                 .and_then(|n| d.tools.iter().find(|t| t.name == n))
                 .is_some_and(|t| t.effect == Effect::Write)
         });
-        match write {
-            Some(ex) => {
-                let tool = ex["tool"].as_str().unwrap().to_string();
-                let args = ex.get("args").cloned().unwrap_or_else(|| json!({}));
-                // The clock is exercised before the second save, and replayed.
-                let r = async {
-                    self.tool(&tool, &args).await?;
-                    if d.uses_clock {
-                        self.call(
-                            "advance",
-                            json!({"instance": "chk_a", "clock_ms": ADVANCE_MS}),
-                        )
-                        .await
-                        .map_err(show)?;
-                        self.inputs.push(Input::Advance(ADVANCE_MS));
-                    }
-                    Ok(format!("ran {tool}"))
-                }
-                .await;
-                self.step("write_example", r)?;
-                // 6. save chk_s2
-                if have_saves {
-                    let r = self
-                        .save("chk_s2", &d)
-                        .await
-                        .map(|_| "saved chk_s2".to_string());
-                    self.step("save_2", r)?;
-                }
-            }
-            None => self
-                .report
-                .skipped
-                .push("write_example: no example uses a write tool; save_2 skipped too".into()),
+        let Some(ex) = write else {
+            self.skip("write_example: no example uses a write tool; save_2 skipped too");
+            return Ok(());
+        };
+        let r = self.write_example(ex, d).await;
+        self.step("write_example", r)?;
+        if have_saves {
+            let r = self.save("chk_s2", d).await;
+            self.step("save_2", r.map(|_| "saved chk_s2".to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// The write example, then the clock (which is exercised before the second save, and replayed).
+    async fn write_example(&mut self, ex: &Value, d: &Describe) -> Res<String> {
+        let (tool, args) = example_call(ex)?;
+        self.tool(&tool, &args).await?;
+        if d.uses_clock {
+            self.advance("chk_a", ADVANCE_MS).await.map_err(show)?;
+            self.inputs.push(Input::Advance(ADVANCE_MS));
+        }
+        Ok(format!("ran {tool}"))
+    }
+
+    /// 7 and 8. restore in each supported mode, and diff a save with itself.
+    async fn restore_and_self_diff(
+        &mut self,
+        d: &Describe,
+        config: &Value,
+        have_saves: bool,
+    ) -> Res<()> {
+        if !have_saves {
+            self.skip("restore: no saves to restore from");
+            self.skip("diff_self: no saves");
+            return Ok(());
+        }
+        let r = self.restore_step(d, config).await;
+        self.step("restore", r)?;
+        let r = self.diff_self_step().await;
+        self.step("diff_self", r)
+    }
+
+    async fn diff_self_step(&self) -> Res<String> {
+        let v = self
+            .differing(json!({"save": "chk_s1"}), json!({"save": "chk_s1"}))
+            .await?;
+        if v.is_empty() {
+            Ok("empty".to_string())
+        } else {
+            Err(format!("diff of a save with itself lists {v:?}"))
+        }
+    }
+
+    /// 9. replay the inputs on a fresh instance, for a part that restores by replay.
+    async fn replay_phase(&mut self, d: &Describe, config: &Value) -> Res<()> {
+        if d.restore.exact != ExactKind::Replay {
+            self.skip("replay: the part restores from saves");
+            return Ok(());
         }
         let have_s2 = self.saves.contains(&"chk_s2");
+        let r = self.replay_step(config, have_s2).await;
+        self.step("replay", r)
+    }
 
-        // 7. restore in each supported mode
-        if !have_saves {
-            self.report
-                .skipped
-                .push("restore: no saves to restore from".into());
-        } else {
-            let r = self.restore_step(&d, config).await;
-            self.step("restore", r)?;
-        }
-
-        // 8. diff(s1, s1)
-        if have_saves {
-            let r = self
-                .differing(json!({"save": "chk_s1"}), json!({"save": "chk_s1"}))
-                .await
-                .and_then(|v| {
-                    if v.is_empty() {
-                        Ok("empty".to_string())
-                    } else {
-                        Err(format!("diff of a save with itself lists {v:?}"))
-                    }
-                });
-            self.step("diff_self", r)?;
-        } else {
-            self.report.skipped.push("diff_self: no saves".into());
-        }
-
-        // 9. replay
-        if d.restore.exact == ExactKind::Replay {
-            let r = self.replay_step(config, have_s2).await;
-            self.step("replay", r)?;
-        } else {
-            self.report
-                .skipped
-                .push("replay: the part restores from saves".into());
-        }
-
-        // 10. stop everything (a part may free an instance's storage on stop)
+    /// 10. stop everything (a part may free an instance's storage on stop).
+    async fn stop_all_step(&mut self) -> Res<()> {
         let r = async {
             for i in self.live.clone() {
                 self.stop(i).await?;
@@ -361,26 +379,29 @@ impl Run<'_> {
             Ok("all instances stopped".to_string())
         }
         .await;
-        self.step("stop", r)?;
+        self.step("stop", r)
+    }
 
-        // 11. drop saves; with every instance stopped, usage must be back to where it started
-        let r = async {
-            while let Some(s) = self.saves.first().copied() {
-                self.call("drop_save", json!({"save": s}))
-                    .await
-                    .map_err(|e| format!("drop_save {s}: {e}"))?;
-                self.saves.remove(0);
-            }
-            let after = self.usage().await?;
-            if after > usage_before + USAGE_ALLOWANCE {
-                return Err(format!(
-                    "usage grew from {usage_before} to {after} bytes after stopping the instances and dropping the saves"
-                ));
-            }
-            Ok(format!("usage {usage_before} -> {after} bytes"))
-        }
-        .await;
+    /// 11. drop saves; with every instance stopped, usage must be back to where it started.
+    async fn drop_saves_step(&mut self, usage_before: u64) -> Res<()> {
+        let r = self.drop_saves_and_compare(usage_before).await;
         self.step("drop_saves", r)
+    }
+
+    async fn drop_saves_and_compare(&mut self, usage_before: u64) -> Res<String> {
+        while let Some(s) = self.saves.first().copied() {
+            self.call("drop_save", json!({"save": s}))
+                .await
+                .map_err(|e| format!("drop_save {s}: {e}"))?;
+            self.saves.remove(0);
+        }
+        let after = self.usage().await?;
+        if after > usage_before + USAGE_ALLOWANCE {
+            return Err(format!(
+                "usage grew from {usage_before} to {after} bytes after stopping the instances and dropping the saves"
+            ));
+        }
+        Ok(format!("usage {usage_before} -> {after} bytes"))
     }
 
     async fn usage(&self) -> Res<u64> {
@@ -405,28 +426,8 @@ impl Run<'_> {
             modes.push("approximate");
         }
         for mode in modes {
-            let started = self.start("chk_b", config, Some(("chk_s1", mode))).await;
-            let diff = match started {
-                Ok(()) => {
-                    self.differing(json!({"instance": "chk_b"}), json!({"save": "chk_s1"}))
-                        .await
-                }
-                Err(e) => Err(e),
-            };
-            if mode == "exact" {
-                let v = diff.map_err(|e| format!("exact restore: {e}"))?;
-                if !v.is_empty() {
-                    return Err(format!("exact restore differs from the save in {v:?}"));
-                }
-                notes.push("exact restore matches".into());
-            } else {
-                // Approximate is reported, not failed.
-                notes.push(match diff {
-                    Ok(v) if v.is_empty() => "approximate restore matches".to_string(),
-                    Ok(v) => format!("approximate restore differs in {v:?} (reported)"),
-                    Err(e) => format!("approximate restore failed: {e} (reported)"),
-                });
-            }
+            let diff = self.restore_diff(config, mode).await;
+            notes.push(restore_note(mode, diff)?);
             if self.live.contains(&"chk_b") {
                 self.stop("chk_b").await?;
             }
@@ -434,17 +435,32 @@ impl Run<'_> {
         Ok(notes.join("; "))
     }
 
+    /// Start `chk_b` from `chk_s1` in `mode`; the keys in which it differs from the save.
+    async fn restore_diff(&mut self, config: &Value, mode: &str) -> Res<Vec<String>> {
+        self.start("chk_b", config, Some(("chk_s1", mode))).await?;
+        self.differing(json!({"instance": "chk_b"}), json!({"save": "chk_s1"}))
+            .await
+    }
+
     async fn replay_step(&mut self, config: &Value, have_s2: bool) -> Res<String> {
         self.start("chk_r", config, None).await?;
-        let inputs = std::mem::take(&mut self.inputs);
-        for i in &inputs {
+        self.replay_inputs().await?;
+        let outcome = if have_s2 {
+            self.compare_replay_with_save().await?
+        } else {
+            self.compare_replay_by_inspect().await?
+        };
+        self.stop("chk_r").await?;
+        Ok(outcome.into())
+    }
+
+    /// Send the recorded inputs to `chk_r`; each result must be the one seen the first time.
+    async fn replay_inputs(&self) -> Res<()> {
+        for i in &self.inputs {
             match i {
                 Input::Call { name, args, result } => {
                     let out = self
-                        .call(
-                            "call_tool",
-                            json!({"instance": "chk_r", "name": name, "args": args, "clock_ms": 0}),
-                        )
+                        .call_tool("chk_r", name, args)
                         .await
                         .map_err(|e| format!("replay {name}: {e}"))?;
                     if out.get("result") != result.as_ref() {
@@ -456,122 +472,158 @@ impl Run<'_> {
                     }
                 }
                 Input::Advance(ms) => {
-                    self.call("advance", json!({"instance": "chk_r", "clock_ms": ms}))
+                    self.advance("chk_r", *ms)
                         .await
                         .map_err(|e| format!("replay advance: {e}"))?;
                 }
             }
         }
-        let outcome = if have_s2 {
-            let v = self
-                .differing(json!({"instance": "chk_r"}), json!({"save": "chk_s2"}))
-                .await?;
-            if !v.is_empty() {
-                return Err(format!("replay differs from chk_s2 in {v:?}"));
-            }
-            "replay matches chk_s2"
-        } else {
-            let keys: Vec<&String> = self.keys.iter().collect();
-            if keys.is_empty() {
-                return Err(
-                    "no keys reported by the examples, so the replay can't be compared".into(),
-                );
-            }
-            let mut docs = vec![];
-            for inst in ["chk_r", "chk_a"] {
-                let v = self
-                    .call(
-                        "inspect",
-                        json!({"target": {"instance": inst}, "keys": keys}),
-                    )
-                    .await
-                    .map_err(|e| format!("inspect {inst}: {e}"))?;
-                match v["docs"].as_object() {
-                    Some(m) if !m.is_empty() => docs.push(v["docs"].clone()),
-                    _ => return Err(format!("inspect {inst} gave no docs: {v}")),
-                }
-            }
-            if docs[0] != docs[1] {
-                return Err(format!(
-                    "replay differs from the first run: {} against {}",
-                    docs[0], docs[1]
-                ));
-            }
-            "replay matches the first run by inspect (no saves)"
-        };
-        self.inputs = inputs;
-        self.stop("chk_r").await?;
-        Ok(outcome.into())
+        Ok(())
     }
+
+    async fn compare_replay_with_save(&self) -> Res<&'static str> {
+        let v = self
+            .differing(json!({"instance": "chk_r"}), json!({"save": "chk_s2"}))
+            .await?;
+        if !v.is_empty() {
+            return Err(format!("replay differs from chk_s2 in {v:?}"));
+        }
+        Ok("replay matches chk_s2")
+    }
+
+    /// Without a second save: inspect the keys the examples touched, in both instances.
+    async fn compare_replay_by_inspect(&self) -> Res<&'static str> {
+        let keys: Vec<&String> = self.keys.iter().collect();
+        if keys.is_empty() {
+            return Err("no keys reported by the examples, so the replay can't be compared".into());
+        }
+        let mut docs = vec![];
+        for inst in ["chk_r", "chk_a"] {
+            docs.push(self.inspect_docs(inst, &keys).await?);
+        }
+        if docs[0] != docs[1] {
+            return Err(format!(
+                "replay differs from the first run: {} against {}",
+                docs[0], docs[1]
+            ));
+        }
+        Ok("replay matches the first run by inspect (no saves)")
+    }
+
+    async fn inspect_docs(&self, inst: &str, keys: &[&String]) -> Res<Value> {
+        let v = self
+            .call(
+                "inspect",
+                json!({"target": {"instance": inst}, "keys": keys}),
+            )
+            .await
+            .map_err(|e| format!("inspect {inst}: {e}"))?;
+        match v["docs"].as_object() {
+            Some(m) if !m.is_empty() => Ok(v["docs"].clone()),
+            _ => Err(format!("inspect {inst} gave no docs: {v}")),
+        }
+    }
+}
+
+/// What a restore in `mode` says: exact must match (an error otherwise); approximate is
+/// reported, not failed.
+fn restore_note(mode: &str, diff: Res<Vec<String>>) -> Res<String> {
+    if mode == "exact" {
+        let v = diff.map_err(|e| format!("exact restore: {e}"))?;
+        if !v.is_empty() {
+            return Err(format!("exact restore differs from the save in {v:?}"));
+        }
+        return Ok("exact restore matches".into());
+    }
+    Ok(match diff {
+        Ok(v) if v.is_empty() => "approximate restore matches".to_string(),
+        Ok(v) => format!("approximate restore differs in {v:?} (reported)"),
+        Err(e) => format!("approximate restore failed: {e} (reported)"),
+    })
+}
+
+fn empty_report(package: &str) -> Report {
+    Report {
+        package: package.into(),
+        passed: false,
+        steps: vec![],
+        skipped: vec![],
+    }
+}
+
+fn not_started(package: &str, err: &str) -> Report {
+    let mut report = empty_report(package);
+    report.steps.push(Step {
+        name: "describe".into(),
+        ok: false,
+        detail: format!("the program did not start: {err}"),
+    });
+    report
 }
 
 /// Runs the conformance check against the package `name` of `hub`.
 pub async fn check(hub: &Hub, name: &str, config: Value) -> Report {
-    let mut report = Report {
-        package: name.into(),
-        passed: false,
-        steps: vec![],
-        skipped: vec![],
-    };
     let client = match hub.client(name).await {
         Ok(c) => c,
-        Err(e) => {
-            report.steps.push(Step {
-                name: "describe".into(),
-                ok: false,
-                detail: format!("the program did not start: {e}"),
-            });
-            return report;
-        }
+        Err(e) => return not_started(name, &e.to_string()),
     };
     let mut run = Run {
         hub,
         package: name.into(),
         client,
-        report,
+        report: empty_report(name),
         live: vec![],
         saves: vec![],
         inputs: vec![],
         keys: BTreeSet::new(),
     };
     let r = run.run(&config).await;
-    // A failed check still leaves nothing behind.
-    let mut leftovers = vec![];
-    for i in run.live.clone() {
-        if let Err(e) = run.stop(i).await {
-            leftovers.push(format!("stop {i}: {e}"));
+    run.clean_up().await;
+    run.note_steps_not_run();
+    run.report.passed = r.is_ok() && run.report.steps.iter().all(|s| s.ok);
+    run.report
+}
+
+impl Run<'_> {
+    /// A failed check still leaves nothing behind.
+    async fn clean_up(&mut self) {
+        let mut leftovers = vec![];
+        for i in self.live.clone() {
+            if let Err(e) = self.stop(i).await {
+                leftovers.push(format!("stop {i}: {e}"));
+            }
+        }
+        for s in self.saves.clone() {
+            if let Err(e) = self.call("drop_save", json!({"save": s})).await {
+                leftovers.push(format!("drop_save {s}: {e}"));
+            }
+        }
+        if !leftovers.is_empty() {
+            self.report.steps.push(Step {
+                name: "cleanup".into(),
+                ok: false,
+                detail: leftovers.join("; "),
+            });
         }
     }
-    for s in run.saves.clone() {
-        if let Err(e) = run.call("drop_save", json!({"save": s})).await {
-            leftovers.push(format!("drop_save {s}: {e}"));
-        }
-    }
-    if !leftovers.is_empty() {
-        run.report.steps.push(Step {
-            name: "cleanup".into(),
-            ok: false,
-            detail: leftovers.join("; "),
-        });
-    }
-    // Say which steps never ran.
-    if let Some(failed) = run
-        .report
-        .steps
-        .iter()
-        .find(|s| !s.ok)
-        .map(|s| s.name.clone())
-    {
+
+    /// Say which steps never ran.
+    fn note_steps_not_run(&mut self) {
+        let Some(failed) = self
+            .report
+            .steps
+            .iter()
+            .find(|s| !s.ok)
+            .map(|s| s.name.clone())
+        else {
+            return;
+        };
         for n in STEPS {
-            let seen = run.report.steps.iter().any(|s| s.name == *n)
-                || run.report.skipped.iter().any(|s| s.starts_with(n));
+            let seen = self.report.steps.iter().any(|s| s.name == *n)
+                || self.report.skipped.iter().any(|s| s.starts_with(n));
             if !seen {
-                run.report
-                    .skipped
-                    .push(format!("not run: {n} (after {failed} failed)"));
+                self.skip(&format!("not run: {n} (after {failed} failed)"));
             }
         }
     }
-    run.report.passed = r.is_ok() && run.report.steps.iter().all(|s| s.ok);
-    run.report
 }

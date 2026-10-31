@@ -14,10 +14,14 @@ async fn main() {
     });
 }
 
-async fn run() -> anyhow::Result<bool> {
+const USAGE: &str = "usage: arena-part-check <package dir> [--config file.json]";
+
+/// The package folder and the config from the command line.
+fn parse_args(
+    mut args: impl Iterator<Item = String>,
+) -> anyhow::Result<(PathBuf, serde_json::Value)> {
     let mut dir = None;
     let mut config = serde_json::json!({});
-    let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         if a == "--config" {
             let f = args
@@ -27,20 +31,31 @@ async fn run() -> anyhow::Result<bool> {
         } else if dir.is_none() {
             dir = Some(PathBuf::from(a));
         } else {
-            anyhow::bail!("usage: arena-part-check <package dir> [--config file.json]");
+            anyhow::bail!(USAGE);
         }
     }
-    let dir = dir.ok_or_else(|| {
-        anyhow::anyhow!("usage: arena-part-check <package dir> [--config file.json]")
-    })?;
+    Ok((dir.ok_or_else(|| anyhow::anyhow!(USAGE))?, config))
+}
+
+/// Where the binaries are (`ARENA_BIN_DIR`, else the release build).
+fn bin_dir() -> PathBuf {
     let arena = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let bin_dir = std::env::var_os("ARENA_BIN_DIR")
+    std::env::var_os("ARENA_BIN_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| arena.join("core/target/release"));
-    let (saves, temp) = match std::env::var_os("ARENA_SAVES") {
-        Some(s) => (PathBuf::from(s), false),
-        None => (unique_temp_dir()?, true),
-    };
+        .unwrap_or_else(|| arena.join("core/target/release"))
+}
+
+/// Where saves go (`ARENA_SAVES`, else a fresh temp folder) and whether to remove it afterwards.
+fn saves_dir() -> std::io::Result<(PathBuf, bool)> {
+    match std::env::var_os("ARENA_SAVES") {
+        Some(s) => Ok((PathBuf::from(s), false)),
+        None => Ok((unique_temp_dir()?, true)),
+    }
+}
+
+async fn run() -> anyhow::Result<bool> {
+    let (dir, config) = parse_args(std::env::args().skip(1))?;
+    let (saves, temp) = saves_dir()?;
     let registry = Registry::from_dir(&dir)?;
     let name = registry
         .integrations()
@@ -49,7 +64,7 @@ async fn run() -> anyhow::Result<bool> {
         .unwrap()
         .name
         .clone();
-    let hub = Hub::new(registry, bin_dir, saves.clone());
+    let hub = Hub::new(registry, bin_dir(), saves.clone());
     let report = check(&hub, &name, config).await;
     println!("{}", serde_json::to_string_pretty(&report)?);
     drop(hub);
