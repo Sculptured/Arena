@@ -151,6 +151,14 @@ impl Registry {
         Ok(Registry { by_name })
     }
 
+    /// A registry of the one package in `dir`.
+    pub fn from_dir(dir: &Path) -> Result<Registry> {
+        let m = Manifest::load(dir)?;
+        let mut by_name = BTreeMap::new();
+        by_name.insert(m.name.clone(), m);
+        Ok(Registry { by_name })
+    }
+
     pub fn get(&self, name: &str) -> Option<&Manifest> {
         self.by_name.get(name)
     }
