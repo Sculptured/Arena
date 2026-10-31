@@ -164,5 +164,11 @@ def serve(part, stdin=None, stdout=None):
         else:
             resp = _handle(part, req)
         if resp is not None:
-            stdout.write(json.dumps(resp, separators=(",", ":")) + "\n")
+            try:
+                data = json.dumps(resp, separators=(",", ":"))
+            except (TypeError, ValueError) as e:  # a result that isn't JSON: answer, don't die
+                print(f"arena-part: unserializable result: {e}", file=sys.stderr)
+                err = errors.internal(f"internal error: {e}")
+                data = json.dumps(_response(resp.get("id"), err=err), separators=(",", ":"))
+            stdout.write(data + "\n")
             stdout.flush()

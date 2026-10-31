@@ -204,3 +204,21 @@ def test_fixed_step_keeps_remainder():
     f.advance_to(299, steps.append)
     f.advance_to(300, steps.append)
     assert steps == [100, 100, 100]
+
+
+class BadResult(Odd):
+    def usage(self):
+        return {"bytes": {1, 2}}
+
+    def describe(self):
+        return {"name": "ok"}
+
+
+def test_unserializable_result_answers_internal_error():
+    c = Client(BadResult())
+    a = c.req("usage")
+    b = c.req("describe")
+    out = c.run()
+    assert out[0]["id"] == a and out[0]["error"]["code"] == -32603
+    assert out[0]["error"]["message"].startswith("internal error:")
+    assert out[1]["id"] == b and out[1]["result"] == {"name": "ok"}
