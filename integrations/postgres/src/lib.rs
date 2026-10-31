@@ -26,6 +26,27 @@ pub struct Postgres {
     live: Mutex<HashSet<String>>,
 }
 
+/// Takes `arena_ns=<ns>` out of the URL's query string; other query parameters stay.
+fn split_ns(url: &str) -> (String, String) {
+    let Some((base, query)) = url.split_once('?') else {
+        return (url.to_string(), String::new());
+    };
+    let mut ns = String::new();
+    let mut rest = vec![];
+    for kv in query.split('&') {
+        match kv.strip_prefix("arena_ns=") {
+            Some(n) => ns = n.to_string(),
+            None => rest.push(kv),
+        }
+    }
+    let rest: Vec<&str> = rest.into_iter().filter(|k| !k.is_empty()).collect();
+    if rest.is_empty() {
+        (base.to_string(), ns)
+    } else {
+        (format!("{base}?{}", rest.join("&")), ns)
+    }
+}
+
 fn is_legacy(name: &str) -> bool {
     ["snap_", "branch_", "gold_"]
         .iter()
@@ -34,7 +55,21 @@ fn is_legacy(name: &str) -> bool {
 }
 
 fn internal(e: impl std::fmt::Display) -> PartError {
-    PartError::internal(format!("{e:#}"))
+    let m = format!("{e:#}");
+    if m.contains("invalid database name") {
+        return PartError::invalid(m);
+    }
+    PartError::internal(m)
+}
+
+fn check_id(id: &str) -> Result<(), PartError> {
+    if valid_id(id) {
+        Ok(())
+    } else {
+        Err(PartError::invalid(
+            "instance and save ids must match [a-z0-9_]{1,63}",
+        ))
+    }
 }
 
 impl Postgres {
@@ -42,10 +77,7 @@ impl Postgres {
         let url = std::env::var("ARENA_PG_URL").unwrap_or_else(|_| DEFAULT_URL.into());
         // arenad passes `ARENA_PG_URL` on to programs but not other variables, so the namespace can
         // also ride on the URL as `?arena_ns=<ns>`.
-        let (url, from_url) = match url.split_once("?arena_ns=") {
-            Some((u, n)) => (u.to_string(), n.to_string()),
-            None => (url, String::new()),
-        };
+        let (url, from_url) = split_ns(&url);
         let ns = std::env::var("ARENA_PG_NS").unwrap_or(from_url);
         Postgres::new(&url, &ns)
     }
@@ -73,6 +105,7 @@ impl Postgres {
 
     /// The database of a live (or surviving) instance.
     async fn instance_db(&self, id: &str) -> Result<String, PartError> {
+        check_id(id)?;
         let db = self.pi(id);
         if self.pg.exists(&db).await.map_err(internal)? {
             return Ok(db);
@@ -84,6 +117,7 @@ impl Postgres {
     }
 
     async fn save_db(&self, id: &str) -> Result<String, PartError> {
+        check_id(id)?;
         let db = self.ps(id);
         if self.pg.exists(&db).await.map_err(internal)? {
             return Ok(db);
@@ -209,7 +243,29 @@ fn to_params(types: &[Type], vals: &[Value]) -> Result<Vec<Box<dyn ToSql + Sync 
     for (i, (t, v)) in types.iter().zip(vals).enumerate() {
         let bad = || format!("param ${} ({v}) doesn't fit type {t}", i + 1);
         let b: Box<dyn ToSql + Sync + Send> = if v.is_null() {
-            Box::new(None::<String>)
+            if *t == Type::BOOL {
+                Box::new(None::<bool>)
+            } else if *t == Type::INT2 {
+                Box::new(None::<i16>)
+            } else if *t == Type::INT4 {
+                Box::new(None::<i32>)
+            } else if *t == Type::INT8 {
+                Box::new(None::<i64>)
+            } else if *t == Type::FLOAT4 {
+                Box::new(None::<f32>)
+            } else if *t == Type::FLOAT8 {
+                Box::new(None::<f64>)
+            } else if *t == Type::JSON || *t == Type::JSONB {
+                Box::new(None::<Value>)
+            } else if *t == Type::TEXT
+                || *t == Type::VARCHAR
+                || *t == Type::BPCHAR
+                || *t == Type::NAME
+            {
+                Box::new(None::<String>)
+            } else {
+                return Err(format!("param ${} has unsupported type {t}", i + 1));
+            }
         } else if *t == Type::BOOL {
             Box::new(v.as_bool().ok_or_else(bad)?)
         } else if *t == Type::INT2 {
@@ -297,10 +353,60 @@ async fn all_rows(c: &Client) -> anyhow::Result<BTreeMap<String, Value>> {
     Ok(out)
 }
 
-async fn some_rows(c: &Client, keys: &[String]) -> anyhow::Result<Map<String, Value>> {
+/// A fingerprint of every table the rows-by-key view doesn't cover (no one-column primary key, or
+/// not in schema `public`), keyed `<table>/*` or `<schema>.<table>/*`.
+async fn whole_tables(c: &Client) -> anyhow::Result<BTreeMap<String, String>> {
+    let pk: HashSet<String> = pk_tables(c).await?.into_iter().map(|x| x.0).collect();
+    let mut out = BTreeMap::new();
+    for (schema, t) in user_tables(c).await? {
+        if schema == "public" && pk.contains(&t) {
+            continue;
+        }
+        let sql = format!(
+            "SELECT md5(coalesce(string_agg(r::text, E'\\n' ORDER BY r::text), '')) FROM {}.{} r",
+            q(&schema),
+            q(&t)
+        );
+        let h: String = c.query_one(&sql, &[]).await?.get(0);
+        let key = if schema == "public" {
+            format!("{t}/*")
+        } else {
+            format!("{schema}.{t}/*")
+        };
+        out.insert(key, h);
+    }
+    Ok(out)
+}
+
+async fn user_tables(c: &Client) -> anyhow::Result<Vec<(String, String)>> {
+    let rows = c
+        .query(
+            "SELECT n.nspname::text, c.relname::text FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition \
+             AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%' ORDER BY 1, 2",
+            &[],
+        )
+        .await?;
+    Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+}
+
+/// `Ok(Err(message))` when a key names a public table that has no one-column primary key.
+async fn some_rows(
+    c: &Client,
+    keys: &[String],
+) -> anyhow::Result<Result<Map<String, Value>, String>> {
     let tables: HashMap<String, String> = pk_tables(c).await?.into_iter().collect();
+    let all: Vec<(String, String)> = user_tables(c).await?;
     let mut out = Map::new();
     for k in keys {
+        if let Some((t, _)) = k.split_once('/') {
+            if !tables.contains_key(t) && all.iter().any(|(s, n)| s == "public" && n == t) {
+                return Ok(Err(format!(
+                    "table {t} has no single-column primary key; inspect {t}/* is not supported"
+                )));
+            }
+        }
         let doc = match k.split_once('/') {
             Some((t, id)) if tables.contains_key(t) => {
                 let sql = format!(
@@ -317,7 +423,7 @@ async fn some_rows(c: &Client, keys: &[String]) -> anyhow::Result<Map<String, Va
         };
         out.insert(k.clone(), doc);
     }
-    Ok(out)
+    Ok(Ok(out))
 }
 
 #[async_trait]
@@ -362,6 +468,7 @@ impl Part for Postgres {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
+        check_id(&p.instance)?;
         let db = self.pi(&p.instance);
         self.pg.drop(&db).await.map_err(internal)?;
         match &p.from {
@@ -432,10 +539,15 @@ impl Part for Postgres {
     }
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
+        check_id(&p.save)?;
         let db = self.instance_db(&p.instance).await?;
         let ps = self.ps(&p.save);
         self.pg.drop(&ps).await.map_err(internal)?;
-        self.pg.create_from(&ps, &db).await.map_err(internal)?;
+        // a benchmark may hold its own connection to the instance: close it for the copy
+        self.pg
+            .create_from_exclusive(&ps, &db)
+            .await
+            .map_err(internal)?;
         let bytes = self.pg.size(&ps).await.map_err(internal)?.unwrap_or(0);
         Ok(Saved {
             bytes: bytes.max(0) as u64,
@@ -449,21 +561,35 @@ impl Part for Postgres {
             .pg
             .with_db(&db, async |c| {
                 if p.keys.is_empty() {
-                    Ok(all_rows(c).await?.into_iter().collect())
+                    Ok(Ok(all_rows(c).await?.into_iter().collect()))
                 } else {
                     some_rows(c, &p.keys).await
                 }
             })
             .await
-            .map_err(internal)?;
+            .map_err(internal)?
+            .map_err(PartError::invalid)?;
         Ok(Docs { docs })
     }
 
     async fn diff(&self, p: DiffParams) -> Result<Differing, PartError> {
         let (a, b) = (self.target_db(&p.a).await?, self.target_db(&p.b).await?);
         // One database at a time: never two connections held at once.
-        let ra = self.pg.with_db(&a, async |c| all_rows(c).await).await;
-        let rb = self.pg.with_db(&b, async |c| all_rows(c).await).await;
+        let both = async |c: &mut Client| {
+            let rows: BTreeMap<String, Value> = all_rows(c)
+                .await?
+                .into_iter()
+                .chain(
+                    whole_tables(c)
+                        .await?
+                        .into_iter()
+                        .map(|(k, h)| (k, json!(h))),
+                )
+                .collect();
+            Ok(rows)
+        };
+        let ra = self.pg.with_db(&a, both).await;
+        let rb = self.pg.with_db(&b, both).await;
         let (ra, rb) = (ra.map_err(internal)?, rb.map_err(internal)?);
         let keys: HashSet<&String> = ra.keys().chain(rb.keys()).collect();
         let mut differing: Vec<String> = keys
@@ -476,6 +602,7 @@ impl Part for Postgres {
     }
 
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {
+        check_id(&p.save)?;
         let ps = self.ps(&p.save);
         if self.pg.exists(&ps).await.map_err(internal)? {
             return self.pg.drop(&ps).await.map_err(internal);
@@ -487,6 +614,7 @@ impl Part for Postgres {
     }
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
+        check_id(&p.instance)?;
         // arenad saves what it wants to keep before it stops an instance.
         let db = self.pi(&p.instance);
         self.live.lock().unwrap().remove(&db);
@@ -515,19 +643,19 @@ impl Part for Postgres {
         let live: HashSet<String> = self.live.lock().unwrap().clone();
         let mut out = GcResult::default();
         let mut doomed = vec![];
-        // (prefix, is instance)
+        // (prefix, is an instance, the prefix is not part of the id)
         let mut kinds = vec![
-            (format!("ps_{}", self.ns), false),
-            (format!("pi_{}", self.ns), true),
+            (format!("ps_{}", self.ns), false, true),
+            (format!("pi_{}", self.ns), true, true),
         ];
         if self.ns.is_empty() {
-            kinds.push(("snap_".into(), false));
-            kinds.push(("branch_".into(), true));
+            kinds.push(("snap_".into(), false, false));
+            kinds.push(("branch_".into(), true, false));
         }
-        for (prefix, instance) in kinds {
+        for (prefix, instance, strip) in kinds {
             for (name, size) in self.pg.list(&prefix).await.map_err(internal)? {
                 // `pi_`/`ps_` ids drop the prefix; legacy names are their own id.
-                let id = if prefix.starts_with("p") {
+                let id = if strip {
                     &name[prefix.len()..]
                 } else {
                     &name[..]
@@ -549,5 +677,28 @@ impl Part for Postgres {
     async fn connect(&self, p: IdParams) -> Result<Value, PartError> {
         let db = self.instance_db(&p.instance).await?;
         Ok(json!({"url": self.pg.db_url(&db)}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_ns;
+
+    #[test]
+    fn ns_stops_at_ampersand_and_keeps_other_params() {
+        let u = "postgres://a:b@h:1/postgres";
+        assert_eq!(split_ns(u), (u.into(), String::new()));
+        assert_eq!(
+            split_ns(&format!("{u}?arena_ns=x_")),
+            (u.into(), "x_".into())
+        );
+        assert_eq!(
+            split_ns(&format!("{u}?arena_ns=x_&sslmode=disable")),
+            (format!("{u}?sslmode=disable"), "x_".into())
+        );
+        assert_eq!(
+            split_ns(&format!("{u}?sslmode=disable&arena_ns=y_")),
+            (format!("{u}?sslmode=disable"), "y_".into())
+        );
     }
 }

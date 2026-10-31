@@ -211,7 +211,8 @@ async fn diff_reports_changed_row() {
 async fn legacy_snap_name_accepted() {
     // Empty namespace, so legacy names are recognised; the database name is test-unique.
     let name = format!("snap_t5_{}_legacy", std::process::id());
-    let extra = vec![name.clone()];
+    // every database the test makes is registered before anything can fail
+    let extra = vec![name.clone(), format!("pi_t5_{}_li", std::process::id())];
     let nm = name.clone();
     with_cleanup("none_", &extra, move || async move {
         let t = Templates::new(&url());
@@ -263,9 +264,6 @@ async fn legacy_snap_name_accepted() {
             .unwrap();
     })
     .await;
-    // cleanup of the instance database even if the body failed early
-    let inst = format!("pi_t5_{}_li", std::process::id());
-    Templates::new(&url()).drop(&inst).await.unwrap();
 }
 
 #[tokio::test]
@@ -386,4 +384,130 @@ async fn stop_drops_instance_and_no_tools_by_default() {
         assert!(!t.exists(&format!("pi_{n}a")).await.unwrap());
     })
     .await;
+}
+
+#[tokio::test]
+async fn diff_covers_tables_without_primary_key_and_other_schemas() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n).with_sql_tools();
+        let init = "CREATE TABLE np(a int, b text); INSERT INTO np VALUES (1, 'x'); \
+                    CREATE SCHEMA other; CREATE TABLE other.o(id int primary key, v text); \
+                    INSERT INTO other.o VALUES (1, 'x')";
+        p.start(start("a", json!({"init_sql": init}), None))
+            .await
+            .unwrap();
+        save(&p, "a", "s1").await;
+        let d = |a: &str, b: &str| DiffParams {
+            a: Target::Instance { instance: a.into() },
+            b: Target::Save { save: b.into() },
+        };
+        assert!(p.diff(d("a", "s1")).await.unwrap().differing.is_empty());
+        exec(&p, "a", "UPDATE np SET b = 'y'").await;
+        assert_eq!(
+            p.diff(d("a", "s1")).await.unwrap().differing,
+            vec!["np/*".to_string()]
+        );
+        exec(&p, "a", "UPDATE np SET b = 'x'").await;
+        exec(&p, "a", "UPDATE other.o SET v = 'y'").await;
+        assert_eq!(
+            p.diff(d("a", "s1")).await.unwrap().differing,
+            vec!["other.o/*".to_string()]
+        );
+        let e = p
+            .inspect(InspectParams {
+                target: Target::Instance {
+                    instance: "a".into(),
+                },
+                keys: vec!["np/1".into()],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, -32602);
+        assert!(
+            e.message
+                .contains("table np has no single-column primary key"),
+            "{}",
+            e.message
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn null_and_typed_params() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n).with_sql_tools();
+        let init = "CREATE TABLE t(id int primary key, n int, ok boolean, j jsonb, v text)";
+        p.start(start("a", json!({"init_sql": init}), None))
+            .await
+            .unwrap();
+        let r = p
+            .call_tool(CallToolParams {
+                instance: "a".into(),
+                name: "sql_execute".into(),
+                args: json!({"sql": "INSERT INTO t(id, n, ok, j, v) VALUES ($1, $2, $3, $4, $5)",
+                             "params": [1, null, true, null, null]}),
+                clock_ms: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.error, None);
+        let r = query(&p, "a", "SELECT * FROM t").await;
+        assert_eq!(
+            r.result,
+            Some(json!([{"id": 1, "n": null, "ok": true, "j": null, "v": null}]))
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn save_closes_a_held_connection() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n).with_sql_tools();
+        p.start(start("a", cfg(), None)).await.unwrap();
+        let (client, conn) = arena_part::helpers::pg::tokio_postgres::connect(
+            &Templates::new(&url()).db_url(&format!("pi_{n}a")),
+            arena_part::helpers::pg::tokio_postgres::NoTls,
+        )
+        .await
+        .unwrap();
+        let h = tokio::spawn(conn);
+        client.simple_query("SELECT 1").await.unwrap();
+        save(&p, "a", "s1").await;
+        assert!(
+            client.simple_query("SELECT 1").await.is_err(),
+            "held connection should be closed"
+        );
+        let _ = h.await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn bad_id_is_invalid_params() {
+    let p = Postgres::new(&url(), "none_");
+    let e = p.start(start("Bad Id", json!({}), None)).await.unwrap_err();
+    assert_eq!(e.code, -32602);
+    let e = p
+        .stop(IdParams {
+            instance: "UPPER".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, -32602);
+    let e = p
+        .inspect(InspectParams {
+            target: Target::Save { save: "A".into() },
+            keys: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, -32602);
 }

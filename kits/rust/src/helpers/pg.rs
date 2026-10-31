@@ -95,6 +95,45 @@ impl Templates {
         self.admin(async |c| Ok(c.batch_execute(&sql).await?)).await
     }
 
+    /// Like [`create_from`](Self::create_from), but first terminates every other connection to
+    /// `template` (someone holding their own connection would make the copy fail), under the
+    /// template's lock.
+    pub async fn create_from_exclusive(&self, new: &str, template: &str) -> Result<()> {
+        check_name(new)?;
+        check_name(template)?;
+        let _g = self.lock_for(template).lock_owned().await;
+        let sql = format!(
+            "CREATE DATABASE {} TEMPLATE {}",
+            quote(new),
+            quote(template)
+        );
+        self.admin(async |c| {
+            for attempt in 0..40 {
+                c.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                     WHERE datname = $1 AND pid <> pg_backend_pid()",
+                    &[&template],
+                )
+                .await?;
+                match c.batch_execute(&sql).await {
+                    Ok(()) => return Ok(()),
+                    // the terminated backends take a moment to go
+                    Err(e)
+                        if attempt < 39
+                            && e.as_db_error().is_some_and(|d| {
+                                d.code() == &tokio_postgres::error::SqlState::OBJECT_IN_USE
+                            }) =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            unreachable!()
+        })
+        .await
+    }
+
     /// `CREATE DATABASE name` (empty).
     pub async fn create_empty(&self, name: &str) -> Result<()> {
         check_name(name)?;
