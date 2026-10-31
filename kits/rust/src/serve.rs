@@ -107,55 +107,74 @@ where
         if text.is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(text) {
+        let req = match parse_line(text) {
             Ok(v) => v,
-            Err(e) => {
-                let err = PartError {
-                    code: -32700,
-                    message: format!("parse error: {e}"),
-                };
+            Err(err) => {
                 write_line(&w, response(Value::Null, Err(err))).await?;
                 continue;
             }
         };
         let (w, handler) = (w.clone(), handler.clone());
-        tasks.spawn(async move {
-            let id = req.get("id").cloned();
-            let method = req
-                .get("method")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
-            let out = if method.is_empty() {
-                Err(PartError {
-                    code: -32600,
-                    message: "invalid request".into(),
-                })
-            } else if !ids_ok(&params) {
-                Err(PartError::invalid(
-                    "instance and save ids must match [a-z0-9_]{1,63}",
-                ))
-            } else {
-                // Run on its own task so a panic is caught and answered.
-                match tokio::spawn(handler(method, params)).await {
-                    Ok(r) => r,
-                    Err(e) => Err(PartError::internal(format!(
-                        "internal error: {}",
-                        panic_message(e)
-                    ))),
-                }
-            };
-            // Notifications (no id) get no response.
-            if let Some(id) = id {
-                if let Err(e) = write_line(&w, response(id, out)).await {
-                    eprintln!("arena-part: write failed: {e}");
-                }
-            }
-        });
+        tasks.spawn(async move { serve_request(req, &*handler, &w).await });
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+/// Answer one request on the writer; notifications (no id) get no response.
+async fn serve_request<W, F, Fut>(req: Value, handler: &F, w: &Mutex<W>)
+where
+    W: AsyncWrite + Unpin,
+    F: Fn(String, Value) -> Fut,
+    Fut: Future<Output = R<Value>> + Send + 'static,
+{
+    let id = req.get("id").cloned();
+    let out = answer(req, handler).await;
+    if let Some(id) = id {
+        if let Err(e) = write_line(w, response(id, out)).await {
+            eprintln!("arena-part: write failed: {e}");
+        }
+    }
+}
+
+fn parse_line(text: &str) -> R<Value> {
+    serde_json::from_str(text).map_err(|e| PartError {
+        code: -32700,
+        message: format!("parse error: {e}"),
+    })
+}
+
+/// Validate one request and run it through the handler.
+async fn answer<F, Fut>(req: Value, handler: &F) -> R<Value>
+where
+    F: Fn(String, Value) -> Fut,
+    Fut: Future<Output = R<Value>> + Send + 'static,
+{
+    let method = req
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
+    if method.is_empty() {
+        return Err(PartError {
+            code: -32600,
+            message: "invalid request".into(),
+        });
+    }
+    if !ids_ok(&params) {
+        return Err(PartError::invalid(
+            "instance and save ids must match [a-z0-9_]{1,63}",
+        ));
+    }
+    // Run on its own task so a panic is caught and answered.
+    match tokio::spawn(handler(method, params)).await {
+        Ok(r) => r,
+        Err(e) => Err(PartError::internal(format!(
+            "internal error: {}",
+            panic_message(e)
+        ))),
+    }
 }
 
 fn panic_message(e: tokio::task::JoinError) -> String {

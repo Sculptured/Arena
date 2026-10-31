@@ -32,6 +32,35 @@ fn quote(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
+/// `CREATE DATABASE new TEMPLATE template`, after checking both names.
+fn create_from_sql(new: &str, template: &str) -> Result<String> {
+    check_name(new)?;
+    check_name(template)?;
+    Ok(format!(
+        "CREATE DATABASE {} TEMPLATE {}",
+        quote(new),
+        quote(template)
+    ))
+}
+
+/// How many times `create_from_exclusive` retries while terminated backends go away.
+const CREATE_ATTEMPTS: u32 = 40;
+
+async fn terminate_others(c: &Client, db: &str) -> Result<()> {
+    c.execute(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE datname = $1 AND pid <> pg_backend_pid()",
+        &[&db],
+    )
+    .await?;
+    Ok(())
+}
+
+fn is_object_in_use(e: &tokio_postgres::Error) -> bool {
+    e.as_db_error()
+        .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::OBJECT_IN_USE)
+}
+
 fn strip_db(url: &str) -> String {
     let url = url.trim_end_matches('/');
     match url.find("://") {
@@ -84,14 +113,8 @@ impl Templates {
 
     /// `CREATE DATABASE new TEMPLATE template`, holding the template's lock.
     pub async fn create_from(&self, new: &str, template: &str) -> Result<()> {
-        check_name(new)?;
-        check_name(template)?;
+        let sql = create_from_sql(new, template)?;
         let _g = self.lock_for(template).lock_owned().await;
-        let sql = format!(
-            "CREATE DATABASE {} TEMPLATE {}",
-            quote(new),
-            quote(template)
-        );
         self.admin(async |c| Ok(c.batch_execute(&sql).await?)).await
     }
 
@@ -99,37 +122,21 @@ impl Templates {
     /// `template` (someone holding their own connection would make the copy fail), under the
     /// template's lock.
     pub async fn create_from_exclusive(&self, new: &str, template: &str) -> Result<()> {
-        check_name(new)?;
-        check_name(template)?;
+        let sql = create_from_sql(new, template)?;
         let _g = self.lock_for(template).lock_owned().await;
-        let sql = format!(
-            "CREATE DATABASE {} TEMPLATE {}",
-            quote(new),
-            quote(template)
-        );
         self.admin(async |c| {
-            for attempt in 0..40 {
-                c.execute(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                     WHERE datname = $1 AND pid <> pg_backend_pid()",
-                    &[&template],
-                )
-                .await?;
+            for attempt in 0..CREATE_ATTEMPTS {
+                terminate_others(c, template).await?;
                 match c.batch_execute(&sql).await {
                     Ok(()) => return Ok(()),
                     // the terminated backends take a moment to go
-                    Err(e)
-                        if attempt < 39
-                            && e.as_db_error().is_some_and(|d| {
-                                d.code() == &tokio_postgres::error::SqlState::OBJECT_IN_USE
-                            }) =>
-                    {
+                    Err(e) if attempt + 1 < CREATE_ATTEMPTS && is_object_in_use(&e) => {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                     Err(e) => return Err(e.into()),
                 }
             }
-            unreachable!()
+            unreachable!("the last attempt returns")
         })
         .await
     }

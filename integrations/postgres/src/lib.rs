@@ -103,29 +103,60 @@ impl Postgres {
         self.ns.is_empty() && is_legacy(id)
     }
 
-    /// The database of a live (or surviving) instance.
-    async fn instance_db(&self, id: &str) -> Result<String, PartError> {
+    /// The database named `db`, or the legacy one named `id`; `what` names the thing in errors.
+    async fn existing_db(&self, what: &str, id: &str, db: String) -> Result<String, PartError> {
         check_id(id)?;
-        let db = self.pi(id);
         if self.pg.exists(&db).await.map_err(internal)? {
             return Ok(db);
         }
         if self.legacy_ok(id) && self.pg.exists(id).await.map_err(internal)? {
             return Ok(id.into());
         }
-        Err(PartError::unknown(format!("unknown instance {id}")))
+        Err(PartError::unknown(format!("unknown {what} {id}")))
+    }
+
+    /// The database of a live (or surviving) instance.
+    async fn instance_db(&self, id: &str) -> Result<String, PartError> {
+        self.existing_db("instance", id, self.pi(id)).await
     }
 
     async fn save_db(&self, id: &str) -> Result<String, PartError> {
-        check_id(id)?;
-        let db = self.ps(id);
-        if self.pg.exists(&db).await.map_err(internal)? {
-            return Ok(db);
+        self.existing_db("save", id, self.ps(id)).await
+    }
+
+    /// A new empty instance database, running the config's `init_sql` in it.
+    async fn create_fresh(&self, db: &str, config: &Value) -> Result<(), PartError> {
+        self.pg.create_empty(db).await.map_err(internal)?;
+        let Some(sql) = config.get("init_sql").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let r = self
+            .pg
+            .with_db(db, async |c| Ok(c.batch_execute(sql).await?))
+            .await;
+        if let Err(e) = r {
+            let _ = self.pg.drop(db).await;
+            return Err(PartError::invalid(format!("init_sql failed: {e:#}")));
         }
-        if self.legacy_ok(id) && self.pg.exists(id).await.map_err(internal)? {
-            return Ok(id.into());
+        Ok(())
+    }
+
+    /// The kinds of database this part owns (plus the legacy kinds, with no namespace).
+    fn gc_kinds(&self) -> Vec<GcKind> {
+        let kind = |prefix: String, instance, strip| GcKind {
+            prefix,
+            instance,
+            strip,
+        };
+        let mut kinds = vec![
+            kind(format!("ps_{}", self.ns), false, true),
+            kind(format!("pi_{}", self.ns), true, true),
+        ];
+        if self.ns.is_empty() {
+            kinds.push(kind("snap_".into(), false, false));
+            kinds.push(kind("branch_".into(), true, false));
         }
-        Err(PartError::unknown(format!("unknown save {id}")))
+        kinds
     }
 
     async fn target_db(&self, t: &Target) -> Result<String, PartError> {
@@ -231,7 +262,74 @@ pub fn write_keys(sql: &str) -> Vec<String> {
 
 // ---- params ----
 
-fn to_params(types: &[Type], vals: &[Value]) -> Result<Vec<Box<dyn ToSql + Sync + Send>>, String> {
+type Param = Box<dyn ToSql + Sync + Send>;
+
+/// The parameter types a statement can take.
+#[derive(Clone, Copy)]
+enum Kind {
+    Bool,
+    Int2,
+    Int4,
+    Int8,
+    Float4,
+    Float8,
+    Json,
+    Text,
+}
+
+fn kind_of(t: &Type) -> Option<Kind> {
+    Some(if *t == Type::BOOL {
+        Kind::Bool
+    } else if *t == Type::INT2 {
+        Kind::Int2
+    } else if *t == Type::INT4 {
+        Kind::Int4
+    } else if *t == Type::INT8 {
+        Kind::Int8
+    } else if *t == Type::FLOAT4 {
+        Kind::Float4
+    } else if *t == Type::FLOAT8 {
+        Kind::Float8
+    } else if *t == Type::JSON || *t == Type::JSONB {
+        Kind::Json
+    } else if *t == Type::TEXT || *t == Type::VARCHAR || *t == Type::BPCHAR || *t == Type::NAME {
+        Kind::Text
+    } else {
+        return None;
+    })
+}
+
+fn null_param(kind: Kind) -> Param {
+    match kind {
+        Kind::Bool => Box::new(None::<bool>),
+        Kind::Int2 => Box::new(None::<i16>),
+        Kind::Int4 => Box::new(None::<i32>),
+        Kind::Int8 => Box::new(None::<i64>),
+        Kind::Float4 => Box::new(None::<f32>),
+        Kind::Float8 => Box::new(None::<f64>),
+        Kind::Json => Box::new(None::<Value>),
+        Kind::Text => Box::new(None::<String>),
+    }
+}
+
+/// `None` when the (non-null) value doesn't fit the kind.
+fn value_param(kind: Kind, v: &Value) -> Option<Param> {
+    Some(match kind {
+        Kind::Bool => Box::new(v.as_bool()?),
+        Kind::Int2 => Box::new(i16::try_from(v.as_i64()?).ok()?),
+        Kind::Int4 => Box::new(i32::try_from(v.as_i64()?).ok()?),
+        Kind::Int8 => Box::new(v.as_i64()?),
+        Kind::Float4 => Box::new(v.as_f64()? as f32),
+        Kind::Float8 => Box::new(v.as_f64()?),
+        Kind::Json => Box::new(v.clone()),
+        Kind::Text => Box::new(match v {
+            Value::String(s) => s.clone(),
+            o => o.to_string(),
+        }),
+    })
+}
+
+fn to_params(types: &[Type], vals: &[Value]) -> Result<Vec<Param>, String> {
     if types.len() != vals.len() {
         return Err(format!(
             "the statement takes {} params, got {}",
@@ -239,57 +337,15 @@ fn to_params(types: &[Type], vals: &[Value]) -> Result<Vec<Box<dyn ToSql + Sync 
             vals.len()
         ));
     }
-    let mut out: Vec<Box<dyn ToSql + Sync + Send>> = vec![];
+    let mut out = vec![];
     for (i, (t, v)) in types.iter().zip(vals).enumerate() {
-        let bad = || format!("param ${} ({v}) doesn't fit type {t}", i + 1);
-        let b: Box<dyn ToSql + Sync + Send> = if v.is_null() {
-            if *t == Type::BOOL {
-                Box::new(None::<bool>)
-            } else if *t == Type::INT2 {
-                Box::new(None::<i16>)
-            } else if *t == Type::INT4 {
-                Box::new(None::<i32>)
-            } else if *t == Type::INT8 {
-                Box::new(None::<i64>)
-            } else if *t == Type::FLOAT4 {
-                Box::new(None::<f32>)
-            } else if *t == Type::FLOAT8 {
-                Box::new(None::<f64>)
-            } else if *t == Type::JSON || *t == Type::JSONB {
-                Box::new(None::<Value>)
-            } else if *t == Type::TEXT
-                || *t == Type::VARCHAR
-                || *t == Type::BPCHAR
-                || *t == Type::NAME
-            {
-                Box::new(None::<String>)
-            } else {
-                return Err(format!("param ${} has unsupported type {t}", i + 1));
-            }
-        } else if *t == Type::BOOL {
-            Box::new(v.as_bool().ok_or_else(bad)?)
-        } else if *t == Type::INT2 {
-            Box::new(i16::try_from(v.as_i64().ok_or_else(bad)?).map_err(|_| bad())?)
-        } else if *t == Type::INT4 {
-            Box::new(i32::try_from(v.as_i64().ok_or_else(bad)?).map_err(|_| bad())?)
-        } else if *t == Type::INT8 {
-            Box::new(v.as_i64().ok_or_else(bad)?)
-        } else if *t == Type::FLOAT4 {
-            Box::new(v.as_f64().ok_or_else(bad)? as f32)
-        } else if *t == Type::FLOAT8 {
-            Box::new(v.as_f64().ok_or_else(bad)?)
-        } else if *t == Type::JSON || *t == Type::JSONB {
-            Box::new(v.clone())
-        } else if *t == Type::TEXT || *t == Type::VARCHAR || *t == Type::BPCHAR || *t == Type::NAME
-        {
-            Box::new(match v {
-                Value::String(s) => s.clone(),
-                o => o.to_string(),
-            })
+        let n = i + 1;
+        let kind = kind_of(t).ok_or_else(|| format!("param ${n} has unsupported type {t}"))?;
+        out.push(if v.is_null() {
+            null_param(kind)
         } else {
-            return Err(format!("param ${} has unsupported type {t}", i + 1));
-        };
-        out.push(b);
+            value_param(kind, v).ok_or_else(|| format!("param ${n} ({v}) doesn't fit type {t}"))?
+        });
     }
     Ok(out)
 }
@@ -426,6 +482,73 @@ async fn some_rows(
     Ok(Ok(out))
 }
 
+fn sql_tools() -> Vec<ToolSchema> {
+    vec![
+        tool(
+            "sql_query",
+            "Run a SELECT and get the rows as JSON objects.",
+            Effect::Read,
+        ),
+        tool(
+            "sql_execute",
+            "Run an INSERT, UPDATE, DELETE or other statement and get the rows affected.",
+            Effect::Write,
+        ),
+    ]
+}
+
+/// The `sql` and `params` of a tool call.
+fn sql_args(args: &Value) -> Result<(&str, Vec<Value>), String> {
+    let sql = args
+        .get("sql")
+        .and_then(Value::as_str)
+        .ok_or("sql must be a string")?;
+    let params = match args.get("params") {
+        None | Some(Value::Null) => vec![],
+        Some(Value::Array(a)) => a.clone(),
+        Some(_) => return Err("params must be a list".into()),
+    };
+    Ok((sql, params))
+}
+
+fn tool_error(m: String) -> ToolOutput {
+    ToolOutput {
+        error: Some(m),
+        ..Default::default()
+    }
+}
+
+/// The names of the databases a gc may drop, and how to read the id out of a name.
+struct GcKind {
+    prefix: String,
+    instance: bool,
+    /// Whether the prefix is not part of the id (`pi_`/`ps_`); legacy names are their own id.
+    strip: bool,
+}
+
+impl GcKind {
+    fn is_kept(&self, name: &str, keep: &HashSet<&str>, live: &HashSet<String>) -> bool {
+        let id = if self.strip {
+            &name[self.prefix.len()..]
+        } else {
+            name
+        };
+        keep.contains(id) || (self.instance && live.contains(name))
+    }
+}
+
+/// Both sides of a diff: every row, plus a fingerprint of each table without a one-column key.
+async fn comparable_rows(c: &mut Client) -> anyhow::Result<BTreeMap<String, Value>> {
+    let mut rows = all_rows(c).await?;
+    rows.extend(
+        whole_tables(c)
+            .await?
+            .into_iter()
+            .map(|(k, h)| (k, json!(h))),
+    );
+    Ok(rows)
+}
+
 #[async_trait]
 impl Part for Postgres {
     async fn describe(&self) -> Result<Describe, PartError> {
@@ -448,22 +571,7 @@ impl Part for Postgres {
             },
             uses_clock: false,
             fingerprint: json!({"server_version": version}),
-            tools: if !self.sql_tools {
-                vec![]
-            } else {
-                vec![
-                tool(
-                    "sql_query",
-                    "Run a SELECT and get the rows as JSON objects.",
-                    Effect::Read,
-                ),
-                tool(
-                    "sql_execute",
-                    "Run an INSERT, UPDATE, DELETE or other statement and get the rows affected.",
-                    Effect::Write,
-                ),
-            ]
-            },
+            tools: if self.sql_tools { sql_tools() } else { vec![] },
         })
     }
 
@@ -476,19 +584,7 @@ impl Part for Postgres {
                 let src = self.save_db(&f.save).await?;
                 self.pg.create_from(&db, &src).await.map_err(internal)?;
             }
-            None => {
-                self.pg.create_empty(&db).await.map_err(internal)?;
-                if let Some(sql) = p.config.get("init_sql").and_then(Value::as_str) {
-                    let r = self
-                        .pg
-                        .with_db(&db, async |c| Ok(c.batch_execute(sql).await?))
-                        .await;
-                    if let Err(e) = r {
-                        let _ = self.pg.drop(&db).await;
-                        return Err(PartError::invalid(format!("init_sql failed: {e:#}")));
-                    }
-                }
-            }
+            None => self.create_fresh(&db, &p.config).await?,
         }
         self.live.lock().unwrap().insert(db);
         Ok(())
@@ -496,46 +592,33 @@ impl Part for Postgres {
 
     async fn call_tool(&self, p: CallToolParams) -> Result<ToolOutput, PartError> {
         let db = self.instance_db(&p.instance).await?;
-        let fail = |m: String| {
-            Ok(ToolOutput {
-                error: Some(m),
-                ..Default::default()
-            })
+        let rows = match (p.name.as_str(), self.sql_tools) {
+            ("sql_query", true) => true,
+            ("sql_execute", true) => false,
+            (o, _) => return Ok(tool_error(format!("unknown tool {o}"))),
         };
-        let rows = match p.name.as_str() {
-            "sql_query" => true,
-            "sql_execute" => false,
-            o => return fail(format!("unknown tool {o}")),
-        };
-        if !self.sql_tools {
-            return fail(format!("unknown tool {}", p.name));
-        }
-        let Some(sql) = p.args.get("sql").and_then(Value::as_str) else {
-            return fail("sql must be a string".into());
-        };
-        let params = match p.args.get("params") {
-            None | Some(Value::Null) => vec![],
-            Some(Value::Array(a)) => a.clone(),
-            Some(_) => return fail("params must be a list".into()),
+        let (sql, params) = match sql_args(&p.args) {
+            Ok(a) => a,
+            Err(m) => return Ok(tool_error(m)),
         };
         let res = self
             .pg
             .with_db(&db, async |c| Ok(run_sql(c, sql, &params, rows).await))
             .await
             .map_err(internal)?;
-        match res {
-            Err(e) => fail(e),
-            Ok(v) if rows => Ok(ToolOutput {
+        Ok(match res {
+            Err(e) => tool_error(e),
+            Ok(v) if rows => ToolOutput {
                 result: Some(v),
                 reads: read_keys(sql),
                 ..Default::default()
-            }),
-            Ok(v) => Ok(ToolOutput {
+            },
+            Ok(v) => ToolOutput {
                 result: Some(v),
                 writes: write_keys(sql),
                 ..Default::default()
-            }),
-        }
+            },
+        })
     }
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
@@ -575,21 +658,14 @@ impl Part for Postgres {
     async fn diff(&self, p: DiffParams) -> Result<Differing, PartError> {
         let (a, b) = (self.target_db(&p.a).await?, self.target_db(&p.b).await?);
         // One database at a time: never two connections held at once.
-        let both = async |c: &mut Client| {
-            let rows: BTreeMap<String, Value> = all_rows(c)
-                .await?
-                .into_iter()
-                .chain(
-                    whole_tables(c)
-                        .await?
-                        .into_iter()
-                        .map(|(k, h)| (k, json!(h))),
-                )
-                .collect();
-            Ok(rows)
-        };
-        let ra = self.pg.with_db(&a, both).await;
-        let rb = self.pg.with_db(&b, both).await;
+        let ra = self
+            .pg
+            .with_db(&a, async |c| comparable_rows(c).await)
+            .await;
+        let rb = self
+            .pg
+            .with_db(&b, async |c| comparable_rows(c).await)
+            .await;
         let (ra, rb) = (ra.map_err(internal)?, rb.map_err(internal)?);
         let keys: HashSet<&String> = ra.keys().chain(rb.keys()).collect();
         let mut differing: Vec<String> = keys
@@ -622,15 +698,10 @@ impl Part for Postgres {
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
-        let mut prefixes = vec![format!("pi_{}", self.ns), format!("ps_{}", self.ns)];
-        if self.ns.is_empty() {
-            prefixes.push("snap_".into());
-            prefixes.push("branch_".into());
-        }
         let mut bytes = 0i64;
-        for p in prefixes {
-            for (_, s) in self.pg.list(&p).await.map_err(internal)? {
-                bytes += s;
+        for kind in self.gc_kinds() {
+            for (_, size) in self.pg.list(&kind.prefix).await.map_err(internal)? {
+                bytes += size;
             }
         }
         Ok(Usage {
@@ -641,31 +712,15 @@ impl Part for Postgres {
     async fn gc(&self, p: GcParams) -> Result<GcResult, PartError> {
         let keep: HashSet<&str> = p.keep.iter().map(String::as_str).collect();
         let live: HashSet<String> = self.live.lock().unwrap().clone();
-        let mut out = GcResult::default();
         let mut doomed = vec![];
-        // (prefix, is an instance, the prefix is not part of the id)
-        let mut kinds = vec![
-            (format!("ps_{}", self.ns), false, true),
-            (format!("pi_{}", self.ns), true, true),
-        ];
-        if self.ns.is_empty() {
-            kinds.push(("snap_".into(), false, false));
-            kinds.push(("branch_".into(), true, false));
-        }
-        for (prefix, instance, strip) in kinds {
-            for (name, size) in self.pg.list(&prefix).await.map_err(internal)? {
-                // `pi_`/`ps_` ids drop the prefix; legacy names are their own id.
-                let id = if strip {
-                    &name[prefix.len()..]
-                } else {
-                    &name[..]
-                };
-                if keep.contains(id) || (instance && live.contains(&name)) {
-                    continue;
+        for kind in self.gc_kinds() {
+            for (name, size) in self.pg.list(&kind.prefix).await.map_err(internal)? {
+                if !kind.is_kept(&name, &keep, &live) {
+                    doomed.push((name, size));
                 }
-                doomed.push((name, size));
             }
         }
+        let mut out = GcResult::default();
         for (name, size) in doomed {
             self.pg.drop(&name).await.map_err(internal)?;
             out.dropped += 1;

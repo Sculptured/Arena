@@ -82,41 +82,55 @@ def _need(params, *names):
     return [params[n] for n in names]
 
 
+def _start(part, params):
+    instance, config, seed, clock_ms = _need(params, "instance", "config", "seed", "clock_ms")
+    part.start(instance, config, seed, clock_ms, params.get("from"))
+    return {}
+
+
+def _call_tool(part, params):
+    out = dict(part.call_tool(*_need(params, "instance", "name", "args", "clock_ms")))
+    out.setdefault("reads", [])
+    out.setdefault("writes", [])
+    return out
+
+
+def _unit(method, *names):
+    """A method that takes `names` from the params and answers `{}`."""
+
+    def run(part, params):
+        getattr(part, method)(*_need(params, *names))
+        return {}
+
+    return run
+
+
+def _plain(method, *names):
+    """A method that takes `names` from the params and answers with the part's result."""
+    return lambda part, params: getattr(part, method)(*_need(params, *names))
+
+
+_METHODS = {
+    "describe": lambda part, params: part.describe(),
+    "start": _start,
+    "call_tool": _call_tool,
+    "advance": _plain("advance", "instance", "clock_ms"),
+    "save": _plain("save", "instance", "save", "dir"),
+    "inspect": _plain("inspect", "target", "keys"),
+    "diff": _plain("diff", "a", "b"),
+    "drop_save": _unit("drop_save", "save"),
+    "stop": _unit("stop", "instance"),
+    "usage": lambda part, params: part.usage(),
+    "gc": _plain("gc", "keep"),
+    "connect": _plain("connect", "instance"),
+}
+
+
 def dispatch(part, method, params):
-    if method == "describe":
-        return part.describe()
-    if method == "start":
-        instance, config, seed, clock_ms = _need(params, "instance", "config", "seed", "clock_ms")
-        part.start(instance, config, seed, clock_ms, params.get("from"))
-        return {}
-    if method == "call_tool":
-        out = part.call_tool(*_need(params, "instance", "name", "args", "clock_ms"))
-        out = dict(out)
-        out.setdefault("reads", [])
-        out.setdefault("writes", [])
-        return out
-    if method == "advance":
-        return part.advance(*_need(params, "instance", "clock_ms"))
-    if method == "save":
-        return part.save(*_need(params, "instance", "save", "dir"))
-    if method == "inspect":
-        target, keys = _need(params, "target", "keys")
-        return part.inspect(target, keys)
-    if method == "diff":
-        return part.diff(*_need(params, "a", "b"))
-    if method == "drop_save":
-        part.drop_save(*_need(params, "save"))
-        return {}
-    if method == "stop":
-        part.stop(*_need(params, "instance"))
-        return {}
-    if method == "usage":
-        return part.usage()
-    if method == "gc":
-        return part.gc(*_need(params, "keep"))
-    if method == "connect":
-        return part.connect(*_need(params, "instance"))
-    raise errors.method_not_found(method)
+    handler = _METHODS.get(method)
+    if handler is None:
+        raise errors.method_not_found(method)
+    return handler(part, params)
 
 
 def _response(id_, out=None, err=None):

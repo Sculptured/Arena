@@ -118,6 +118,27 @@ impl Counter {
         }
     }
 
+    /// The `add` tool: add `args.n` (plus noise, when nondeterministic) to the counter.
+    fn add(&self, inst: &mut Inst, args: &Value) -> ToolOutput {
+        let Some(n) = args.get("n").and_then(Value::as_i64) else {
+            return ToolOutput {
+                error: Some("n must be an integer".into()),
+                ..Default::default()
+            };
+        };
+        let extra = if self.flavour == Flavour::Nondeterministic {
+            os_random_1000()
+        } else {
+            0
+        };
+        inst.state.value += n + extra;
+        ToolOutput {
+            result: Some(json!({"value": inst.state.value})),
+            writes: vec![KEY.into()],
+            ..Default::default()
+        }
+    }
+
     fn value_of(&self, t: &Target) -> Result<i64, PartError> {
         match t {
             Target::Instance { instance } => self
@@ -132,6 +153,34 @@ impl Counter {
     }
 }
 
+fn restore_of(flavour: Flavour) -> Restore {
+    let (exact, approximate) = match flavour {
+        Flavour::Exact | Flavour::BrokenRestore => (ExactKind::Save, false),
+        Flavour::ReplayOnly | Flavour::Nondeterministic => (ExactKind::Replay, false),
+        Flavour::ApproxAndReplay => (ExactKind::Replay, true),
+    };
+    Restore { exact, approximate }
+}
+
+/// The state a start from `from` begins with, if this flavour can restore in that mode.
+fn restore_state(flavour: Flavour, from: &FromSave) -> Result<State, PartError> {
+    let exact_ok = matches!(flavour, Flavour::Exact | Flavour::BrokenRestore);
+    let ok = match from.mode {
+        Mode::Exact => exact_ok,
+        Mode::Approximate => exact_ok || flavour == Flavour::ApproxAndReplay,
+    };
+    if !ok {
+        return Err(PartError::cant_restore(
+            "this flavour can't restore from a save in that mode",
+        ));
+    }
+    let mut state = read_save(&from.save)?;
+    if flavour == Flavour::BrokenRestore {
+        state.value = 0;
+    }
+    Ok(state)
+}
+
 #[async_trait]
 impl Part for Counter {
     async fn describe(&self) -> Result<Describe, PartError> {
@@ -139,20 +188,7 @@ impl Part for Counter {
             name: "counter".into(),
             version: "0.1.0".into(),
             protocol: PROTOCOL,
-            restore: match self.flavour {
-                Flavour::Exact | Flavour::BrokenRestore => Restore {
-                    exact: ExactKind::Save,
-                    approximate: false,
-                },
-                Flavour::ReplayOnly | Flavour::Nondeterministic => Restore {
-                    exact: ExactKind::Replay,
-                    approximate: false,
-                },
-                Flavour::ApproxAndReplay => Restore {
-                    exact: ExactKind::Replay,
-                    approximate: true,
-                },
-            },
+            restore: restore_of(self.flavour),
             uses_clock: true,
             fingerprint: json!({"example": "counter"}),
             tools: vec![
@@ -168,27 +204,12 @@ impl Part for Counter {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
-        let flavour = self.flavour;
         let mut state = State {
             value: 0,
             secs: p.clock_ms / 1000,
         };
         if let Some(from) = p.from {
-            let exact_ok = matches!(flavour, Flavour::Exact | Flavour::BrokenRestore);
-            let approx_ok = flavour == Flavour::ApproxAndReplay;
-            let ok = match from.mode {
-                Mode::Exact => exact_ok,
-                Mode::Approximate => exact_ok || approx_ok,
-            };
-            if !ok {
-                return Err(PartError::cant_restore(
-                    "this flavour can't restore from a save in that mode",
-                ));
-            }
-            state = read_save(&from.save)?;
-            if flavour == Flavour::BrokenRestore {
-                state.value = 0;
-            }
+            state = restore_state(self.flavour, &from)?;
         }
         self.instances
             .lock()
@@ -203,25 +224,7 @@ impl Part for Counter {
             .get_mut(&p.instance)
             .ok_or_else(|| PartError::unknown(format!("unknown instance {}", p.instance)))?;
         match p.name.as_str() {
-            "add" => {
-                let Some(n) = p.args.get("n").and_then(Value::as_i64) else {
-                    return Ok(ToolOutput {
-                        error: Some("n must be an integer".into()),
-                        ..Default::default()
-                    });
-                };
-                let extra = if self.flavour == Flavour::Nondeterministic {
-                    os_random_1000()
-                } else {
-                    0
-                };
-                inst.state.value += n + extra;
-                Ok(ToolOutput {
-                    result: Some(json!({"value": inst.state.value})),
-                    writes: vec![KEY.into()],
-                    ..Default::default()
-                })
-            }
+            "add" => Ok(self.add(inst, &p.args)),
             "get" => Ok(ToolOutput {
                 result: Some(json!({"value": inst.state.value})),
                 reads: vec![KEY.into()],
