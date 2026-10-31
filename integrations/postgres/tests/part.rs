@@ -1,0 +1,357 @@
+use arena_part::helpers::pg::Templates;
+use arena_part::proto::*;
+use arena_part::Part;
+use arena_postgres::Postgres;
+use serde_json::{json, Value};
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
+
+fn url() -> String {
+    std::env::var("ARENA_PG_URL")
+        .unwrap_or_else(|_| "postgres://arena:arena@127.0.0.1:5544/postgres".into())
+}
+
+fn arena() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
+}
+
+/// A test-unique namespace: databases are `pi_<ns><id>` and `ps_<ns><id>`.
+fn ns() -> String {
+    static N: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "t5_{}_{}_",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
+/// Runs `body`, then drops every database the test could have made, even when `body` panicked.
+async fn with_cleanup<F, Fut>(ns: &str, extra: &[String], body: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let res = tokio::spawn(body()).await;
+    let t = Templates::new(&url());
+    let mut names = extra.to_vec();
+    for p in ["pi_", "ps_"] {
+        for (n, _) in t.list(&format!("{p}{ns}")).await.unwrap() {
+            names.push(n);
+        }
+    }
+    for n in names {
+        t.drop(&n).await.unwrap();
+    }
+    res.unwrap();
+}
+
+fn start(instance: &str, config: Value, from: Option<&str>) -> StartParams {
+    StartParams {
+        instance: instance.into(),
+        config,
+        seed: 1,
+        clock_ms: 0,
+        from: from.map(|s| FromSave {
+            save: s.into(),
+            mode: Mode::Exact,
+        }),
+    }
+}
+
+async fn exec(p: &Postgres, inst: &str, sql: &str) -> ToolOutput {
+    p.call_tool(CallToolParams {
+        instance: inst.into(),
+        name: "sql_execute".into(),
+        args: json!({"sql": sql}),
+        clock_ms: 0,
+    })
+    .await
+    .unwrap()
+}
+
+async fn query(p: &Postgres, inst: &str, sql: &str) -> ToolOutput {
+    p.call_tool(CallToolParams {
+        instance: inst.into(),
+        name: "sql_query".into(),
+        args: json!({"sql": sql}),
+        clock_ms: 0,
+    })
+    .await
+    .unwrap()
+}
+
+fn cfg() -> Value {
+    json!({"init_sql": "CREATE TABLE t(id int primary key, v text)", "sql_tools": true})
+}
+
+async fn save(p: &Postgres, inst: &str, save: &str) -> Saved {
+    p.save(SaveParams {
+        instance: inst.into(),
+        save: save.into(),
+        dir: "/nonexistent".into(),
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn save_restore_roundtrip() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n);
+        p.start(start("a", cfg(), None)).await.unwrap();
+        let w = exec(&p, "a", "INSERT INTO t(id, v) VALUES (1, 'x')").await;
+        assert_eq!(w.error, None);
+        assert_eq!(w.result, Some(json!({"rows_affected": 1})));
+        assert_eq!(w.writes, vec!["t/*".to_string()]);
+        let s = save(&p, "a", "s1").await;
+        assert!(s.exact && s.bytes > 0);
+        exec(&p, "a", "UPDATE t SET v = 'changed'").await;
+        p.start(start("b", cfg(), Some("s1"))).await.unwrap();
+        let r = query(&p, "b", "SELECT id, v FROM t").await;
+        assert_eq!(r.result, Some(json!([{"id": 1, "v": "x"}])));
+        assert_eq!(r.reads, vec!["t/*".to_string()]);
+        let c = p
+            .connect(IdParams {
+                instance: "b".into(),
+            })
+            .await
+            .unwrap();
+        assert!(c["url"].as_str().unwrap().ends_with(&format!("/pi_{n}b")));
+        let u = p.usage().await.unwrap();
+        assert!(u.bytes > 0);
+        // an unknown save
+        let e = p.start(start("c", cfg(), Some("nope"))).await.unwrap_err();
+        assert_eq!(e.code, -32002);
+        let d = p.describe().await.unwrap();
+        assert_eq!(d.restore.exact, ExactKind::Save);
+        assert!(!d.restore.approximate);
+        assert!(d.fingerprint["server_version"].is_string());
+        p.stop(IdParams {
+            instance: "a".into(),
+        })
+        .await
+        .unwrap();
+        p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
+        let e = p
+            .inspect(InspectParams {
+                target: Target::Save { save: "s1".into() },
+                keys: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, -32002);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn diff_reports_changed_row() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n);
+        p.start(start("a", cfg(), None)).await.unwrap();
+        exec(&p, "a", "INSERT INTO t(id, v) VALUES (1, 'x'), (2, 'y')").await;
+        save(&p, "a", "s1").await;
+        exec(&p, "a", "UPDATE t SET v = 'z' WHERE id = 1").await;
+        let d = p
+            .diff(DiffParams {
+                a: Target::Instance {
+                    instance: "a".into(),
+                },
+                b: Target::Save { save: "s1".into() },
+            })
+            .await
+            .unwrap();
+        assert_eq!(d.differing, vec!["t/1".to_string()]);
+        let same = p
+            .diff(DiffParams {
+                a: Target::Save { save: "s1".into() },
+                b: Target::Save { save: "s1".into() },
+            })
+            .await
+            .unwrap();
+        assert!(same.differing.is_empty());
+        let docs = p
+            .inspect(InspectParams {
+                target: Target::Instance {
+                    instance: "a".into(),
+                },
+                keys: vec!["t/1".into(), "t/9".into(), "nope/1".into()],
+            })
+            .await
+            .unwrap()
+            .docs;
+        assert_eq!(docs["t/1"], json!({"id": 1, "v": "z"}));
+        assert_eq!(docs["t/9"], Value::Null);
+        assert_eq!(docs["nope/1"], Value::Null);
+        let all = p
+            .inspect(InspectParams {
+                target: Target::Save { save: "s1".into() },
+                keys: vec![],
+            })
+            .await
+            .unwrap()
+            .docs;
+        assert_eq!(all.len(), 2);
+        assert_eq!(all["t/2"], json!({"id": 2, "v": "y"}));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn legacy_snap_name_accepted() {
+    // Empty namespace, so legacy names are recognised; the database name is test-unique.
+    let name = format!("snap_t5_{}_legacy", std::process::id());
+    let extra = vec![name.clone()];
+    let nm = name.clone();
+    with_cleanup("none_", &extra, move || async move {
+        let t = Templates::new(&url());
+        t.drop(&nm).await.unwrap();
+        t.create_empty(&nm).await.unwrap();
+        t.with_db(&nm, async |c| {
+            c.batch_execute(
+                "CREATE TABLE t(id int primary key, v text); INSERT INTO t VALUES (7, 'old')",
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let p = Postgres::new(&url(), "");
+        let docs = p
+            .inspect(InspectParams {
+                target: Target::Save { save: nm.clone() },
+                keys: vec!["t/7".into()],
+            })
+            .await
+            .unwrap()
+            .docs;
+        assert_eq!(docs["t/7"], json!({"id": 7, "v": "old"}));
+        // and a new instance can start from it
+        let inst = format!("t5_{}_li", std::process::id());
+        p.start(StartParams {
+            instance: inst.clone(),
+            config: json!({"sql_tools": true}),
+            seed: 1,
+            clock_ms: 0,
+            from: Some(FromSave {
+                save: nm.clone(),
+                mode: Mode::Exact,
+            }),
+        })
+        .await
+        .unwrap();
+        let r = query(&p, &inst, "SELECT v FROM t").await;
+        assert_eq!(r.result, Some(json!([{"v": "old"}])));
+        p.stop(IdParams {
+            instance: inst.clone(),
+        })
+        .await
+        .unwrap();
+        Templates::new(&url())
+            .drop(&format!("pi_{inst}"))
+            .await
+            .unwrap();
+    })
+    .await;
+    // cleanup of the instance database even if the body failed early
+    let inst = format!("pi_t5_{}_li", std::process::id());
+    Templates::new(&url()).drop(&inst).await.unwrap();
+}
+
+#[tokio::test]
+async fn gc_keeps_listed() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n);
+        p.start(start("live", cfg(), None)).await.unwrap();
+        p.start(start("gone", cfg(), None)).await.unwrap();
+        save(&p, "live", "keep").await;
+        save(&p, "live", "toss").await;
+        p.stop(IdParams {
+            instance: "gone".into(),
+        })
+        .await
+        .unwrap();
+        // a second process (no live instances) sees `live` as unused too
+        let r = p
+            .gc(GcParams {
+                keep: vec!["keep".into()],
+            })
+            .await
+            .unwrap();
+        // `toss` goes, `gone` (stopped, so not live) goes; `live` stays
+        assert_eq!(r.dropped, 2, "{r:?}");
+        assert!(r.bytes > 0);
+        let t = Templates::new(&url());
+        assert!(t.exists(&format!("ps_{n}keep")).await.unwrap());
+        assert!(!t.exists(&format!("ps_{n}toss")).await.unwrap());
+        assert!(t.exists(&format!("pi_{n}live")).await.unwrap());
+        assert!(!t.exists(&format!("pi_{n}gone")).await.unwrap());
+    })
+    .await;
+}
+
+fn build_all() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        let a = arena();
+        assert!(Command::new("cargo")
+            .args(["build", "-p", "arena-postgres"])
+            .current_dir(&a)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("cargo")
+            .args(["build", "-p", "parts", "--bin", "arena-part-check"])
+            .current_dir(a.join("core"))
+            .status()
+            .unwrap()
+            .success());
+    });
+}
+
+#[tokio::test]
+async fn conformance_check_passes() {
+    build_all();
+    let ns = ns();
+    let a = arena();
+    let cfgfile = std::env::temp_dir().join(format!("{}pgcheck.json", ns));
+    std::fs::write(&cfgfile, cfg().to_string()).unwrap();
+    let saves = std::env::temp_dir().join(format!("{}saves", ns));
+    let (cf, sv, ns2) = (cfgfile.clone(), saves.clone(), ns.clone());
+    with_cleanup(&ns, &[], move || async move {
+        let out = tokio::task::spawn_blocking(move || {
+            Command::new(a.join("core/target/debug/arena-part-check"))
+                .arg(a.join("integrations/postgres"))
+                .arg("--config")
+                .arg(&cf)
+                .env("ARENA_BIN_DIR", a.join("core/target/debug"))
+                .env("ARENA_SAVES", &sv)
+                .env("ARENA_PG_NS", &ns2)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            out.status.success() && stdout.contains("\"passed\": true"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    })
+    .await;
+    let _ = std::fs::remove_file(&cfgfile);
+    let _ = std::fs::remove_dir_all(&saves);
+}

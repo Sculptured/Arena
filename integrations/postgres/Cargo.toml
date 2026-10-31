@@ -1,0 +1,19 @@
+[package]
+name = "arena-postgres"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arena_postgres"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-postgres"
+path = "src/main.rs"
+
+[dependencies]
+arena-part = { path = "../../kits/rust", features = ["postgres"] }
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true

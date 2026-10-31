@@ -2,6 +2,7 @@
 //!
 //! Implement [`Part`] (or [`Benchmark`]) and call [`serve`] (or [`serve_benchmark`]).
 mod error;
+pub mod helpers;
 pub mod proto;
 mod serve;
 

@@ -1,0 +1,15 @@
+kind = "integration"
+name = "postgres"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-postgres"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { init_sql = { type = "string", description = "SQL run in a fresh empty database" }, sql_tools = { type = "boolean", default = false, description = "Give the model sql_query and sql_execute tools" } } }
+
+[[example]]
+tool = "sql_execute"
+args = { sql = "INSERT INTO t(id, v) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET v = t.v || 'a'" }
+
+[[example]]
+tool = "sql_query"
+args = { sql = "SELECT * FROM t" }
