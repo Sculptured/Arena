@@ -39,10 +39,7 @@ async fn run() -> anyhow::Result<bool> {
         .unwrap_or_else(|| arena.join("core/target/release"));
     let (saves, temp) = match std::env::var_os("ARENA_SAVES") {
         Some(s) => (PathBuf::from(s), false),
-        None => (
-            std::env::temp_dir().join(format!("arena-part-check-{}", std::process::id())),
-            true,
-        ),
+        None => (unique_temp_dir()?, true),
     };
     let registry = Registry::from_dir(&dir)?;
     let name = registry
@@ -60,4 +57,24 @@ async fn run() -> anyhow::Result<bool> {
         let _ = std::fs::remove_dir_all(&saves);
     }
     Ok(report.passed)
+}
+
+/// A fresh folder under the temp dir; never one that already existed.
+fn unique_temp_dir() -> std::io::Result<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for n in 0..100 {
+        let d = std::env::temp_dir().join(format!(
+            "arena-part-check-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&d) {
+            Ok(()) => return Ok(d),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other("no free temp folder"))
 }

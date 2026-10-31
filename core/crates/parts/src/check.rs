@@ -7,6 +7,20 @@ use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+/// The steps in order, for naming those a failure kept from running.
+const STEPS: &[&str] = &[
+    "describe",
+    "start",
+    "examples",
+    "save_1",
+    "write_example",
+    "save_2",
+    "restore",
+    "diff_self",
+    "replay",
+    "drop_saves",
+    "stop",
+];
 const SEED: u64 = 1;
 /// How far a clock part is advanced before the second save, to exercise clock state.
 const ADVANCE_MS: i64 = 1500;
@@ -131,12 +145,13 @@ impl Run<'_> {
             .call("diff", json!({"a": a, "b": b}))
             .await
             .map_err(show)?;
-        Ok(out["differing"]
+        let bad = || format!("diff gave no `differing` list of keys: {out}");
+        out["differing"]
             .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|k| k.as_str().map(str::to_string))
-            .collect())
+            .ok_or_else(bad)?
+            .iter()
+            .map(|k| k.as_str().map(str::to_string).ok_or_else(bad))
+            .collect()
     }
 
     /// Saves `chk_a`; `Ok(false)` when the part can't save and says so with -32001.
@@ -213,17 +228,22 @@ impl Run<'_> {
             }
             Err(e) => return self.step("describe", Err(e)),
         };
-        let usage_before = self.usage().await.unwrap_or(0);
 
-        // 2. start chk_a
-        let r = self
-            .start("chk_a", config, None)
-            .await
-            .map(|_| "chk_a started".into());
+        // 2. start chk_a (usage is read first, to compare after the saves are dropped)
+        let mut usage_before = 0;
+        let r = async {
+            usage_before = self.usage().await?;
+            self.start("chk_a", config, None).await?;
+            Ok("chk_a started".to_string())
+        }
+        .await;
         self.step("start", r)?;
 
         // 3. examples
         let r = async {
+            if m.examples.is_empty() {
+                return Err("no [[example]] entries; the check needs at least one".to_string());
+            }
             for ex in &m.examples {
                 let tool = ex["tool"]
                     .as_str()
@@ -335,10 +355,11 @@ impl Run<'_> {
 
         // 10. drop saves; usage must not grow
         let r = async {
-            for s in std::mem::take(&mut self.saves) {
+            while let Some(s) = self.saves.first().copied() {
                 self.call("drop_save", json!({"save": s}))
                     .await
-                    .map_err(show)?;
+                    .map_err(|e| format!("drop_save {s}: {e}"))?;
+                self.saves.remove(0);
             }
             let after = self.usage().await?;
             if after > usage_before + USAGE_ALLOWANCE {
@@ -451,6 +472,11 @@ impl Run<'_> {
             "replay matches chk_s2"
         } else {
             let keys: Vec<&String> = self.keys.iter().collect();
+            if keys.is_empty() {
+                return Err(
+                    "no keys reported by the examples, so the replay can't be compared".into(),
+                );
+            }
             let mut docs = vec![];
             for inst in ["chk_r", "chk_a"] {
                 let v = self
@@ -460,7 +486,10 @@ impl Run<'_> {
                     )
                     .await
                     .map_err(|e| format!("inspect {inst}: {e}"))?;
-                docs.push(v["docs"].clone());
+                match v["docs"].as_object() {
+                    Some(m) if !m.is_empty() => docs.push(v["docs"].clone()),
+                    _ => return Err(format!("inspect {inst} gave no docs: {v}")),
+                }
             }
             if docs[0] != docs[1] {
                 return Err(format!(
@@ -507,11 +536,41 @@ pub async fn check(hub: &Hub, name: &str, config: Value) -> Report {
     };
     let r = run.run(&config).await;
     // A failed check still leaves nothing behind.
+    let mut leftovers = vec![];
     for i in run.live.clone() {
-        let _ = run.stop(i).await;
+        if let Err(e) = run.stop(i).await {
+            leftovers.push(format!("stop {i}: {e}"));
+        }
     }
-    for s in std::mem::take(&mut run.saves) {
-        let _ = run.call("drop_save", json!({"save": s})).await;
+    for s in run.saves.clone() {
+        if let Err(e) = run.call("drop_save", json!({"save": s})).await {
+            leftovers.push(format!("drop_save {s}: {e}"));
+        }
+    }
+    if !leftovers.is_empty() {
+        run.report.steps.push(Step {
+            name: "cleanup".into(),
+            ok: false,
+            detail: leftovers.join("; "),
+        });
+    }
+    // Say which steps never ran.
+    if let Some(failed) = run
+        .report
+        .steps
+        .iter()
+        .find(|s| !s.ok)
+        .map(|s| s.name.clone())
+    {
+        for n in STEPS {
+            let seen = run.report.steps.iter().any(|s| s.name == *n)
+                || run.report.skipped.iter().any(|s| s.starts_with(n));
+            if !seen {
+                run.report
+                    .skipped
+                    .push(format!("not run: {n} (after {failed} failed)"));
+            }
+        }
     }
     run.report.passed = r.is_ok() && run.report.steps.iter().all(|s| s.ok);
     run.report
