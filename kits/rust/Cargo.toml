@@ -1,0 +1,12 @@
+[package]
+name = "arena-part"
+version = "0.1.0"
+edition = "2021"
+description = "Kit for writing arena integrations (protocol arena-part/1)"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true

@@ -1,0 +1,3 @@
+# Both workspaces (core/ and this one) share one target directory: the disk is nearly full.
+[build]
+target-dir = "core/target"

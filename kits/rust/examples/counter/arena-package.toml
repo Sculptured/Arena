@@ -1,0 +1,22 @@
+kind = "integration"
+name = "counter"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/examples/counter"] }
+needs = { gpu_vram_gb = 0, services = [] }
+
+[config_schema]
+type = "object"
+
+[config_schema.properties.flavour]
+type = "string"
+enum = ["exact", "replay_only", "approx_and_replay", "broken_restore", "nondeterministic"]
+default = "exact"
+
+[[example]]
+tool = "add"
+args = { n = 1 }
+
+[[example]]
+tool = "get"
+args = {}
