@@ -137,7 +137,14 @@ where
                     "instance and save ids must match [a-z0-9_]{1,63}",
                 ))
             } else {
-                handler(method, params).await
+                // Run on its own task so a panic is caught and answered.
+                match tokio::spawn(handler(method, params)).await {
+                    Ok(r) => r,
+                    Err(e) => Err(PartError::internal(format!(
+                        "internal error: {}",
+                        panic_message(e)
+                    ))),
+                }
             };
             // Notifications (no id) get no response.
             if let Some(id) = id {
@@ -149,6 +156,20 @@ where
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+fn panic_message(e: tokio::task::JoinError) -> String {
+    if !e.is_panic() {
+        return e.to_string();
+    }
+    let p = e.into_panic();
+    match p.downcast::<String>() {
+        Ok(s) => *s,
+        Err(p) => p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "panic".into()),
+    }
 }
 
 async fn write_line<W: AsyncWrite + Unpin>(w: &Mutex<W>, v: Value) -> anyhow::Result<()> {

@@ -1,6 +1,7 @@
 //! Example part: one integer per instance. The core's tests spawn this program.
 //!
-//! `config.flavour` picks how it restores (default "exact"):
+//! `counter --flavour <name>` picks how it restores (default "exact"); a manifest's `run.command`
+//! chooses it, and `describe` reports accordingly:
 //! - "exact": exact save, no replay.
 //! - "replay_only": replay only; `save` fails with -32001.
 //! - "approx_and_replay": replay, plus approximate saves (reported `exact: false`).
@@ -8,6 +9,7 @@
 //! - "nondeterministic": replay, but `add` adds a random 0..1000 from the OS (a bug on purpose).
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arena_part::proto::*;
@@ -18,7 +20,7 @@ use serde_json::{json, Value};
 const KEY: &str = "counter/value";
 
 #[derive(Clone, Copy, PartialEq)]
-enum Flavour {
+pub enum Flavour {
     Exact,
     ReplayOnly,
     ApproxAndReplay,
@@ -27,7 +29,7 @@ enum Flavour {
 }
 
 impl Flavour {
-    fn parse(s: &str) -> Result<Flavour, PartError> {
+    pub fn parse(s: &str) -> Result<Flavour, PartError> {
         Ok(match s {
             "exact" => Flavour::Exact,
             "replay_only" => Flavour::ReplayOnly,
@@ -48,18 +50,47 @@ struct State {
 
 struct Inst {
     state: State,
-    flavour: Flavour,
 }
 
-struct Saved1 {
-    state: State,
-    dir: String,
-}
-
-#[derive(Default)]
 pub struct Counter {
+    flavour: Flavour,
     instances: Mutex<HashMap<String, Inst>>,
-    saves: Mutex<HashMap<String, Saved1>>,
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Counter::new(Flavour::Exact)
+    }
+}
+
+/// Saves live at `$ARENA_SAVES/counter/<save>/` by convention.
+fn saves_root() -> PathBuf {
+    let root = std::env::var("ARENA_SAVES").unwrap_or_else(|_| "saves".into());
+    PathBuf::from(root).join("counter")
+}
+
+fn read_save(save: &str) -> Result<State, PartError> {
+    let path = saves_root().join(save).join("state.json");
+    let body =
+        std::fs::read(&path).map_err(|_| PartError::unknown(format!("unknown save {save}")))?;
+    let v: Value = serde_json::from_slice(&body).map_err(|e| PartError::internal(e.to_string()))?;
+    Ok(State {
+        value: v["value"].as_i64().unwrap_or(0),
+        secs: v["secs"].as_i64().unwrap_or(0),
+    })
+}
+
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_bytes(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 fn os_random_1000() -> i64 {
@@ -80,6 +111,13 @@ fn tool(name: &str, description: &str, props: Value, effect: Effect) -> ToolSche
 }
 
 impl Counter {
+    pub fn new(flavour: Flavour) -> Counter {
+        Counter {
+            flavour,
+            instances: Mutex::new(HashMap::new()),
+        }
+    }
+
     fn value_of(&self, t: &Target) -> Result<i64, PartError> {
         match t {
             Target::Instance { instance } => self
@@ -89,13 +127,7 @@ impl Counter {
                 .get(instance)
                 .map(|i| i.state.value)
                 .ok_or_else(|| PartError::unknown(format!("unknown instance {instance}"))),
-            Target::Save { save } => self
-                .saves
-                .lock()
-                .unwrap()
-                .get(save)
-                .map(|s| s.state.value)
-                .ok_or_else(|| PartError::unknown(format!("unknown save {save}"))),
+            Target::Save { save } => read_save(save).map(|s| s.value),
         }
     }
 }
@@ -107,9 +139,19 @@ impl Part for Counter {
             name: "counter".into(),
             version: "0.1.0".into(),
             protocol: PROTOCOL,
-            restore: Restore {
-                exact: ExactKind::Save,
-                approximate: false,
+            restore: match self.flavour {
+                Flavour::Exact | Flavour::BrokenRestore => Restore {
+                    exact: ExactKind::Save,
+                    approximate: false,
+                },
+                Flavour::ReplayOnly | Flavour::Nondeterministic => Restore {
+                    exact: ExactKind::Replay,
+                    approximate: false,
+                },
+                Flavour::ApproxAndReplay => Restore {
+                    exact: ExactKind::Replay,
+                    approximate: true,
+                },
             },
             uses_clock: true,
             fingerprint: json!({"example": "counter"}),
@@ -126,12 +168,7 @@ impl Part for Counter {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
-        let flavour = Flavour::parse(
-            p.config
-                .get("flavour")
-                .and_then(Value::as_str)
-                .unwrap_or("exact"),
-        )?;
+        let flavour = self.flavour;
         let mut state = State {
             value: 0,
             secs: p.clock_ms / 1000,
@@ -148,11 +185,7 @@ impl Part for Counter {
                     "this flavour can't restore from a save in that mode",
                 ));
             }
-            let saves = self.saves.lock().unwrap();
-            let s = saves
-                .get(&from.save)
-                .ok_or_else(|| PartError::unknown(format!("unknown save {}", from.save)))?;
-            state = s.state;
+            state = read_save(&from.save)?;
             if flavour == Flavour::BrokenRestore {
                 state.value = 0;
             }
@@ -160,7 +193,7 @@ impl Part for Counter {
         self.instances
             .lock()
             .unwrap()
-            .insert(p.instance, Inst { state, flavour });
+            .insert(p.instance, Inst { state });
         Ok(())
     }
 
@@ -177,7 +210,7 @@ impl Part for Counter {
                         ..Default::default()
                     });
                 };
-                let extra = if inst.flavour == Flavour::Nondeterministic {
+                let extra = if self.flavour == Flavour::Nondeterministic {
                     os_random_1000()
                 } else {
                     0
@@ -219,12 +252,13 @@ impl Part for Counter {
     }
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
-        let (state, flavour) = {
+        let flavour = self.flavour;
+        let state = {
             let m = self.instances.lock().unwrap();
             let i = m
                 .get(&p.instance)
                 .ok_or_else(|| PartError::unknown(format!("unknown instance {}", p.instance)))?;
-            (i.state, i.flavour)
+            i.state
         };
         if flavour == Flavour::ReplayOnly {
             return Err(PartError::cant_restore("this flavour has no saves"));
@@ -234,10 +268,6 @@ impl Part for Counter {
         std::fs::create_dir_all(&p.dir).map_err(|e| PartError::internal(e.to_string()))?;
         std::fs::write(std::path::Path::new(&p.dir).join("state.json"), &body)
             .map_err(|e| PartError::internal(e.to_string()))?;
-        self.saves
-            .lock()
-            .unwrap()
-            .insert(p.save, Saved1 { state, dir: p.dir });
         Ok(Saved {
             bytes: body.len() as u64,
             exact: flavour != Flavour::ApproxAndReplay,
@@ -264,9 +294,7 @@ impl Part for Counter {
     }
 
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {
-        if let Some(s) = self.saves.lock().unwrap().remove(&p.save) {
-            let _ = std::fs::remove_dir_all(s.dir);
-        }
+        let _ = std::fs::remove_dir_all(saves_root().join(&p.save));
         Ok(())
     }
 
@@ -276,12 +304,18 @@ impl Part for Counter {
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
-        let n = self.saves.lock().unwrap().len() as u64;
-        Ok(Usage { bytes: n * 32 })
+        Ok(Usage {
+            bytes: dir_bytes(&saves_root()),
+        })
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    serve(Counter::default()).await
+    let args: Vec<String> = std::env::args().collect();
+    let flavour = match args.iter().position(|a| a == "--flavour") {
+        Some(i) => Flavour::parse(args.get(i + 1).map(String::as_str).unwrap_or(""))?,
+        None => Flavour::Exact,
+    };
+    serve(Counter::new(flavour)).await
 }

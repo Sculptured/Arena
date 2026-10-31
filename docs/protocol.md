@@ -60,6 +60,10 @@ environment from arenad, disk only under the save storage given to it.
   names must be unique across a world; a world that has a clash is refused.
 - `dir` is a folder arenad creates for that save under `ARENA_SAVES/<part>/<save>/`. A part that keeps
   saves natively (Postgres `snap_` databases) ignores it and reports `bytes` itself.
+- **Save folders by convention:** a part finds any save's folder at `$ARENA_SAVES/<package name>/<save>/`.
+  arenad passes env `ARENA_SAVES` to the program, and `save.dir` is that same path. So a part that has
+  been restarted can still start from, inspect or diff an older save that is not in its memory; it answers
+  `-32002` only when the folder is missing.
 - `advance` moves the part's clock to `clock_ms`. Parts with `uses_clock: false` never get it. Events the
   part reports (an alarm, a shipment arriving) are recorded as world events.
 - `save` reports `exact: false` when the save may not capture everything (an approximate save).
@@ -117,7 +121,7 @@ A `counter` part (`kits/rust/examples/counter.rs`). `>` is arenad to the part, `
 > {"jsonrpc":"2.0","id":3,"method":"call_tool","params":{"instance":"i1","name":"add","args":{"n":5},"clock_ms":0}}
 < {"jsonrpc":"2.0","id":3,"result":{"result":{"value":5},"reads":[],"writes":["counter/value"]}}
 > {"jsonrpc":"2.0","id":4,"method":"save","params":{"instance":"i1","save":"s1","dir":"/saves/counter/s1"}}
-< {"jsonrpc":"2.0","id":4,"result":{"bytes":22,"exact":true}}
+< {"jsonrpc":"2.0","id":4,"result":{"bytes":20,"exact":true}}
 > {"jsonrpc":"2.0","id":5,"method":"start","params":{"instance":"Bad Id","config":{},"seed":1,"clock_ms":0}}
 < {"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"instance and save ids must match [a-z0-9_]{1,63}"}}
 ```
