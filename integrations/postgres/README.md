@@ -12,7 +12,8 @@ restore exactly. `stop` drops the instance's database, so save first. `usage` co
 - No tools by default, so agents get none from this package. `arena-postgres --sql-tools` lists and serves
   `sql_query` and `sql_execute`.
 - Old runs: an id naming an existing `snap_*`, `branch_*`, `gold_*` database or `world_base` is used as it is;
-  `usage` and `gc` also cover `snap_*` and `branch_*`.
+  `usage` and `gc` also cover `snap_*` and `branch_*`, and `drop_save` drops a `snap_*` or `branch_*` database
+  (never `gold_*` or `world_base`).
 - Namespace: env `ARENA_PG_NS`, or `?arena_ns=<ns>` on `ARENA_PG_URL`, puts `<ns>` after `pi_`/`ps_` and turns
   legacy names off, so tests never touch anyone else's databases.
 - Conformance: `check/arena-package.toml` is the package `postgres-check`, this program with `--sql-tools` and

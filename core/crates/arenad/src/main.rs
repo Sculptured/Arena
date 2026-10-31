@@ -17,10 +17,10 @@ use std::{path::PathBuf, sync::Arc};
 
 use arenad::{
     app::{self, AppState, Config},
+    pg::Admin,
     store::Store,
 };
 use parts::{Hub, Registry};
-use world::{pg::Admin, snapshot::Worlds};
 
 fn arena_dir() -> PathBuf {
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -49,17 +49,14 @@ fn hub(pg_url: &str) -> anyhow::Result<Hub> {
         .with_env(vec![("ARENA_PG_URL".into(), pg_url.to_string())]))
 }
 
-/// The store, the old worlds (after the startup sweep of orphans) and the hub.
+/// The store and the hub.
 async fn app_state(url: &str, port: u16) -> anyhow::Result<Arc<AppState>> {
     let admin = Admin::connect(url).await?;
     let store = Arc::new(Store::open(&admin).await?);
-    let worlds = Arc::new(Worlds::new(admin));
-    // Before anything can create a database: drop orphans from crashes and aborted tests.
-    arenad::gc::run_startup_gc(&store, &worlds).await?;
     let hub = Arc::new(hub(url)?);
     let mut config = Config::new();
     config.self_base = format!("http://127.0.0.1:{port}");
-    Ok(Arc::new(AppState::new(store, worlds, hub, config)))
+    Ok(Arc::new(AppState::new(store, hub, config)))
 }
 
 /// `ARENA_PORT`, or 4510.
@@ -111,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
         .bench()
         .await
         .map_err(|e| anyhow::anyhow!("benchmark {}: {e:#}", state.benchmark))?;
+    // Before any run can save: drop the saves no event names (left by crashes and aborted tests).
+    arenad::gc::run_startup_gc(&state.store, &state.hub, &state.benchmark).await?;
     app::install_default_drivers(&state);
 
     let mut router = app::router(state.clone());

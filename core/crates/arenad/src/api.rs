@@ -18,20 +18,24 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use parts::{proto::WorldPart, CallError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{
     broadcast::{self, error::RecvError},
     mpsc,
 };
-use world::snapshot::Source;
 
 use crate::{
     app::AppState,
-    compare,
+    compare::{self, FinalState},
     fork::{self, ForkError},
+    gc,
     model::*,
-    prompts, runner,
+    prompts,
+    recorded::{final_saves, run_info, saves_at},
+    runner,
+    saves::{self, part_code, world_of},
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -178,7 +182,7 @@ pub fn on_path(name: &str) -> bool {
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
-    let (databases, bytes) = crate::gc::usage(&state.worlds).await?;
+    let bytes = gc::usage(&state.hub, &state.benchmark).await?;
     let benchmark = match state.bench().await {
         Ok(b) => json!({"name": b.name, "version": b.version, "tasks": b.tasks.len(),
                         "world": b.world.iter().map(|p| json!({"part": p.part, "integration": p.integration})).collect::<Vec<_>>()}),
@@ -189,14 +193,14 @@ async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
         "claude": on_path("claude"),
         "codex": on_path("codex"),
         "benchmark": benchmark,
-        "disk": {"databases": databases, "bytes": bytes, "limit_bytes": state.config.max_db_bytes},
+        "disk": {"bytes": bytes, "limit_bytes": state.config.max_db_bytes},
     })))
 }
 
-/// 507 when the arena's databases already use at least the configured limit.
+/// 507 when the arena's saves already use at least the configured limit.
 async fn check_disk(state: &AppState) -> Result<(), ApiError> {
-    let (_, bytes) = crate::gc::usage(&state.worlds).await?;
-    if bytes as u64 >= state.config.max_db_bytes {
+    let bytes = gc::usage(&state.hub, &state.benchmark).await?;
+    if bytes >= state.config.max_db_bytes {
         return Err(ApiError::insufficient_storage(
             "the arena's databases use more than the limit; delete old runs",
         ));
@@ -226,24 +230,6 @@ async fn run_is_running(state: &AppState, id: &str) -> Result<bool, ApiError> {
         .any(|b| live.contains(&b.id)))
 }
 
-/// Deletes the run's rows, then drops its databases; the number dropped.
-async fn delete_run_data(state: &AppState, id: &str) -> anyhow::Result<usize> {
-    let dbs = state.store.delete_run(id).await?;
-    let mut dropped = 0;
-    for db in &dbs {
-        match state.worlds.drop_db(db).await {
-            Ok(()) => dropped += 1,
-            Err(e) => eprintln!("delete run {id}: could not drop {db}: {e:#}"),
-        }
-    }
-    state
-        .dumps
-        .lock()
-        .unwrap()
-        .retain(|b, _| !dbs.contains(&format!("branch_{b}")));
-    Ok(dropped)
-}
-
 async fn delete_run(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -255,7 +241,7 @@ async fn delete_run(
         return Err(ApiError::conflict("the run still has a running branch"));
     }
     detached(async move {
-        let dropped = delete_run_data(&state, &id).await?;
+        let dropped = gc::delete_run(&state.store, &state.hub, &id).await?;
         Ok(Json(json!({"dropped": dropped})))
     })
     .await
@@ -483,46 +469,28 @@ async fn stream(
 
 const MAX_KEYS: usize = 50;
 
-/// Where the world stood just after step `seq`: base, or the last snapshot at or before it.
-fn restore_source(events: &[Event], seq: i64) -> Result<Source, ApiError> {
-    let mut src = Some(Source::Base);
-    for e in events
-        .iter()
-        .filter(|e| e.seq <= seq && e.kind == EventKind::ToolCall)
-    {
-        if let Some(s) = e.payload["snapshot"].as_str() {
-            src = Some(Source::Snapshot(s.to_string()));
-        } else if e.payload["error"].is_null()
-            && e.payload["writes"]
-                .as_array()
-                .is_some_and(|w| !w.is_empty())
-        {
-            src = None; // a committed write with no snapshot; the next snapshot is exact again
-        }
-    }
-    src.ok_or_else(|| {
-        ApiError::bad("the world after that step can't be restored: its write has no snapshot")
-    })
+/// A rows request: the step, at most `MAX_KEYS` keys (`<kind>/<id>`), and the part to read.
+struct RowsQuery {
+    seq: i64,
+    keys: Vec<String>,
+    part: Option<String>,
 }
 
-/// The `seq` and `keys` of a rows request; at most `MAX_KEYS` keys, each `<table>/<id>`.
-fn parse_rows_query(q: &HashMap<String, String>) -> Result<(i64, Vec<(String, String)>), ApiError> {
+fn parse_rows_query(q: &HashMap<String, String>) -> Result<RowsQuery, ApiError> {
     let seq: i64 = q
         .get("seq")
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| ApiError::bad("seq must be an integer"))?;
-    let keys: Vec<(String, String)> = q
+    let keys: Vec<String> = q
         .get("keys")
         .map(String::as_str)
         .unwrap_or("")
         .split(',')
         .filter(|k| !k.is_empty())
         .map(|k| match k.split_once('/') {
-            Some((t, i)) if world::schema::TABLES.contains(&t) && !i.is_empty() => {
-                Ok((t.to_string(), i.to_string()))
-            }
+            Some((kind, id)) if !kind.is_empty() && !id.is_empty() => Ok(k.to_string()),
             _ => Err(ApiError::bad(format!(
-                "bad key {k:?}: expected users/<id>, orders/<id> or products/<id>"
+                "bad key {k:?}: expected <kind>/<id>, e.g. orders/<id>"
             ))),
         })
         .collect::<Result<_, _>>()?;
@@ -531,41 +499,60 @@ fn parse_rows_query(q: &HashMap<String, String>) -> Result<(i64, Vec<(String, St
             "at most {MAX_KEYS} keys per request"
         )));
     }
-    Ok((seq, keys))
+    let part = q.get("part").filter(|p| !p.is_empty()).cloned();
+    Ok(RowsQuery { seq, keys, part })
 }
 
-/// The rows at `keys` in a temporary database restored from `source`, dropped afterwards.
-async fn read_rows_at(
-    state: &AppState,
-    id: &str,
-    source: Source,
-    keys: &[(String, String)],
-) -> anyhow::Result<serde_json::Map<String, Value>> {
-    let name = format!(
-        "rows_{id}_{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
-    let tmp = state.worlds.new_branch(&name, source).await?;
-    let read = state
-        .worlds
-        .with_client(&tmp, async |c| {
-            let mut out = serde_json::Map::new();
-            for (t, i) in keys {
-                let row = c
-                    .query_opt(&format!("SELECT doc FROM {t} WHERE id = $1"), &[i])
-                    .await?;
-                out.insert(
-                    format!("{t}/{i}"),
-                    row.map(|r| r.get::<_, Value>(0)).unwrap_or(Value::Null),
-                );
-            }
-            Ok(out)
-        })
-        .await;
-    let dropped = state.worlds.drop_db(&tmp).await;
-    let out = read?;
-    dropped?;
-    Ok(out)
+/// The part a rows request reads: `?part=`, else the step's part, else the world's first part.
+fn rows_part<'a>(
+    asked: Option<&str>,
+    step: &Event,
+    world: &'a [WorldPart],
+) -> Result<&'a WorldPart, ApiError> {
+    let name = asked.or(step.payload["part"].as_str());
+    match name {
+        Some(n) => world
+            .iter()
+            .find(|p| p.part == n)
+            .ok_or_else(|| ApiError::bad(format!("there is no part {n} in this world"))),
+        None => world
+            .first()
+            .ok_or_else(|| ApiError::bad("this branch's world has no parts")),
+    }
+}
+
+/// A part's refusal of the request (`-32602`) is a bad request with the part's message.
+fn part_error(e: anyhow::Error) -> ApiError {
+    match e.downcast_ref::<CallError>() {
+        Some(CallError::Part {
+            code: -32602,
+            message,
+        }) => ApiError::bad(message.clone()),
+        _ => e.into(),
+    }
+}
+
+/// The docs of the request's keys in the save holding the part's state just after the step.
+async fn read_rows(state: &AppState, events: &[Event], q: &RowsQuery) -> Result<Value, ApiError> {
+    let step = events
+        .iter()
+        .find(|e| e.seq == q.seq)
+        .ok_or_else(|| ApiError::bad("there is no step with that number on this branch"))?;
+    let saves = saves_at(events, q.seq, &run_info(events).base).map_err(|n| {
+        ApiError::bad(format!(
+            "the world after that step can't be restored: the write at step {} to the part {} has no save",
+            n.seq, n.part
+        ))
+    })?;
+    let world = world_of(&state.hub, events).await?;
+    let part = rows_part(q.part.as_deref(), step, &world)?;
+    let save = saves
+        .get(&part.part)
+        .ok_or_else(|| ApiError::bad(format!("there is no save of the part {}", part.part)))?;
+    let docs = saves::inspect(&state.hub, &part.integration, save, &q.keys)
+        .await
+        .map_err(part_error)?;
+    Ok(json!({"seq": q.seq, "rows": docs}))
 }
 
 async fn rows(
@@ -573,43 +560,19 @@ async fn rows(
     Path(id): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Value> {
-    let (seq, keys) = parse_rows_query(&q)?;
+    let q = parse_rows_query(&q)?;
     if state.store.find_branch(&id).await?.is_none() {
         return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
     }
     let events = state.store.events(&id).await?;
-    if !events.iter().any(|e| e.seq == seq) {
-        return Err(ApiError::bad(
-            "there is no step with that number on this branch",
-        ));
-    }
-    let source = restore_source(&events, seq)?;
-    // Create, read and drop run detached, so a client disconnect can't leak the temp database.
-    detached(async move {
-        let out = read_rows_at(&state, &id, source, &keys).await?;
-        Ok(Json(json!({"seq": seq, "rows": out})))
-    })
-    .await
+    Ok(Json(read_rows(&state, &events, &q).await?))
 }
 
 // ---------------------------------------------------------------- compare
 
-async fn final_dump(state: &AppState, id: &str) -> anyhow::Result<Value> {
-    if let Some(d) = state.dumps.lock().unwrap().get(id) {
-        return Ok(d.clone());
-    }
-    let d = state
-        .worlds
-        .with_client(&format!("branch_{id}"), async |c| world::dump(c).await)
-        .await?;
-    state
-        .dumps
-        .lock()
-        .unwrap()
-        .insert(id.to_string(), d.clone());
-    Ok(d)
-}
+const NO_FINAL_STATE: &str = "this branch has no final state yet";
 
+/// The branch, which must exist (404) and have finished (409).
 async fn finished_branch(state: &AppState, id: &str) -> Result<Branch, ApiError> {
     let b = state
         .store
@@ -624,36 +587,36 @@ async fn finished_branch(state: &AppState, id: &str) -> Result<Branch, ApiError>
     Ok(b)
 }
 
-/// Every id must name a branch (404), be finished (409) and still have its database (409).
-async fn finished_branches_with_db(
-    state: &AppState,
-    ids: [&String; 2],
-) -> Result<[Branch; 2], ApiError> {
-    // Existence first (404), then finished (409).
+/// One side of a comparison: the branch, its events and its final state (409 without one).
+struct Side {
+    branch: Branch,
+    events: Vec<Event>,
+    end: FinalState,
+}
+
+async fn side(state: &AppState, branch: Branch) -> Result<Side, ApiError> {
+    let events = state.store.events(&branch.id).await?;
+    let saves = final_saves(&branch.id, &events).ok_or(ApiError::conflict(NO_FINAL_STATE))?;
+    let world = world_of(&state.hub, &events).await?;
+    Ok(Side {
+        branch,
+        events,
+        end: FinalState { world, saves },
+    })
+}
+
+/// Both sides: existence first (404), then finished (409), then a final state (409).
+async fn sides(state: &AppState, ids: [&String; 2]) -> Result<[Side; 2], ApiError> {
     for id in ids {
         if state.store.find_branch(id).await?.is_none() {
             return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
         }
     }
-    let branches = [
+    let (a, b) = (
         finished_branch(state, ids[0]).await?,
         finished_branch(state, ids[1]).await?,
-    ];
-    for id in ids {
-        let name = format!("branch_{id}");
-        if !state
-            .worlds
-            .list(&name)
-            .await?
-            .iter()
-            .any(|(n, _)| *n == name)
-        {
-            return Err(ApiError::conflict(
-                "this branch has no database (its setup failed)",
-            ));
-        }
-    }
-    Ok(branches)
+    );
+    Ok([side(state, a).await?, side(state, b).await?])
 }
 
 async fn compare_branches(
@@ -664,14 +627,17 @@ async fn compare_branches(
         (Some(a), Some(b)) => (a, b),
         _ => return Err(ApiError::bad("a and b are required")),
     };
-    let [ba, bb] = finished_branches_with_db(&state, [a, b]).await?;
-    let (ea, eb) = (state.store.events(a).await?, state.store.events(b).await?);
-    let (da, db) = (final_dump(&state, a).await?, final_dump(&state, b).await?);
+    let [a, b] = sides(&state, [a, b]).await?;
+    let rows = match compare::differing_rows(&state.hub, &a.end, &b.end).await {
+        // A save that is gone: a branch recorded before integrations whose database is missing.
+        Err(e) if part_code(&e) == Some(-32002) => return Err(ApiError::conflict(NO_FINAL_STATE)),
+        r => r?,
+    };
     Ok(Json(json!({
-        "a": compare::summary(&ba, &ea),
-        "b": compare::summary(&bb, &eb),
-        "first_divergent_seq": compare::first_divergent_seq(&ea, &eb),
-        "differing_rows": compare::row_diffs(&da, &db),
+        "a": compare::summary(&a.branch, &a.events),
+        "b": compare::summary(&b.branch, &b.events),
+        "first_divergent_seq": compare::first_divergent_seq(&a.events, &b.events),
+        "differing_rows": rows,
     })))
 }
 

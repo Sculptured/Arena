@@ -4,6 +4,8 @@ mod app_support;
 mod fake_upstream;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 use std::{
     future::Future,
@@ -22,36 +24,14 @@ use arenad::{
 };
 use fake_upstream::FakeUpstream;
 use packages::{gold_action_args, TestHub};
+use pg::Cleanup;
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::Worlds,
-    testing::{self, Cleanup},
-};
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
-}
-
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
-async fn worlds() -> Arc<Worlds> {
-    WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone()
 }
 
 fn agent(id: &str) -> AgentSpec {
@@ -126,11 +106,10 @@ async fn setup_full(
     extra: &[PathBuf],
     bench: &str,
 ) -> Fx {
-    let worlds = worlds().await;
     let hub = TestHub::new(extra);
-    let (store, clean) = app_support::meta_store(&worlds, "runner", tag).await;
+    let (store, clean) = app_support::meta_store("runner", tag).await;
     let (listener, base) = app_support::bind().await;
-    let state = AppState::new(store, worlds, hub.hub.clone(), config(upstream, base));
+    let state = AppState::new(store, hub.hub.clone(), config(upstream, base));
     let state = Arc::new(state.with_benchmark(bench));
     let d: Arc<dyn Driver> = match drv {
         Drv::Open => Arc::new(OpenDriver::new(state.clone())),

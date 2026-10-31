@@ -335,31 +335,3 @@ async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
         final_saves: Some(final_saves),
     })
 }
-
-/// Keys `<table>/<id>` whose documents differ between the dumps (present on one side only counts).
-pub fn differing_rows(a: &Value, b: &Value) -> Vec<String> {
-    let empty = serde_json::Map::new();
-    let mut out = vec![];
-    let mut tables: Vec<&String> = a
-        .as_object()
-        .into_iter()
-        .chain(b.as_object())
-        .flat_map(|m| m.keys())
-        .collect();
-    tables.sort();
-    tables.dedup();
-    for t in tables {
-        let (ta, tb) = (
-            a[t].as_object().unwrap_or(&empty),
-            b[t].as_object().unwrap_or(&empty),
-        );
-        for id in ta.keys().chain(tb.keys()) {
-            if ta.get(id) != tb.get(id) {
-                out.push(format!("{t}/{id}"));
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
-}

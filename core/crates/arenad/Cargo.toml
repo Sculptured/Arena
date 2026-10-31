@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-world = { path = "../world" }
 parts = { path = "../parts" }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }

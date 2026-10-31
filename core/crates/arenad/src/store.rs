@@ -4,9 +4,8 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use tokio_postgres::{Client, NoTls, Row};
-use world::pg::Admin;
 
-use crate::model::*;
+use crate::{model::*, pg::Admin};
 
 pub type RunId = String;
 pub type BranchId = String;
@@ -256,49 +255,27 @@ impl Store {
         Ok(by_run)
     }
 
-    /// Every database the store refers to: `branch_<id>` for each branch and each snapshot
-    /// named by a `ToolCall` event.
-    pub async fn referenced_dbs(&self) -> Result<std::collections::HashSet<String>> {
-        let mut out = std::collections::HashSet::new();
-        for r in self.client.query("SELECT id FROM branches", &[]).await? {
-            out.insert(format!("branch_{}", r.get::<_, String>(0)));
-        }
-        out.extend(self.snapshots_where("TRUE", &[]).await?);
-        Ok(out)
+    /// The ids of the run's branches.
+    pub async fn run_branches(&self, run_id: &str) -> Result<Vec<BranchId>> {
+        let sql = "SELECT id FROM branches WHERE run_id = $1 ORDER BY created_at, id";
+        let rows = self.client.query(sql, &[&run_id]).await?;
+        Ok(rows.iter().map(|r| r.get(0)).collect())
     }
 
-    async fn snapshots_where(
-        &self,
-        cond: &str,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    ) -> Result<Vec<String>> {
-        let sql = format!(
-            "SELECT DISTINCT payload->>'snapshot' FROM events
-             WHERE kind = 'tool_call' AND payload->>'snapshot' IS NOT NULL AND {cond}"
-        );
-        Ok(self
-            .client
-            .query(&sql, params)
-            .await?
-            .iter()
-            .map(|r| r.get(0))
-            .collect())
+    /// Every event that can name a save (`run_start`, `tool_call`, `check`), of every branch,
+    /// by branch and seq.
+    pub async fn events_naming_saves(&self) -> Result<Vec<Event>> {
+        let kinds =
+            [EventKind::RunStart, EventKind::ToolCall, EventKind::Check].map(|k| k.as_str());
+        let sql =
+            format!("SELECT {EVENT_COLS} FROM events WHERE kind = ANY($1) ORDER BY branch_id, seq");
+        let rows = self.client.query(&sql, &[&kinds.as_slice()]).await?;
+        rows.iter().map(event_from).collect()
     }
 
-    /// Deletes the run's branches, events and the run itself, and returns every database
-    /// they referenced (`branch_<id>` and the snapshots its events name).
-    pub async fn delete_run(&self, run_id: &str) -> Result<Vec<String>> {
-        let ids: Vec<String> = self
-            .client
-            .query("SELECT id FROM branches WHERE run_id = $1", &[&run_id])
-            .await?
-            .iter()
-            .map(|r| r.get(0))
-            .collect();
-        let mut dbs: Vec<String> = ids.iter().map(|i| format!("branch_{i}")).collect();
-        dbs.extend(self.snapshots_where("branch_id = ANY($1)", &[&ids]).await?);
-        dbs.sort();
-        dbs.dedup();
+    /// Deletes the run's branches, events and the run itself.
+    pub async fn delete_run(&self, run_id: &str) -> Result<()> {
+        let ids = self.run_branches(run_id).await?;
         // One statement, so the branch/parent foreign keys are checked at its end.
         self.client
             .execute(
@@ -308,7 +285,7 @@ impl Store {
                 &[&run_id, &ids],
             )
             .await?;
-        Ok(dbs)
+        Ok(())
     }
 
     /// True if some branch of the run has status `running`.

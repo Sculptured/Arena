@@ -1,8 +1,10 @@
 use std::{future::Future, sync::LazyLock};
 
-use arenad::{model::*, store::Store};
+use arenad::{model::*, pg::Admin, store::Store};
 use serde_json::json;
-use world::{pg::Admin, testing};
+
+#[path = "support/pg.rs"]
+mod pg;
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
@@ -33,11 +35,11 @@ fn db_name(tag: &str) -> String {
     )
 }
 
-async fn fresh(tag: &str) -> (Admin, String, Store, testing::Cleanup) {
-    let admin = testing::admin();
+async fn fresh(tag: &str) -> (Admin, String, Store, pg::Cleanup) {
+    let admin = pg::admin();
     let name = db_name(tag);
-    let clean = testing::Cleanup::new();
-    clean.meta(&name);
+    let clean = pg::Cleanup::new();
+    clean.add(&name);
     let store = Store::open_named(&admin, &name).await.unwrap();
     (admin, name, store, clean)
 }

@@ -1,56 +1,38 @@
+#[path = "support/app.rs"]
+mod app_support;
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "support/legacy.rs"]
+mod legacy;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 use std::{
     collections::HashMap,
     future::Future,
-    path::PathBuf,
     sync::{Arc, LazyLock},
     time::Duration,
 };
 
 use arenad::{
-    agents::{open::OpenDriver, Driver},
-    app::{self, AppState, Config},
+    app::AppState,
     fork::{self, ForkError},
     model::*,
     runner,
-    store::Store,
 };
 use fake_upstream::FakeUpstream;
-use packages::{gold_action_args, TestHub};
+use legacy::{legacy_run, LegacyDbs};
+use packages::{gold_action_args, plain_hub, TestHub};
+use pg::Cleanup;
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::Worlds,
-    testing::{self, Cleanup},
-};
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
-}
-
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
-async fn worlds() -> Arc<Worlds> {
-    WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone()
 }
 
 fn agent(id: &str) -> AgentSpec {
@@ -78,27 +60,10 @@ struct Fx {
 }
 
 async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
-    let worlds = worlds().await;
     let hub = TestHub::new(&[]);
-    let meta = format!(
-        "arena_test_fork_{}_{}",
-        tag,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
-    let clean = Cleanup::new();
-    clean.meta(&meta);
-    let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new();
-    config.upstream_base = upstream.base_url.clone();
-    config.openrouter_key = Some("sk-secret".into());
-    config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
-    let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
-    assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
-    let app = app::router(state.clone());
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (store, clean) = app_support::meta_store("fork", tag).await;
+    let (state, _) =
+        app_support::open_app(store, hub.hub.clone(), &upstream.base_url, |_| {}).await;
     Fx {
         state,
         hub,
@@ -514,5 +479,185 @@ fn fork_plan_errors_create_no_branch() {
         );
         assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1);
         teardown(fx, &[&parent]).await;
+    })
+}
+
+/// A copy of the retail base save under the legacy name `snap_<tag>`, with order #W7181492's
+/// exchange requested (the snapshot of an old run's write). The base is made in a namespace of
+/// the test's own; the copy is dropped by `dbs`.
+async fn legacy_snapshot(dbs: &LegacyDbs, tag: &str) -> (String, String) {
+    let seeded = TestHub::new(&[]);
+    let bench = seeded.hub.bench_describe("retail").await.unwrap();
+    let base = arenad::world::ensure_base(&seeded.hub, &bench)
+        .await
+        .unwrap();
+    let base_copy = format!("branch_{tag}base");
+    dbs.copy(&base_copy, &format!("ps_{}{}", seeded.ns, base["retail"]))
+        .await;
+    let snap = format!("snap_{tag}");
+    dbs.copy(&snap, &base_copy).await;
+    let sql = format!(
+        "UPDATE orders SET doc = jsonb_set(doc, '{{status}}', '\"exchange requested\"') WHERE id = '{ORDER}'"
+    );
+    dbs.execute(&snap, &sql).await;
+    (snap, base_copy)
+}
+
+/// An app on a hub without a namespace (legacy names work), with two runs recorded before
+/// integrations: `a` ends with the snapshot's world, `b` with the base's.
+/// The snapshot, run `a`, and branches `a` and `b` of a `LegacyFx`.
+struct Names {
+    snap: String,
+    run_a: String,
+    a: String,
+    b: String,
+}
+
+struct LegacyFx {
+    state: Arc<AppState>,
+    base: String,
+    http: reqwest::Client,
+    names: Names,
+    /// Seq of the write whose snapshot is `snap`.
+    write: i64,
+    _clean: Cleanup,
+    _dbs: LegacyDbs,
+}
+
+impl LegacyFx {
+    async fn new(upstream: &FakeUpstream) -> LegacyFx {
+        let id = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let tag = format!("t8{}_{id}", std::process::id());
+        let dbs = LegacyDbs::new(&tag);
+        let (snap, base_copy) = legacy_snapshot(&dbs, &tag).await;
+        let (store, clean) = app_support::meta_store("fork", "legacy").await;
+        let hub = plain_hub(&dbs.saves);
+        let (state, base) = app_support::open_app(store, hub, &upstream.base_url, |_| {}).await;
+        let solo = Team {
+            agents: vec![agent("resolver")],
+            ..team()
+        };
+        let (run_a, a) = legacy_run(&state.store, &dbs, &solo, &snap, &snap).await;
+        let (_, b) = legacy_run(&state.store, &dbs, &solo, &snap, &base_copy).await;
+        let evs = state.store.events(&a).await.unwrap();
+        let write = evs
+            .iter()
+            .find(|e| e.kind == EventKind::ToolCall)
+            .unwrap()
+            .seq;
+        LegacyFx {
+            http: reqwest::Client::new(),
+            names: Names { snap, run_a, a, b },
+            write,
+            state,
+            base,
+            _clean: clean,
+            _dbs: dbs,
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base)
+    }
+
+    async fn get(&self, path: &str) -> (u16, Value) {
+        app_support::send(self.http.get(self.url(path))).await
+    }
+
+    /// Rows at the write read its snapshot.
+    async fn check_rows(&self) {
+        let path = format!(
+            "/api/branches/{}/rows?seq={}&keys=orders/%23W7181492",
+            self.names.a, self.write
+        );
+        let (st, v) = self.get(&path).await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(
+            v["rows"][format!("orders/{ORDER}")]["doc"]["status"],
+            "exchange requested",
+            "{v}"
+        );
+    }
+
+    /// Compare diffs the branch databases.
+    async fn check_compare(&self) {
+        let (st, v) = self
+            .get(&format!(
+                "/api/compare?a={}&b={}",
+                self.names.a, self.names.b
+            ))
+            .await;
+        assert_eq!(st, 200, "{v}");
+        let rows = v["differing_rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{v}");
+        assert_eq!(rows[0]["key"], format!("orders/{ORDER}"));
+        assert_eq!(rows[0]["a"]["doc"]["status"], "exchange requested");
+        assert_eq!(rows[0]["b"]["doc"]["status"], "delivered");
+    }
+
+    /// A fork from the model call after the write starts from the snapshot: its first read sees
+    /// the write.
+    async fn check_fork(&self) {
+        let at = self.write + 1;
+        let req = self
+            .http
+            .post(self.url(&format!("/api/branches/{}/fork", self.names.a)));
+        let (st, v) = app_support::send(req.json(&json!({"at_seq": at}))).await;
+        assert_eq!((st, v["start_seq"].as_i64()), (200, Some(at)), "{v}");
+        let child = v["branch_id"].as_str().unwrap().to_string();
+        let ended = self.ended(&child).await;
+        let cevs = self.state.store.events(&child).await.unwrap();
+        let reads = tool_results(&cevs, "get_order_details", at);
+        assert_eq!(
+            reads[0]["status"], "exchange requested",
+            "{reads:?} {:?}",
+            ended.error
+        );
+    }
+
+    async fn ended(&self, branch: &str) -> Branch {
+        for _ in 0..600 {
+            let b = self.state.store.branch(branch).await.unwrap();
+            if b.status != BranchStatus::Running {
+                return b;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("branch still running");
+    }
+
+    /// Deleting run `a` drops its snapshot and branch database, not `b`'s.
+    async fn check_delete(&self) {
+        let req = self
+            .http
+            .delete(self.url(&format!("/api/runs/{}", self.names.run_a)));
+        assert_eq!(app_support::send(req).await.0, 200);
+        let admin = pg::admin();
+        let exists = async |db: &str| admin.exists(db).await.unwrap();
+        assert!(!exists(&self.names.snap).await, "the snapshot is dropped");
+        assert!(
+            !exists(&format!("branch_{}", self.names.a)).await,
+            "a's database is dropped"
+        );
+        assert!(
+            exists(&format!("branch_{}", self.names.b)).await,
+            "b keeps its own"
+        );
+    }
+}
+
+/// A run recorded before integrations (a `snapshot` per write, no saves) still shows rows,
+/// compares (through its `branch_<id>` database) and forks (from its snapshot), and deleting it
+/// drops its snapshot and branch database.
+#[test]
+fn old_run_still_forks() {
+    run(async {
+        // The fork reads the order, then the upstream fails: the branch ends before any check.
+        let up = FakeUpstream::start(vec![read_order("f1"), json!({"_status": 500})]).await;
+        let fx = LegacyFx::new(&up).await;
+        fx.check_rows().await;
+        fx.check_compare().await;
+        fx.check_fork().await;
+        fx.check_delete().await;
     })
 }

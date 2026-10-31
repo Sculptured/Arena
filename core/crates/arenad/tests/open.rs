@@ -1,11 +1,14 @@
+#[path = "support/app.rs"]
+mod app_support;
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 use std::{
     future::Future,
-    path::PathBuf,
     sync::{Arc, LazyLock},
 };
 
@@ -14,40 +17,17 @@ use arenad::{
     app::{self, AppState, Config},
     exec::BranchCtx,
     model::*,
-    store::Store,
 };
 use fake_upstream::FakeUpstream;
 use packages::TestHub;
+use pg::Cleanup;
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::Worlds,
-    testing::{self, Cleanup},
-};
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
-}
-
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
-async fn worlds() -> Arc<Worlds> {
-    WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone()
 }
 
 fn agent(id: &str, prompt: &str) -> AgentSpec {
@@ -68,16 +48,8 @@ struct Fx {
 }
 
 async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx {
-    let worlds = worlds().await;
     let hub = TestHub::new(&[]);
-    let meta = format!(
-        "arena_test_open_{}_{}",
-        tag,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
-    let clean = Cleanup::new();
-    clean.meta(&meta);
-    let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
+    let (store, clean) = app_support::meta_store("open", tag).await;
     let team = Team {
         id: "t".into(),
         name: "T".into(),
@@ -95,7 +67,7 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
     config.upstream_base = upstream.base_url.clone();
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
-    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
+    let state = Arc::new(AppState::new(store, hub.hub.clone(), config));
     let ctx = Arc::new(BranchCtx::new(branch.clone(), world, team, "task".into()));
     state.live.write().unwrap().insert(branch, ctx.clone());
     let app = app::router(state.clone());

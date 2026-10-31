@@ -1,101 +1,129 @@
-//! Runs recorded the way arenad did before integrations: the branch's database `branch_<id>`
-//! copied from `world_base`, a `snap_` copy after each committed write, and tool-call events
-//! that carry `snapshot` (no `saves`, no `part`). Rows, compare and delete still serve such runs
-//! through the old `Worlds` until they move to the parts.
+//! Runs recorded before integrations, built by hand: a `RunStart` without saves, a tool call that
+//! carries `snapshot` (a real `snap_…` database) and no `saves` or `part`, and the final state in
+//! the database `branch_<id>`. Legacy names only work without a Postgres namespace, so every
+//! database here gets a unique name and `LegacyDbs` drops them, and its save folder, at the end.
 #![allow(dead_code)]
+
+use std::path::PathBuf;
 
 use arenad::{model::*, store::Store};
 use serde_json::{json, Value};
-use world::snapshot::{Source, Worlds};
 
-struct Legacy<'a> {
-    store: &'a Store,
-    worlds: &'a Worlds,
-    branch: String,
-    db: String,
-    agent: String,
+use crate::pg::{admin, Cleanup};
+
+/// The databases a legacy test makes, dropped on drop, and a save folder for its hub.
+pub struct LegacyDbs {
+    clean: Cleanup,
+    pub saves: PathBuf,
 }
 
-impl Legacy<'_> {
-    async fn append(&self, agent: bool, kind: EventKind, payload: Value) {
-        let agent = agent.then_some(self.agent.as_str());
-        self.store
-            .append(&self.branch, agent, kind, payload)
-            .await
-            .unwrap();
+impl LegacyDbs {
+    pub fn new(tag: &str) -> LegacyDbs {
+        let saves = std::env::temp_dir().join(format!("arenad-saves-{tag}"));
+        std::fs::create_dir_all(&saves).unwrap();
+        LegacyDbs {
+            clean: Cleanup::new(),
+            saves,
+        }
     }
 
-    /// Runs a tool on the branch database, snapshots a committed write, records the call.
-    async fn call(&self, i: usize, name: &str, args: &Value) {
-        let out = self
-            .worlds
-            .with_client(&self.db, async |c| world::tools::call(c, name, args).await)
-            .await
-            .unwrap();
-        let snapshot = match out.error.is_none() && !out.writes.is_empty() {
-            true => Some(self.worlds.snapshot(&self.db).await.unwrap()),
-            false => None,
-        };
-        let payload = json!({"name": name, "args": args, "result": out.result, "error": out.error,
-                             "reads": out.reads, "writes": out.writes, "snapshot": snapshot, "tool_call_id": format!("c{i}")});
-        self.append(true, EventKind::ToolCall, payload).await;
+    /// Makes the database `name` as a copy of `template`; it is dropped at the end.
+    pub async fn copy(&self, name: &str, template: &str) {
+        self.clean.add(name);
+        admin().create_db_from(name, template).await.unwrap();
     }
 
-    async fn end(&self, status: BranchStatus) {
-        let end = json!({"ok": true, "error": null, "tokens": 15, "cost_usd": 0.001, "cost_source": "openrouter", "seconds": 1.0});
-        self.append(true, EventKind::AgentEnd, end).await;
-        let check = json!({"passed": status == BranchStatus::Passed, "gold_db": "gold_27", "differing_rows": []});
-        self.append(false, EventKind::Check, check).await;
-        self.store
-            .set_status(&self.branch, status, None)
+    /// Runs `sql` in the database `db`.
+    pub async fn execute(&self, db: &str, sql: &str) {
+        let url = admin().db_url(db);
+        let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
             .await
             .unwrap();
+        let task = tokio::spawn(conn);
+        client.batch_execute(sql).await.unwrap();
+        drop(client);
+        let _ = task.await;
     }
 }
 
-impl<'a> Legacy<'a> {
-    /// A new run of task 27 with one branch and its database; records `RunStart` and `AgentStart`.
-    async fn open(store: &'a Store, worlds: &'a Worlds, team: &Team) -> (String, Legacy<'a>) {
-        let run_id = store.create_run("27", team).await.unwrap();
-        let branch = store
-            .create_branch(&run_id, None, team, &json!([]), None)
-            .await
-            .unwrap();
-        let db = worlds.new_branch(&branch, Source::Base).await.unwrap();
-        let agent = team.agents.last().unwrap().id.clone();
-        let run = Legacy {
-            store,
-            worlds,
-            branch,
-            db,
-            agent,
-        };
-        run.append(
-            false,
-            EventKind::RunStart,
-            json!({"task_id": "27", "team": team}),
-        )
-        .await;
-        let start = json!({"name": run.agent, "kind": "open", "model": null});
-        run.append(true, EventKind::AgentStart, start).await;
-        (run_id, run)
+impl Drop for LegacyDbs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.saves);
     }
 }
 
-/// Records a finished one-agent run of task 27 whose agent made `calls` (tool name, args).
-/// Returns (run id, branch id). Its databases are dropped by the test's `Cleanup` (it sweeps
-/// `branch_*` databases of the store's branches and the snapshots their events name).
+fn tool_call(id: &str, name: &str) -> Value {
+    json!({"id": id, "type": "function", "function": {"name": name, "arguments": "{}"}})
+}
+
+/// A model call the way the open agent recorded it: the messages sent and the reply.
+fn model_call(messages: Value, reply: Value) -> Value {
+    json!({"request": {"model": "fake/model", "messages": messages},
+           "response": {"choices": [{"index": 0, "message": reply, "finish_reason": "stop"}]}})
+}
+
+/// The agent's events: a model call chooses the write, the write is snapshotted to `snap`, and
+/// a last model call ends the agent.
+fn agent_events(agent: &AgentSpec, snap: &str) -> Vec<(EventKind, Value)> {
+    let sent =
+        json!([{"role": "system", "content": agent.prompt}, {"role": "user", "content": "ticket"}]);
+    let chose = json!({"role": "assistant", "content": null,
+                       "tool_calls": [tool_call("c1", "exchange_delivered_order_items")]});
+    let mut after = sent.as_array().unwrap().clone();
+    after.push(chose.clone());
+    after.push(json!({"role": "tool", "tool_call_id": "c1", "content": "\"ok\""}));
+    let done = json!({"role": "assistant", "content": "Done."});
+    let write = json!({"name": "exchange_delivered_order_items", "args": {}, "result": "ok", "error": null,
+                       "reads": [], "writes": ["orders/#W7181492"], "snapshot": snap, "tool_call_id": "c1"});
+    vec![
+        (
+            EventKind::AgentStart,
+            json!({"name": agent.name, "kind": "open", "model": null}),
+        ),
+        (EventKind::ModelCall, model_call(sent, chose)),
+        (EventKind::ToolCall, write),
+        (EventKind::ModelCall, model_call(json!(after), done)),
+        (
+            EventKind::AgentEnd,
+            json!({"ok": true, "error": null, "tokens": 15, "cost_usd": 0.001,
+                                     "cost_source": "openrouter", "seconds": 1.0}),
+        ),
+    ]
+}
+
+/// Records a finished one-agent run of task 27 whose write was snapshotted to `snap`; its final
+/// database `branch_<id>` is a copy of `final_db`. Returns (run id, branch id).
 pub async fn legacy_run(
     store: &Store,
-    worlds: &Worlds,
+    dbs: &LegacyDbs,
     team: &Team,
-    calls: &[(&str, Value)],
-    status: BranchStatus,
+    snap: &str,
+    final_db: &str,
 ) -> (String, String) {
-    let (run_id, run) = Legacy::open(store, worlds, team).await;
-    for (i, (name, args)) in calls.iter().enumerate() {
-        run.call(i, name, args).await;
+    let run_id = store.create_run("27", team).await.unwrap();
+    let branch = store
+        .create_branch(&run_id, None, team, &json!([]), None)
+        .await
+        .unwrap();
+    let agent = team.agents.last().unwrap();
+    let start = json!({"task_id": "27", "team": team});
+    store
+        .append(&branch, None, EventKind::RunStart, start)
+        .await
+        .unwrap();
+    for (kind, payload) in agent_events(agent, snap) {
+        let who = Some(agent.id.as_str());
+        store.append(&branch, who, kind, payload).await.unwrap();
     }
-    run.end(status).await;
-    (run_id, run.branch)
+    let check = json!({"passed": true, "gold_db": "gold_27", "differing_rows": []});
+    store
+        .append(&branch, None, EventKind::Check, check)
+        .await
+        .unwrap();
+    store
+        .set_status(&branch, BranchStatus::Passed, None)
+        .await
+        .unwrap();
+    dbs.copy(&format!("branch_{branch}"), final_db).await;
+    (run_id, branch)
 }

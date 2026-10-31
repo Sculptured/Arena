@@ -683,7 +683,8 @@ impl Part for Postgres {
         if self.pg.exists(&ps).await.map_err(internal)? {
             return self.pg.drop(&ps).await.map_err(internal);
         }
-        if self.legacy_ok(&p.save) && p.save.starts_with("snap_") {
+        // An old run's snapshots and final branch database; never `gold_*` or `world_base`.
+        if self.legacy_ok(&p.save) && ["snap_", "branch_"].iter().any(|x| p.save.starts_with(x)) {
             return self.pg.drop(&p.save).await.map_err(internal);
         }
         Ok(())

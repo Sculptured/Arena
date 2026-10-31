@@ -128,6 +128,13 @@ async fn hub_spawns_rust_counter_and_saves() {
     let hub = hub_for(std::slice::from_ref(&root), &saves);
     exercise(&hub, "counter").await;
     assert!(hub.saves_bytes() > 0);
+    // A dropped save's folder goes; bad ids and unknown packages are ignored.
+    let dir = hub.save_dir("counter", "s1");
+    hub.remove_save_dir("counter", "../counter");
+    hub.remove_save_dir("nope", "s1");
+    assert!(dir.exists());
+    hub.remove_save_dir("counter", "s1");
+    assert!(!dir.exists() && hub.saves_bytes() == 0);
     drop(hub);
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&saves).unwrap();

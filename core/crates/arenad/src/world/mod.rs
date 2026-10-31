@@ -23,7 +23,7 @@ use parts::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Map, Value};
 
-pub use ids::{instance_id, new_save_id};
+pub use ids::{base_names, gold_names, instance_id, new_save_id};
 pub use plan::{plan, Plan, PlannedPart, Route};
 pub use standard::{ensure_base, ensure_gold};
 

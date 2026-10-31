@@ -1,6 +1,6 @@
 use std::{
     future::Future,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, LazyLock},
 };
 
@@ -13,11 +13,13 @@ use arenad::{
     world::World,
 };
 use serde_json::json;
-use tokio::sync::OnceCell;
-use world::{schema::load_base, snapshot::Worlds, testing};
 
+#[path = "support/app.rs"]
+mod app_support;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
@@ -252,37 +254,17 @@ fn driver_times_out() {
 
 // ---- live smoke tests (use the user's CLI sign-in; cost a few cents) ----
 
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
 async fn live_setup(
     tag: &str,
 ) -> (
     Arc<Store>,
-    Arc<Worlds>,
-    String,
+    pg::Cleanup,
     String,
     Arc<World>,
     String,
     packages::TestHub,
 ) {
-    let worlds = WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone();
-    let meta = format!(
-        "arena_test_cli_{}_{}",
-        tag,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
-    let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
+    let (store, clean) = app_support::meta_store("cli", tag).await;
     let a = |id: &str| AgentSpec {
         id: id.into(),
         name: id.into(),
@@ -306,12 +288,7 @@ async fn live_setup(
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let mut cfg = Config::new();
     cfg.self_base = base.clone();
-    let state = Arc::new(AppState::new(
-        store.clone(),
-        worlds.clone(),
-        hub.hub.clone(),
-        cfg,
-    ));
+    let state = Arc::new(AppState::new(store.clone(), hub.hub.clone(), cfg));
     state.live.write().unwrap().insert(
         branch.clone(),
         Arc::new(BranchCtx::new(
@@ -322,7 +299,7 @@ async fn live_setup(
         )),
     );
     tokio::spawn(async move { axum::serve(listener, app::router(state)).await.unwrap() });
-    (store, worlds, meta, branch, world, base, hub)
+    (store, clean, branch, world, base, hub)
 }
 
 async fn live(tag: &str, mk: impl FnOnce(String) -> Box<dyn Driver>) {
@@ -335,7 +312,7 @@ async fn live_with(
     input: &str,
     want_calls: usize,
 ) {
-    let (store, worlds, meta, branch, world, base, _hub) = live_setup(tag).await;
+    let (store, _clean, branch, world, base, _hub) = live_setup(tag).await;
     let driver = mk(base);
     let team = Team {
         id: "t".into(),
@@ -369,7 +346,6 @@ async fn live_with(
     }
     drop(store);
     world.stop().await;
-    worlds.admin().drop_db(&meta).await.unwrap();
     assert!(r.ok, "{:?}", r.error);
     let calls: Vec<_> = evs
         .iter()
@@ -396,7 +372,7 @@ const PROBE: &str = "Do two things and report raw results. (1) List the exact na
 #[ignore]
 fn live_codex_isolation_probe() {
     run(async {
-        let (store, worlds, meta, branch, world, base, _hub) = live_setup("probe").await;
+        let (store, _clean, branch, world, base, _hub) = live_setup("probe").await;
         let sp = AgentSpec {
             id: "triage".into(),
             name: "t".into(),
@@ -424,7 +400,6 @@ fn live_codex_isolation_probe() {
         println!("ANSWER:\n{answer}");
         drop(store);
         world.stop().await;
-        worlds.admin().drop_db(&meta).await.unwrap();
         for bad in [
             "codex_apps",
             "node_repl",

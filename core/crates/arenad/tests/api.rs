@@ -1,56 +1,32 @@
+#[path = "support/app.rs"]
+mod app_support;
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
-#[path = "support/legacy.rs"]
-mod legacy;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 use std::{
     future::Future,
-    path::PathBuf,
     sync::{Arc, LazyLock},
     time::Duration,
 };
 
 use arenad::{
-    agents::{open::OpenDriver, Driver},
     app::{self, AppState, Config},
     model::*,
-    store::Store,
 };
 use fake_upstream::FakeUpstream;
-use legacy::legacy_run;
 use packages::{gold_action_args, TestHub};
+use pg::Cleanup;
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::Worlds,
-    testing::{self, Cleanup},
-};
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
-}
-
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
-async fn worlds() -> Arc<Worlds> {
-    WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone()
 }
 
 fn agent(id: &str) -> AgentSpec {
@@ -84,33 +60,15 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
 }
 
 async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
-    let worlds = worlds().await;
     let hub = TestHub::new(&[]);
-    let meta = format!(
-        "arena_test_api_{}_{}",
-        tag,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
-    let clean = Cleanup::new();
-    clean.meta(&meta);
-    let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new();
-    config.upstream_base = upstream.base_url.clone();
-    config.openrouter_key = Some("sk-secret".into());
-    config.self_base = format!("http://127.0.0.1:{port}");
-    tweak(&mut config);
-    let state = Arc::new(AppState::new(store, worlds, hub.hub.clone(), config));
-    let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
-    assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
-    let app = app::router(state.clone());
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (store, clean) = app_support::meta_store("api", tag).await;
+    let (state, base) =
+        app_support::open_app(store, hub.hub.clone(), &upstream.base_url, tweak).await;
     Fx {
         state,
         _hub: hub,
         _clean: clean,
-        base: format!("http://127.0.0.1:{port}"),
+        base,
         http: reqwest::Client::new(),
     }
 }
@@ -123,24 +81,12 @@ async fn teardown(fx: Fx, _branches: &[&str]) {
 
 impl Fx {
     async fn get(&self, path: &str) -> (u16, Value) {
-        let r = self
-            .http
-            .get(format!("{}{path}", self.base))
-            .send()
-            .await
-            .unwrap();
-        (r.status().as_u16(), r.json().await.unwrap())
+        app_support::send(self.http.get(format!("{}{path}", self.base))).await
     }
 
     async fn post(&self, path: &str, body: Value) -> (u16, Value) {
-        let r = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
-        (r.status().as_u16(), r.json().await.unwrap())
+        let req = self.http.post(format!("{}{path}", self.base)).json(&body);
+        app_support::send(req).await
     }
 
     async fn run_to_end(&self, task: &str, team: &Team) -> String {
@@ -373,175 +319,135 @@ fn post_run_then_stream_until_status() {
     })
 }
 
-/// Compare still reads the old branch databases until it moves to the parts: it is shown on
-/// runs recorded before integrations.
-#[test]
-fn compare_reports_first_divergence_and_rows() {
-    run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup("compare", &up).await;
-        let solo = Team {
-            agents: vec![agent("resolver")],
-            ..team()
-        };
-        let (st, w) = (&fx.state.store, &fx.state.worlds);
-        let read = ("get_order_details", json!({"order_id": ORDER}));
-        let (_, a) = legacy_run(
-            st,
-            w,
-            &solo,
-            &[
-                read.clone(),
-                ("exchange_delivered_order_items", gold_args()),
-            ],
-            BranchStatus::Passed,
-        )
-        .await;
-        let (_, b) = legacy_run(
-            st,
-            w,
-            &solo,
-            &[read, ("modify_user_address", wrong_args())],
-            BranchStatus::Failed,
-        )
-        .await;
+fn wrong_write() -> Value {
+    tool_msg(vec![("w2", "modify_user_address", wrong_args())])
+}
 
+fn solo() -> Team {
+    Team {
+        agents: vec![agent("resolver")],
+        ..team()
+    }
+}
+
+/// Seq of the first tool call named `name` on `branch`.
+async fn seq_of(fx: &Fx, branch: &str, name: &str) -> i64 {
+    let evs = fx.state.store.events(branch).await.unwrap();
+    evs.iter().find(|e| e.payload["name"] == name).unwrap().seq
+}
+
+/// A passed solo run (the gold exchange) and a failed one (a wrong address): `(a, b)`.
+async fn passed_and_failed(fx: &Fx) -> (String, String) {
+    let a = fx.run_to_end("27", &solo()).await;
+    let b = fx.run_to_end("27", &solo()).await;
+    (a, b)
+}
+
+/// The differing rows of a passed and a failed branch: the order and the user, each side's doc.
+fn assert_passed_failed_rows(v: &Value) {
+    let rows = v["differing_rows"].as_array().unwrap();
+    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(
+        keys,
+        vec![format!("orders/{ORDER}"), format!("users/{USER}")]
+    );
+    assert_eq!(
+        rows[0]["a"]["doc"]["status"], "exchange requested",
+        "{}",
+        rows[0]
+    );
+    assert_eq!(rows[0]["b"]["doc"]["status"], "delivered");
+    assert_eq!(rows[1]["b"]["doc"]["address"]["address1"], "1 Wrong St");
+}
+
+/// A branch compared with itself has no divergence and no differing rows; an unknown branch is
+/// 404 and a missing side 400.
+async fn compare_edge_cases(fx: &Fx, a: &str) {
+    let (_, same) = fx.get(&format!("/api/compare?a={a}&b={a}")).await;
+    assert!(same["first_divergent_seq"].is_null());
+    assert!(same["differing_rows"].as_array().unwrap().is_empty());
+    assert_eq!(fx.get(&format!("/api/compare?a={a}&b=nope")).await.0, 404);
+    assert_eq!(fx.get(&format!("/api/compare?a={a}")).await.0, 400);
+}
+
+/// Differing rows come from the parts' `diff` of both branches' final saves; the shape is
+/// unchanged (`[{key, a, b}]`, keys without a part prefix in a one-part world).
+#[test]
+fn compare_differing_rows_unchanged_shape() {
+    run(async {
+        let script = vec![
+            gold_write(),
+            text_msg("Exchanged."),
+            wrong_write(),
+            text_msg("Moved."),
+        ];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("compare", &up).await;
+        let (a, b) = passed_and_failed(&fx).await;
         let (st, v) = fx.get(&format!("/api/compare?a={a}&b={b}")).await;
         assert_eq!(st, 200, "{v}");
-        assert_eq!(v["a"]["status"], "passed");
-        assert_eq!(v["b"]["status"], "failed");
-        assert!(v["a"]["tokens"].as_i64().unwrap() > 0);
-        assert!(v["a"]["seconds"].as_f64().unwrap() >= 0.0);
-
-        let aevs = fx.state.store.events(&a).await.unwrap();
-        let first_write = aevs
-            .iter()
-            .find(|e| e.payload["name"] == "exchange_delivered_order_items")
-            .unwrap()
-            .seq;
-        assert_eq!(v["first_divergent_seq"], first_write);
-
-        let rows = v["differing_rows"].as_array().unwrap();
-        let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
-        assert_eq!(
-            keys,
-            vec![format!("orders/{ORDER}"), format!("users/{USER}")]
+        let statuses = (v["a"]["status"].as_str(), v["b"]["status"].as_str());
+        assert_eq!(statuses, (Some("passed"), Some("failed")));
+        assert!(
+            v["a"]["tokens"].as_i64().unwrap() > 0 && v["a"]["seconds"].as_f64().unwrap() >= 0.0
         );
-        assert_eq!(rows[0]["a"]["status"], "exchange requested");
-        assert_eq!(rows[0]["b"]["status"], "delivered");
-        assert_eq!(rows[1]["b"]["address"]["address1"], "1 Wrong St");
-
-        // Identical branches: no divergence, no differing rows.
-        let (_, same) = fx.get(&format!("/api/compare?a={a}&b={a}")).await;
-        assert!(same["first_divergent_seq"].is_null());
-        assert!(same["differing_rows"].as_array().unwrap().is_empty());
-        assert_eq!(fx.get(&format!("/api/compare?a={a}&b=nope")).await.0, 404);
+        let first_write = seq_of(&fx, &a, "exchange_delivered_order_items").await;
+        assert_eq!(v["first_divergent_seq"], first_write);
+        assert_passed_failed_rows(&v);
+        compare_edge_cases(&fx, &a).await;
         teardown(fx, &[&a, &b]).await;
     })
 }
 
+/// The rows request for `keys` at step `seq` of branch `b`, plus `extra` query text.
+fn rows_path(b: &str, seq: i64, keys: &str, extra: &str) -> String {
+    format!("/api/branches/{b}/rows?seq={seq}&keys={keys}{extra}")
+}
+
+/// Unknown part, malformed key, too many keys and unknown step are 400; unknown branch 404.
+async fn bad_rows_requests(fx: &Fx, b: &str, seq: i64) {
+    let many: Vec<String> = (0..51).map(|i| format!("users/u{i}")).collect();
+    for (path, want) in [
+        (rows_path(b, seq, "users/x", "&part=nope"), 400),
+        (rows_path(b, seq, "nokey", ""), 400),
+        (rows_path(b, seq, &many.join(","), ""), 400),
+        (rows_path(b, 9999, "users/x", ""), 400),
+        (rows_path("nope", 1, "users/x", ""), 404),
+    ] {
+        assert_eq!(fx.get(&path).await.0, want, "{path}");
+    }
+}
+
+/// Rows are read with `inspect` from the save holding the part's state after the step.
 #[test]
-fn rows_at_seq_shows_state_after_that_step() {
+fn rows_via_inspect_before_after() {
     run(async {
-        // Rows still read the old snapshots until they move to the parts: a run recorded before integrations.
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
+        let script = vec![gold_write(), wrong_write(), text_msg("Done.")];
+        let up = FakeUpstream::start(script).await;
         let fx = setup("rows", &up).await;
-        let solo = Team {
-            agents: vec![agent("resolver")],
-            ..team()
-        };
-        let calls = [
-            ("get_order_details", json!({"order_id": ORDER})),
-            ("exchange_delivered_order_items", gold_args()),
-            ("modify_user_address", wrong_args()),
-        ];
-        let (_, b) = legacy_run(
-            &fx.state.store,
-            &fx.state.worlds,
-            &solo,
-            &calls,
-            BranchStatus::Failed,
-        )
-        .await;
-        let evs = fx.state.store.events(&b).await.unwrap();
-        let seq_of = |name: &str| evs.iter().find(|e| e.payload["name"] == name).unwrap().seq;
-        let (s_gold, s_wrong) = (
-            seq_of("exchange_delivered_order_items"),
-            seq_of("modify_user_address"),
-        );
+        let b = fx.run_to_end("27", &solo()).await;
+        let s_gold = seq_of(&fx, &b, "exchange_delivered_order_items").await;
+        let s_wrong = seq_of(&fx, &b, "modify_user_address").await;
         let keys = format!("orders/%23W7181492,users/{USER},users/nobody");
+        let (order, user) = (format!("orders/{ORDER}"), format!("users/{USER}"));
+        let at = async |seq: i64, extra: &str| fx.get(&rows_path(&b, seq, &keys, extra)).await;
 
-        let (st, v) = fx
-            .get(&format!(
-                "/api/branches/{b}/rows?seq={}&keys={keys}",
-                s_gold - 1
-            ))
-            .await;
-        assert_eq!(st, 200, "{v}");
-        assert_eq!(v["seq"], s_gold - 1);
-        assert_eq!(v["rows"][format!("orders/{ORDER}")]["status"], "delivered");
+        let (st, v) = at(s_gold - 1, "").await;
+        assert_eq!((st, &v["seq"]), (200, &json!(s_gold - 1)), "{v}");
+        assert_eq!(v["rows"][&order]["doc"]["status"], "delivered", "{v}");
         assert!(v["rows"]["users/nobody"].is_null());
-        let addr_before = v["rows"][format!("users/{USER}")]["address"]["address1"].clone();
+        let addr_before = v["rows"][&user]["doc"]["address"]["address1"].clone();
+        assert!(addr_before.is_string(), "{v}");
 
-        let (_, v) = fx
-            .get(&format!("/api/branches/{b}/rows?seq={s_gold}&keys={keys}"))
-            .await;
-        assert_eq!(
-            v["rows"][format!("orders/{ORDER}")]["status"],
-            "exchange requested"
-        );
-        assert_eq!(
-            v["rows"][format!("users/{USER}")]["address"]["address1"],
-            addr_before
-        );
+        let (_, v) = at(s_gold, "").await;
+        assert_eq!(v["rows"][&order]["doc"]["status"], "exchange requested");
+        assert_eq!(v["rows"][&user]["doc"]["address"]["address1"], addr_before);
 
-        let (_, v) = fx
-            .get(&format!("/api/branches/{b}/rows?seq={s_wrong}&keys={keys}"))
-            .await;
-        assert_eq!(
-            v["rows"][format!("users/{USER}")]["address"]["address1"],
-            "1 Wrong St"
-        );
-        assert_eq!(
-            v["rows"][format!("orders/{ORDER}")]["status"],
-            "exchange requested"
-        );
-
-        // Bad requests; none leaves a temp database behind.
-        assert_eq!(
-            fx.get(&format!(
-                "/api/branches/{b}/rows?seq={s_gold}&keys=sessions/x"
-            ))
-            .await
-            .0,
-            400
-        );
-        assert_eq!(
-            fx.get(&format!("/api/branches/{b}/rows?seq=9999&keys=users/x"))
-                .await
-                .0,
-            400
-        );
-        assert_eq!(
-            fx.get("/api/branches/nope/rows?seq=1&keys=users/x").await.0,
-            404
-        );
-        let n = fx
-            .state
-            .worlds
-            .admin()
-            .with_db("postgres", async |c| {
-                let r = c
-                    .query_one(
-                        "SELECT count(*) FROM pg_database WHERE datname LIKE $1",
-                        &[&format!("branch_rows_{b}%")],
-                    )
-                    .await?;
-                Ok(r.get::<_, i64>(0))
-            })
-            .await
-            .unwrap();
-        assert_eq!(n, 0, "temp branch databases are dropped");
+        let (st, v) = at(s_wrong, "&part=retail").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["rows"][&user]["doc"]["address"]["address1"], "1 Wrong St");
+        assert_eq!(v["rows"][&order]["doc"]["status"], "exchange requested");
+        bad_rows_requests(&fx, &b, s_gold).await;
         teardown(fx, &[&b]).await;
     })
 }
@@ -663,7 +569,7 @@ fn stream_ends_when_shutdown_fires() {
 }
 
 #[test]
-fn compare_of_branch_without_database_is_409() {
+fn compare_of_branch_without_final_state_is_409() {
     run(async {
         let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let fx = setup("nodb", &up).await;
@@ -686,7 +592,7 @@ fn compare_of_branch_without_database_is_409() {
             .unwrap();
         let (st, v) = fx.get(&format!("/api/compare?a={ghost}&b={ghost}")).await;
         assert_eq!(st, 409, "{v}");
-        assert_eq!(v["error"], "this branch has no database (its setup failed)");
+        assert_eq!(v["error"], "this branch has no final state yet");
         drop(fx.state);
     })
 }

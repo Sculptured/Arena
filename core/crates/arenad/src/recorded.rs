@@ -1,10 +1,12 @@
-//! What a branch's events say about its world: the run's benchmark, seed and base saves (from
-//! `RunStart`), and per part the save holding its state at a step. Runs recorded before
-//! integrations have a `snapshot` per write and no `saves`: they read as part `retail`, with
-//! `world_base` as the base.
+//! What a branch's events say about its world: the run's benchmark, seed, world and base saves
+//! (from `RunStart`), per part the save holding its state at a step, its final saves, and every
+//! save the events name. Runs recorded before integrations have a `snapshot` per write and no
+//! `saves`: they read as part `retail`, with `world_base` as the base and the database
+//! `branch_<id>` as the final state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use parts::proto::WorldPart;
 use serde_json::Value;
 
 use crate::{
@@ -24,10 +26,21 @@ pub struct RunInfo {
     pub seed: u64,
     /// The saves the run's worlds start from.
     pub base: Saves,
+    /// The parts of the run's world (empty for a run recorded before integrations).
+    pub world: Vec<WorldPart>,
+    /// True for a run recorded before integrations (its `RunStart` names no saves).
+    pub legacy: bool,
 }
 
 fn legacy(save: &str) -> Saves {
     Saves::from([(LEGACY_PART.to_string(), save.to_string())])
+}
+
+/// A `{part: save}` object, None when `v` is not one (or names no save).
+fn saves_in(v: &Value) -> Option<Saves> {
+    serde_json::from_value::<Saves>(v.clone())
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// The run facts of a branch's events (a run recorded before integrations: retail, seed 0,
@@ -37,16 +50,17 @@ pub fn run_info(events: &[Event]) -> RunInfo {
         .iter()
         .find(|e| e.kind == EventKind::RunStart)
         .map(|e| &e.payload);
-    let base = start
-        .and_then(|p| serde_json::from_value::<Saves>(p["saves"].clone()).ok())
-        .filter(|s| !s.is_empty());
+    let base = start.and_then(|p| saves_in(&p["saves"]));
+    let world = start.and_then(|p| serde_json::from_value(p["world"].clone()).ok());
     RunInfo {
         benchmark: start
             .and_then(|p| p["benchmark"].as_str())
             .unwrap_or(LEGACY_PART)
             .to_string(),
         seed: start.and_then(|p| p["seed"].as_u64()).unwrap_or(0),
+        legacy: base.is_none(),
         base: base.unwrap_or_else(|| legacy(LEGACY_BASE)),
+        world: world.unwrap_or_default(),
     }
 }
 
@@ -89,6 +103,43 @@ pub fn saves_at(events: &[Event], seq: i64, base: &Saves) -> Result<Saves, NoSav
             s.map(|s| (part.clone(), s))
                 .map_err(|seq| NoSave { part, seq })
         })
+        .collect()
+}
+
+/// Per part, the save holding the branch's final state: its check's `final_saves`, else for a
+/// run recorded before integrations its database `branch_<id>`. None while it has neither.
+pub fn final_saves(branch: &str, events: &[Event]) -> Option<Saves> {
+    let checked = events
+        .iter()
+        .rev()
+        .find(|e| e.kind == EventKind::Check)
+        .and_then(|e| saves_in(&e.payload["final_saves"]));
+    checked.or_else(|| {
+        run_info(events)
+            .legacy
+            .then(|| legacy(&format!("branch_{branch}")))
+    })
+}
+
+/// A save named by a branch's events, and the part it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NamedSave {
+    pub part: String,
+    pub save: String,
+}
+
+/// Every save `branch`'s events name: the run's start saves, each tool call's saves (or legacy
+/// snapshot) and the final saves.
+pub fn named_saves(branch: &str, events: &[Event]) -> BTreeSet<NamedSave> {
+    let recorded = events.iter().filter_map(|e| match e.kind {
+        EventKind::RunStart => saves_in(&e.payload["saves"]),
+        EventKind::ToolCall => saves_of(&e.payload),
+        _ => None,
+    });
+    recorded
+        .chain(final_saves(branch, events))
+        .flatten()
+        .map(|(part, save)| NamedSave { part, save })
         .collect()
 }
 
@@ -174,10 +225,60 @@ mod tests {
             RunInfo {
                 benchmark: "retail".into(),
                 seed: 0,
-                base: legacy("world_base")
+                base: legacy("world_base"),
+                world: vec![],
+                legacy: true,
             }
         );
         assert_eq!(saves_at(&evs, 1, &info.base).unwrap(), legacy("world_base"));
         assert_eq!(saves_at(&evs, 2, &info.base).unwrap(), legacy("snap_a"));
+    }
+
+    fn names(evs: &[Event], branch: &str) -> Vec<String> {
+        named_saves(branch, evs)
+            .into_iter()
+            .map(|n| n.save)
+            .collect()
+    }
+
+    #[test]
+    fn final_and_named_saves() {
+        let evs = vec![
+            ev(
+                1,
+                EventKind::RunStart,
+                json!({"benchmark": "b", "saves": {"retail": "base_r"}}),
+            ),
+            write(2, "retail", json!({"retail": "s_r1"})),
+            ev(
+                3,
+                EventKind::Check,
+                json!({"passed": true, "final_saves": {"retail": "s_r2"}}),
+            ),
+        ];
+        assert_eq!(final_saves("x", &evs), Some(legacy("s_r2")));
+        assert_eq!(final_saves("x", &evs[..2]), None, "no check yet");
+        assert_eq!(names(&evs, "x"), ["base_r", "s_r1", "s_r2"]);
+    }
+
+    #[test]
+    fn legacy_final_state_is_the_branch_database() {
+        // The base `world_base` is not named: it is no save of the run.
+        let old = vec![
+            ev(1, EventKind::RunStart, json!({"task_id": "27"})),
+            ev(
+                2,
+                EventKind::ToolCall,
+                json!({"name": "w", "error": null, "writes": ["orders/#W1"], "snapshot": "snap_a"}),
+            ),
+            ev(
+                3,
+                EventKind::Check,
+                json!({"passed": true, "gold_db": "gold_27"}),
+            ),
+        ];
+        assert_eq!(final_saves("b1", &old), Some(legacy("branch_b1")));
+        assert_eq!(names(&old, "b1"), ["branch_b1", "snap_a"]);
+        assert_eq!(named_saves("b1", &old).first().unwrap().part, "retail");
     }
 }

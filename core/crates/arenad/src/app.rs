@@ -5,7 +5,6 @@ use std::{
 
 use axum::Router;
 use parts::{proto::BenchDescribe, Hub};
-use world::snapshot::Worlds;
 
 use crate::{
     agents::{claude::ClaudeDriver, codex::CodexDriver, open::OpenDriver, Driver},
@@ -24,7 +23,7 @@ pub struct Config {
     pub openrouter_key: Option<String>,
     /// This service's own base URL (e.g. `http://127.0.0.1:8787`), used by the open agent loop.
     pub self_base: String,
-    /// New runs and forks are refused (507) once the arena's databases use at least this many bytes.
+    /// New runs and forks are refused (507) once the arena's saves use at least this many bytes.
     pub max_db_bytes: u64,
 }
 
@@ -88,8 +87,6 @@ pub const DEFAULT_BENCHMARK: &str = "retail";
 
 pub struct AppState {
     pub store: Arc<Store>,
-    /// The old Postgres worlds: rows, compare, delete, cleanup and disk of runs still use them.
-    pub worlds: Arc<Worlds>,
     /// The installed integrations and benchmarks, their programs started on first use.
     pub hub: Arc<Hub>,
     /// The benchmark new runs use (env `ARENA_BENCHMARK`, default `retail`).
@@ -103,12 +100,10 @@ pub struct AppState {
     pub drivers: OnceLock<Drivers>,
     /// Set to true when shutdown starts; SSE streams end on it.
     pub shutdown: tokio::sync::watch::Sender<bool>,
-    /// Final database dumps of finished branches, by branch id (for compare).
-    pub dumps: std::sync::Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl AppState {
-    pub fn new(store: Arc<Store>, worlds: Arc<Worlds>, hub: Arc<Hub>, config: Config) -> AppState {
+    pub fn new(store: Arc<Store>, hub: Arc<Hub>, config: Config) -> AppState {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
@@ -120,7 +115,6 @@ impl AppState {
             .unwrap_or_else(|| DEFAULT_BENCHMARK.to_string());
         AppState {
             store,
-            worlds,
             hub,
             benchmark,
             live: RwLock::new(HashMap::new()),
@@ -128,7 +122,6 @@ impl AppState {
             http,
             drivers: OnceLock::new(),
             shutdown: tokio::sync::watch::channel(false).0,
-            dumps: Default::default(),
         }
     }
 

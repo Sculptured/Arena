@@ -2,7 +2,7 @@
 use crate::client::Client;
 use crate::manifest::Registry;
 use anyhow::{anyhow, Result};
-use arena_part::proto::{BenchDescribe, Describe};
+use arena_part::proto::{valid_id, BenchDescribe, Describe};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -124,6 +124,14 @@ impl Hub {
         let d = self.saves_root.join(package).join(save);
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    /// Removes `<saves_root>/<package>/<save>` and what is in it, once the part has dropped the
+    /// save. Ids that are not valid save ids are ignored.
+    pub fn remove_save_dir(&self, package: &str, save: &str) {
+        if self.registry.get(package).is_some() && valid_id(save) {
+            let _ = std::fs::remove_dir_all(self.saves_root.join(package).join(save));
+        }
     }
 
     /// Bytes on disk under the save storage.

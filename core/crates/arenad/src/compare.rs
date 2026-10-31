@@ -1,8 +1,14 @@
 //! Branch comparison: per-branch totals, first divergent step, differing final rows.
 
-use serde_json::{json, Value};
+use anyhow::{anyhow, Result};
+use parts::{proto::WorldPart, Hub};
+use serde_json::{json, Map, Value};
 
-use crate::{model::*, runner::differing_rows};
+use crate::{
+    model::*,
+    saves::{self, part_code},
+    world::Saves,
+};
 
 /// `{status, seconds, tokens, cost_usd, cost_source}` for a finished branch. Only the branch's
 /// own events count (`seq >= start_seq`): the inherited prefix belongs to its parent.
@@ -64,15 +70,64 @@ pub fn first_divergent_seq(a: &[Event], b: &[Event]) -> Option<i64> {
     }
 }
 
-/// `[{key, a, b}]` for every row that differs between two final dumps.
-pub fn row_diffs(a: &Value, b: &Value) -> Vec<Value> {
-    differing_rows(a, b)
-        .into_iter()
-        .map(|key| {
-            let (t, id) = key.split_once('/').unwrap_or((&key, ""));
-            json!({"key": key, "a": a[t][id].clone(), "b": b[t][id].clone()})
-        })
-        .collect()
+/// A finished branch's final state: per part its save, and the parts of its world.
+pub struct FinalState {
+    pub world: Vec<WorldPart>,
+    pub saves: Saves,
+}
+
+impl FinalState {
+    fn save(&self, part: &str) -> Result<&str> {
+        self.saves
+            .get(part)
+            .map(String::as_str)
+            .ok_or_else(|| anyhow!("there is no final save of the part {part}"))
+    }
+}
+
+/// `[{key, a, b}]` for every key that differs between two final states, sorted: per part of
+/// `a`'s world, the `diff` of both final saves with each side's docs. Keys are prefixed `part:`
+/// only when the world has more than one part.
+pub async fn differing_rows(hub: &Hub, a: &FinalState, b: &FinalState) -> Result<Vec<Value>> {
+    let many = a.world.len() > 1;
+    let mut out = vec![];
+    for p in &a.world {
+        let rows = part_rows(hub, p, [a.save(&p.part)?, b.save(&p.part)?]).await?;
+        out.extend(rows.into_iter().map(|mut r| {
+            if many {
+                r["key"] = json!(format!("{}:{}", p.part, r["key"].as_str().unwrap_or("")));
+            }
+            r
+        }));
+    }
+    out.sort_by(|x, y| x["key"].as_str().cmp(&y["key"].as_str()));
+    Ok(out)
+}
+
+/// `[{key, a, b}]` of one part: the keys that differ between its two saves, with their docs.
+async fn part_rows(hub: &Hub, p: &WorldPart, [a, b]: [&str; 2]) -> Result<Vec<Value>> {
+    let keys = saves::diff(hub, &p.integration, a, b).await?;
+    let da = docs(hub, &p.integration, a, &keys).await?;
+    let db = docs(hub, &p.integration, b, &keys).await?;
+    let doc = |d: &Map<String, Value>, k: &str| d.get(k).cloned().unwrap_or(Value::Null);
+    Ok(keys
+        .iter()
+        .map(|k| json!({"key": k, "a": doc(&da, k), "b": doc(&db, k)}))
+        .collect())
+}
+
+/// The docs of `keys` in `save`; none when the part can't show some of them (keys for a whole
+/// table, say), so the keys are still listed.
+async fn docs(
+    hub: &Hub,
+    integration: &str,
+    save: &str,
+    keys: &[String],
+) -> Result<Map<String, Value>> {
+    match saves::inspect(hub, integration, save, keys).await {
+        Err(e) if part_code(&e) == Some(-32602) => Ok(Map::new()),
+        r => r,
+    }
 }
 
 #[cfg(test)]
@@ -107,15 +162,6 @@ mod tests {
         assert_eq!(first_divergent_seq(&a, &b), Some(2));
         assert_eq!(first_divergent_seq(&a[..1], &a), Some(2));
         assert_eq!(first_divergent_seq(&a, &a[..1]), Some(2));
-    }
-
-    #[test]
-    fn row_diffs_include_one_sided_rows() {
-        let a = json!({"users": {"u1": {"n": 1}}, "orders": {}});
-        let b = json!({"users": {"u1": {"n": 2}}, "orders": {"o": {"s": 1}}});
-        let d = row_diffs(&a, &b);
-        assert_eq!(d[0], json!({"key": "orders/o", "a": null, "b": {"s": 1}}));
-        assert_eq!(d[1]["key"], "users/u1");
     }
 
     fn branch() -> Branch {

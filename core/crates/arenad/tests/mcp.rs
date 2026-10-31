@@ -2,6 +2,8 @@
 mod app_support;
 #[path = "support/packages.rs"]
 mod packages;
+#[path = "support/pg.rs"]
+mod pg;
 
 use std::{
     future::Future,
@@ -17,36 +19,14 @@ use arenad::{
     world::World,
 };
 use packages::TestHub;
+use pg::Cleanup;
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
-use world::{
-    schema::load_base,
-    snapshot::Worlds,
-    testing::{self, Cleanup},
-};
 
 static RT: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
-}
-
-static WORLDS: OnceCell<Arc<Worlds>> = OnceCell::const_new();
-
-fn data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/retail")
-}
-
-async fn worlds() -> Arc<Worlds> {
-    WORLDS
-        .get_or_init(|| async {
-            let w = Worlds::new(testing::admin());
-            load_base(w.admin(), &data_dir()).await.unwrap();
-            Arc::new(w)
-        })
-        .await
-        .clone()
 }
 
 fn agent(id: &str) -> AgentSpec {
@@ -88,17 +68,11 @@ async fn new_branch(store: &Store) -> (Team, String) {
 }
 
 async fn setup_with(tag: &str, extra: &[PathBuf], bench: &str) -> Fx {
-    let worlds = worlds().await;
     let hub = TestHub::new(extra);
-    let (store, clean) = app_support::meta_store(&worlds, "mcp", tag).await;
+    let (store, clean) = app_support::meta_store("mcp", tag).await;
     let (team, branch) = new_branch(&store).await;
     let world = hub.start_world(bench, &branch).await;
-    let state = AppState::new(
-        store.clone(),
-        worlds.clone(),
-        hub.hub.clone(),
-        Config::new(),
-    );
+    let state = AppState::new(store.clone(), hub.hub.clone(), Config::new());
     let state = Arc::new(state.with_benchmark(bench));
     let ctx = BranchCtx::new(branch.clone(), world.clone(), team, "task".into());
     state

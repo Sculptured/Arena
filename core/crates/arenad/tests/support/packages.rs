@@ -15,6 +15,8 @@ use std::{
 
 use parts::{Hub, Registry};
 
+use crate::pg::{drop_databases, on_own_runtime, pg_url};
+
 /// The arena folder (this crate is core/crates/arenad).
 pub fn arena() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -46,9 +48,15 @@ pub fn build() {
     });
 }
 
-pub fn pg_url() -> String {
-    std::env::var("ARENA_PG_URL")
-        .unwrap_or_else(|_| "postgres://arena:arena@127.0.0.1:5544/postgres".to_string())
+/// A hub over the real packages with no Postgres namespace, so the integration accepts the
+/// database names of runs recorded before integrations. Saves go under `saves`. Only for tests
+/// that make uniquely named databases and drop them themselves; never run `gc` on it.
+pub fn plain_hub(saves: &Path) -> Arc<Hub> {
+    build();
+    let registry = Registry::scan(&package_roots()).unwrap();
+    let hub = Hub::new(registry, bin_dir(), saves.to_path_buf())
+        .with_env(vec![("ARENA_PG_URL".into(), pg_url())]);
+    Arc::new(hub)
 }
 
 /// A hub over the real packages plus `extra` roots, with its own namespace and save folder.
@@ -134,34 +142,18 @@ async fn drop_namespace(ns: &str) -> anyhow::Result<()> {
             n.starts_with(&format!("pi_{ns}")) || n.starts_with(&format!("ps_{ns}"))
         })
         .collect();
-    for n in names {
-        if let Err(e) = client
-            .batch_execute(&format!("DROP DATABASE IF EXISTS \"{n}\" WITH (FORCE)"))
-            .await
-        {
-            eprintln!("test cleanup: could not drop {n}: {e}");
-        }
-    }
     drop(client);
     let _ = task.await;
+    drop_databases(&names).await;
     Ok(())
 }
 
 impl Drop for TestHub {
     fn drop(&mut self) {
         let ns = self.ns.clone();
-        // Own thread and runtime: works from inside a test's runtime and after a panic.
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                if let Err(e) = rt.block_on(drop_namespace(&ns)) {
-                    eprintln!("test cleanup failed: {e:#}");
-                }
-            });
-        });
+        if let Err(e) = on_own_runtime(|| async move { drop_namespace(&ns).await }) {
+            eprintln!("test cleanup failed: {e:#}");
+        }
         let _ = std::fs::remove_dir_all(&self.saves);
     }
 }

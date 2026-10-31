@@ -511,3 +511,30 @@ async fn bad_id_is_invalid_params() {
         .unwrap_err();
     assert_eq!(e.code, -32602);
 }
+
+#[tokio::test]
+async fn legacy_drop_save_drops_snap_and_branch_only() {
+    // Empty namespace, so legacy names are recognised; the database names are test-unique.
+    let pid = std::process::id();
+    let names = [
+        format!("snap_t5_{pid}_drop"),
+        format!("branch_t5_{pid}_drop"),
+        format!("gold_t5_{pid}_drop"),
+    ];
+    let todo = names.to_vec();
+    with_cleanup("none_", &names, move || async move {
+        let t = Templates::new(&url());
+        for n in &todo {
+            t.drop(n).await.unwrap();
+            t.create_empty(n).await.unwrap();
+        }
+        let p = Postgres::new(&url(), "");
+        for n in &todo {
+            p.drop_save(SaveId { save: n.clone() }).await.unwrap();
+        }
+        assert!(!t.exists(&todo[0]).await.unwrap(), "snap_ is dropped");
+        assert!(!t.exists(&todo[1]).await.unwrap(), "branch_ is dropped");
+        assert!(t.exists(&todo[2]).await.unwrap(), "gold_ is kept");
+    })
+    .await;
+}
