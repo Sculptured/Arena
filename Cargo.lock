@@ -32,6 +32,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-retail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arena-part",
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"

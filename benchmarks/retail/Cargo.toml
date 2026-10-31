@@ -1,0 +1,22 @@
+[package]
+name = "arena-retail"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arena_retail"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-retail"
+path = "src/main.rs"
+
+[dependencies]
+arena-part = { path = "../../kits/rust", features = ["postgres"] }
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio-postgres.workspace = true
+
+unicode-normalization = "0.1"

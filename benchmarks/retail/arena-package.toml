@@ -1,0 +1,6 @@
+kind = "benchmark"
+name = "retail"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-retail"] }
+needs = { gpu_vram_gb = 0, services = [] }
