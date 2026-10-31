@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use parts::proto::Mode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -82,6 +83,7 @@ pub enum EventKind {
     Handoff,
     AgentEnd,
     Check,
+    WorldEvent,
 }
 
 impl EventKind {
@@ -94,6 +96,7 @@ impl EventKind {
             EventKind::Handoff => "handoff",
             EventKind::AgentEnd => "agent_end",
             EventKind::Check => "check",
+            EventKind::WorldEvent => "world_event",
         }
     }
 
@@ -106,6 +109,7 @@ impl EventKind {
             "handoff" => EventKind::Handoff,
             "agent_end" => EventKind::AgentEnd,
             "check" => EventKind::Check,
+            "world_event" => EventKind::WorldEvent,
             _ => return None,
         })
     }
@@ -146,6 +150,19 @@ pub struct ToolCallPayload {
     /// The world clock when the call ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_ms: Option<i64>,
+    /// How long the world's clock was paused for this step's saves (None when nothing was saved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_ms: Option<i64>,
+}
+
+/// Payload of `EventKind::WorldEvent`: something a part reported when its clock advanced.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldEventPayload {
+    pub part: String,
+    pub kind: String,
+    pub text: String,
+    pub data: Value,
+    pub clock_ms: i64,
 }
 
 /// Payload of `EventKind::ModelCall`.
@@ -189,6 +206,24 @@ pub struct CheckPayload {
     pub final_saves: Option<std::collections::BTreeMap<String, String>>,
 }
 
+/// How a part of a rerun's world was restored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RestoredHow {
+    /// From its save, exactly.
+    Save,
+    /// By repeating its recorded inputs.
+    Replay,
+    /// From its save, approximately.
+    Approximate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoredPart {
+    pub part: String,
+    pub how: RestoredHow,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Branch {
     pub id: String,
@@ -202,6 +237,10 @@ pub struct Branch {
     pub error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// The restore a fork asked for (None for a run's first branch).
+    pub restore_mode: Option<Mode>,
+    /// How each part of a fork's world was restored (empty for a run's first branch).
+    pub restored: Vec<RestoredPart>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

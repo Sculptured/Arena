@@ -35,16 +35,23 @@ pub fn package_roots() -> Vec<PathBuf> {
     vec![arena().join("integrations"), arena().join("benchmarks")]
 }
 
-/// `cargo build -p arena-postgres -p arena-retail` (debug), once per test binary.
+/// `cargo build -p arena-postgres -p arena-retail` and the kit's `counter` example (debug),
+/// once per test binary.
 pub fn build() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let st = Command::new("cargo")
-            .args(["build", "-q", "-p", "arena-postgres", "-p", "arena-retail"])
-            .current_dir(arena())
-            .status()
-            .unwrap();
-        assert!(st.success(), "building the package binaries failed");
+        let builds: [&[&str]; 2] = [
+            &["build", "-q", "-p", "arena-postgres", "-p", "arena-retail"],
+            &["build", "-q", "--example", "counter", "-p", "arena-part"],
+        ];
+        for args in builds {
+            let st = Command::new("cargo")
+                .args(args)
+                .current_dir(arena())
+                .status()
+                .unwrap();
+            assert!(st.success(), "building the package binaries failed");
+        }
     });
 }
 
@@ -78,18 +85,14 @@ impl TestHub {
         let saves = std::env::temp_dir().join(format!("arenad-saves-{ns}"));
         let _ = std::fs::remove_dir_all(&saves);
         std::fs::create_dir_all(&saves).unwrap();
-        let mut roots = package_roots();
-        roots.extend(extra.iter().cloned());
-        let url = pg_url();
-        let sep = if url.contains('?') { '&' } else { '?' };
-        let hub = Hub::new(Registry::scan(&roots).unwrap(), bin_dir(), saves.clone()).with_env(
-            vec![("ARENA_PG_URL".into(), format!("{url}{sep}arena_ns={ns}"))],
-        );
-        TestHub {
-            hub: Arc::new(hub),
-            ns,
-            saves,
-        }
+        let hub = hub_on(&ns, &saves, extra);
+        TestHub { hub, ns, saves }
+    }
+
+    /// Another hub on this one's namespace and save folder, over the real packages plus `extra`
+    /// (as if arenad restarted with other packages installed).
+    pub fn sibling(&self, extra: &[PathBuf]) -> Arc<Hub> {
+        hub_on(&self.ns, &self.saves, extra)
     }
 
     /// `bench`'s world for `branch`, started from the base save with seed 1.
@@ -127,6 +130,24 @@ impl TestHub {
             .unwrap();
         serde_json::from_value(r["differing"].clone()).unwrap()
     }
+}
+
+/// A hub over the real packages plus `extra`, in Postgres namespace `ns`, saving under `saves`.
+fn hub_on(ns: &str, saves: &Path, extra: &[PathBuf]) -> Arc<Hub> {
+    let mut roots = package_roots();
+    roots.extend(extra.iter().cloned());
+    let url = pg_url();
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let hub = Hub::new(
+        Registry::scan(&roots).unwrap(),
+        bin_dir(),
+        saves.to_path_buf(),
+    )
+    .with_env(vec![(
+        "ARENA_PG_URL".into(),
+        format!("{url}{sep}arena_ns={ns}"),
+    )]);
+    Arc::new(hub)
 }
 
 /// Drops every `pi_<ns>*` and `ps_<ns>*` database (this hub's instances and saves).
@@ -167,32 +188,56 @@ impl Drop for ToyRoot {
     }
 }
 
-/// The folder `toy_root(tag, ..)` makes (for files the toy programs write, like `--log`).
+/// The folder `package_root(tag, ..)` makes (for files the toy programs write, like `--log`).
 pub fn toy_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("arenad-toy-{tag}-{}", std::process::id()))
 }
 
-/// Toy packages (`tests/fixtures/toy.py`) in a fresh folder: `(name, kind, args)` each, run as
-/// `python3 toy.py <args..>`. Pass `.0` to `TestHub::new` as an extra root.
-pub fn toy_root(tag: &str, packages: &[(&str, &str, &[&str])]) -> ToyRoot {
+/// A package for a test root: its name, kind and `run.command`.
+pub struct Package {
+    pub name: String,
+    pub kind: &'static str,
+    pub command: Vec<String>,
+}
+
+/// A toy package (`tests/fixtures/toy.py`), run as `python3 toy.py <args..>`.
+pub fn toy(name: &str, kind: &'static str, args: &[&str]) -> Package {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/toy.py");
+    let mut command = vec!["python3".to_string(), script.to_string_lossy().into_owned()];
+    command.extend(args.iter().map(|a| a.to_string()));
+    Package {
+        name: name.to_string(),
+        kind,
+        command,
+    }
+}
+
+/// An integration running the kit's `counter` example with `args` (e.g. `--flavour replay_only`).
+pub fn counter(name: &str, args: &[&str]) -> Package {
+    let mut command = vec!["${ARENA_BIN_DIR}/examples/counter".to_string()];
+    command.extend(args.iter().map(|a| a.to_string()));
+    Package {
+        name: name.to_string(),
+        kind: "integration",
+        command,
+    }
+}
+
+/// `packages` in a fresh folder. Pass `.0` to `TestHub::new` as an extra root.
+pub fn package_root(tag: &str, packages: &[Package]) -> ToyRoot {
     let root = toy_dir(tag);
     let _ = std::fs::remove_dir_all(&root);
-    for (name, kind, args) in packages {
-        let d = root.join(name);
+    for p in packages {
+        let d = root.join(&p.name);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("arena-package.toml"), toy_manifest(name, kind, args)).unwrap();
+        std::fs::write(d.join("arena-package.toml"), manifest(p)).unwrap();
     }
     ToyRoot(root)
 }
 
-fn toy_manifest(name: &str, kind: &str, args: &[&str]) -> String {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/toy.py");
-    let mut argv = vec![
-        format!("{:?}", "python3"),
-        format!("{:?}", script.to_string_lossy()),
-    ];
-    argv.extend(args.iter().map(|a| format!("{a:?}")));
-    let command = argv.join(", ");
+fn manifest(p: &Package) -> String {
+    let command: Vec<String> = p.command.iter().map(|a| format!("{a:?}")).collect();
+    let (kind, name, command) = (p.kind, &p.name, command.join(", "));
     format!("kind = \"{kind}\"\nname = \"{name}\"\nversion = \"0.1.0\"\nprotocol = 1\nrun = {{ command = [{command}] }}\n")
 }
 
@@ -203,11 +248,11 @@ pub fn toy_world(tag: &str, part_args: &[&str], bench_args: &[&str]) -> ToyRoot 
     part_argv.extend_from_slice(part_args);
     let mut bench_argv = vec!["bench", "--integration", part.as_str()];
     bench_argv.extend_from_slice(bench_args);
-    toy_root(
+    package_root(
         tag,
         &[
-            (&part, "integration", &part_argv),
-            ("toybench", "benchmark", &bench_argv),
+            toy(&part, "integration", &part_argv),
+            toy("toybench", "benchmark", &bench_argv),
         ],
     )
 }

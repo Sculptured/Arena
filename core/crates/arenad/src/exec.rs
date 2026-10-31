@@ -1,20 +1,27 @@
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
+use parts::proto::ToolOutput;
 use serde_json::{json, Value};
 
 use crate::{
+    clock::BranchClock,
     model::*,
     recorded::LEGACY_PART,
     store::Store,
-    world::{Called, Saves, World, WorldError},
+    ticker::Ticker,
+    world::{Called, PartEvent, Saves, World, WorldError},
 };
 
-/// One running branch: its world, team and per-agent handoff notes.
+/// One running branch: its world, team, arena clock and per-agent handoff notes.
 pub struct BranchCtx {
     pub branch_id: String,
     pub world: Arc<World>,
     pub team: Team,
     pub task_id: String,
+    /// The branch's arena clock (from 0 at the run's start, from the fork point on a fork).
+    pub clock: BranchClock,
+    /// Sends `advance` to the world's clock parts while the branch runs.
+    ticker: tokio::sync::Mutex<Option<Ticker>>,
     /// agent id -> handoff note, set once the agent has called `handoff`.
     pub handoffs: Mutex<HashMap<String, String>>,
     /// Set when a program of the world has stopped: the branch ends `infra_error` with it.
@@ -24,15 +31,39 @@ pub struct BranchCtx {
 }
 
 impl BranchCtx {
+    /// A branch whose clock starts at 0 (at the speed `ARENA_CLOCK_SPEED` sets).
     pub fn new(branch_id: String, world: Arc<World>, team: Team, task_id: String) -> BranchCtx {
         BranchCtx {
             branch_id,
             world,
             team,
             task_id,
+            clock: BranchClock::from_env(0),
+            ticker: tokio::sync::Mutex::new(None),
             handoffs: Mutex::new(HashMap::new()),
             fatal: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// The same branch with `clock` as its arena clock.
+    pub fn with_clock(mut self, clock: BranchClock) -> BranchCtx {
+        self.clock = clock;
+        self
+    }
+
+    /// Starts the clock ticker (when the world has clock parts and none runs yet).
+    pub async fn start_ticker(self: &Arc<Self>, store: &Arc<Store>) {
+        let mut t = self.ticker.lock().await;
+        if t.is_none() {
+            *t = Ticker::start(ToolExec::new(store.clone()), self.clone());
+        }
+    }
+
+    /// Stops the clock ticker and waits for it to end.
+    pub async fn stop_ticker(&self) {
+        if let Some(t) = self.ticker.lock().await.take() {
+            t.stop().await;
         }
     }
 
@@ -100,6 +131,7 @@ struct CallFacts {
     saves: Option<Saves>,
     save_error: Option<String>,
     clock_ms: Option<i64>,
+    paused_ms: Option<i64>,
 }
 
 fn tool_call_payload(
@@ -122,50 +154,48 @@ fn tool_call_payload(
         part: f.part,
         saves: f.saves,
         clock_ms: f.clock_ms,
+        paused_ms: f.paused_ms,
     }
 }
 
-/// Runs a tool call on the branch's world (refusing writes to all but the last agent), and saves
-/// what it wrote.
-async fn execute(
-    branch: &BranchCtx,
-    agent: &str,
-    name: &str,
-    args: &Value,
-) -> (Result<Value, String>, CallFacts) {
-    let world = &branch.world;
-    let mut facts = CallFacts::default();
+/// A tool's outcome as an agent sees it: its result, or its error.
+pub fn outcome_of(output: &ToolOutput) -> Result<Value, String> {
+    match &output.error {
+        Some(e) => Err(e.clone()),
+        None => Ok(output.result.clone().unwrap_or(Value::Null)),
+    }
+}
+
+fn world_event_payload(e: PartEvent) -> WorldEventPayload {
+    WorldEventPayload {
+        part: e.part,
+        kind: e.event.kind,
+        text: e.event.text,
+        data: e.event.data,
+        clock_ms: e.clock_ms,
+    }
+}
+
+/// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent is not
+/// the last one.
+fn refusal(branch: &BranchCtx, agent: &str, name: &str) -> Option<String> {
     if let Some(f) = branch.fatal() {
-        return (Err(f), facts);
+        return Some(f);
     }
-    if world.is_write(name) && !branch.is_last(agent) {
-        return (
-            Err("Write tools are not available to this agent".to_string()),
-            facts,
-        );
-    }
-    let clock = world.clock_ms();
-    facts.clock_ms = Some(clock);
-    let Called { output, part } = match world.call_tool(name, args.clone(), clock).await {
-        Ok(c) => c,
-        Err(e) => return (Err(failure(branch, e)), facts),
-    };
-    (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
-    if let Some(e) = output.error {
-        return (Err(e), facts);
-    }
-    if !facts.writes.is_empty() {
-        save_write(branch, &mut facts).await;
-    }
-    (Ok(output.result.unwrap_or(Value::Null)), facts)
+    (branch.world.is_write(name) && !branch.is_last(agent))
+        .then(|| "Write tools are not available to this agent".to_string())
 }
 
-/// Saves the part a committed write changed; a failed save is recorded, the call still succeeds.
-async fn save_write(branch: &BranchCtx, facts: &mut CallFacts) {
-    match branch.world.save_changed(facts.part.as_deref()).await {
-        Ok(s) => facts.saves = (!s.is_empty()).then_some(s),
-        Err(e) => facts.save_error = Some(failure(branch, e)),
+/// Saves what changed with a step (the part written to, the clock parts that changed) with the
+/// clock paused, and records the saves, a failure and the pause.
+async fn save_step(branch: &BranchCtx, written: Option<&str>, facts: &mut CallFacts) {
+    let paused = branch.clock.paused();
+    let step = branch.world.save_changed(written).await;
+    if !step.saves.is_empty() || step.error.is_some() {
+        facts.paused_ms = Some(paused.elapsed_ms());
     }
+    facts.saves = (!step.saves.is_empty()).then_some(step.saves);
+    facts.save_error = step.error.map(|e| failure(branch, e));
 }
 
 /// The message of a failed world call; a stopped program also ends the branch.
@@ -222,6 +252,63 @@ impl ToolExec {
         }
     }
 
+    /// Advances the world's clock parts to the branch clock behind the gate (a clock tick).
+    pub async fn tick(&self, branch: &BranchCtx) {
+        let _gate = branch.gate().await;
+        if branch.fatal().is_some() {
+            return;
+        }
+        if let Err(e) = self.advance(branch, branch.clock.now_ms()).await {
+            eprintln!("branch {}: clock tick failed: {e}", branch.branch_id);
+        }
+    }
+
+    /// Advances the clock parts to `clock_ms` and records the events they report.
+    async fn advance(&self, branch: &BranchCtx, clock_ms: i64) -> Result<(), String> {
+        let events = branch
+            .world
+            .advance_all(clock_ms)
+            .await
+            .map_err(|e| failure(branch, e))?;
+        for e in events {
+            let payload = world_event_payload(e);
+            self.record(branch, None, EventKind::WorldEvent, &payload)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Runs a tool call on the branch's world at the branch clock (the clock parts advanced to
+    /// it first), then saves what changed.
+    async fn execute(
+        &self,
+        branch: &BranchCtx,
+        agent: &str,
+        name: &str,
+        args: &Value,
+    ) -> (Result<Value, String>, CallFacts) {
+        let mut facts = CallFacts::default();
+        if let Some(e) = refusal(branch, agent, name) {
+            return (Err(e), facts);
+        }
+        let clock = branch.clock.now_ms();
+        facts.clock_ms = Some(clock);
+        if let Err(e) = self.advance(branch, clock).await {
+            return (Err(e), facts);
+        }
+        let Called { output, part } = match branch.world.call_tool(name, args.clone(), clock).await
+        {
+            Ok(c) => c,
+            Err(e) => return (Err(failure(branch, e)), facts),
+        };
+        let outcome = outcome_of(&output);
+        (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
+        let wrote = outcome.is_ok() && !facts.writes.is_empty();
+        let written = facts.part.clone().filter(|_| wrote);
+        save_step(branch, written.as_deref(), &mut facts).await;
+        (outcome, facts)
+    }
+
     /// Like `run`, but keeps success and tool error apart.
     pub async fn run_outcome(
         &self,
@@ -235,9 +322,9 @@ impl ToolExec {
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }
-        let (outcome, facts) = execute(branch, agent, name, &args).await;
+        let (outcome, facts) = self.execute(branch, agent, name, &args).await;
         let payload = tool_call_payload(name, args, &outcome, tool_call_id, facts);
-        self.record(branch, agent, EventKind::ToolCall, &payload)
+        self.record(branch, Some(agent), EventKind::ToolCall, &payload)
             .await?;
         outcome
     }
@@ -251,8 +338,13 @@ impl ToolExec {
     ) -> Result<Value, String> {
         match take_handoff(branch, agent, &args) {
             Ok(note) => {
-                self.record(branch, agent, EventKind::Handoff, &HandoffPayload { note })
-                    .await?;
+                self.record(
+                    branch,
+                    Some(agent),
+                    EventKind::Handoff,
+                    &HandoffPayload { note },
+                )
+                .await?;
                 Ok(json!({"ok": true}))
             }
             Err(e) => {
@@ -264,7 +356,7 @@ impl ToolExec {
                     tool_call_id,
                     CallFacts::default(),
                 );
-                self.record(branch, agent, EventKind::ToolCall, &payload)
+                self.record(branch, Some(agent), EventKind::ToolCall, &payload)
                     .await?;
                 outcome
             }
@@ -274,13 +366,13 @@ impl ToolExec {
     async fn record<T: serde::Serialize>(
         &self,
         branch: &BranchCtx,
-        agent: &str,
+        agent: Option<&str>,
         kind: EventKind,
         payload: &T,
     ) -> Result<(), String> {
         let v = serde_json::to_value(payload).map_err(|e| format!("internal error: {e}"))?;
         self.store
-            .append(&branch.branch_id, Some(agent), kind, v)
+            .append(&branch.branch_id, agent, kind, v)
             .await
             .map_err(|e| format!("internal error: recording event: {e:#}"))?;
         Ok(())

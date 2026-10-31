@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use parts::proto::WorldPart;
+use parts::proto::{Mode, WorldPart};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{
@@ -49,6 +49,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/branches/{id}/stream", get(stream))
         .route("/api/branches/{id}/rows", get(rows))
         .route("/api/branches/{id}/fork", post(fork_branch))
+        .route("/api/branches/{id}/restore-plan", get(restore_plan))
         .route("/api/compare", get(compare_branches))
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
@@ -87,7 +88,10 @@ impl From<ForkError> for ApiError {
     fn from(e: ForkError) -> ApiError {
         let status = match &e {
             ForkError::UnknownBranch(_) => StatusCode::NOT_FOUND,
-            ForkError::BranchRunning => StatusCode::CONFLICT,
+            ForkError::BranchRunning
+            | ForkError::Refused(_)
+            | ForkError::ReplayDiverged { .. }
+            | ForkError::FingerprintMismatch { .. } => StatusCode::CONFLICT,
             ForkError::UnknownSeq
             | ForkError::UnknownAgent(_)
             | ForkError::MissingHandoff(_)
@@ -300,11 +304,18 @@ async fn get_branch(
     Ok(Json(v))
 }
 
+fn exact() -> Mode {
+    Mode::Exact
+}
+
 #[derive(Deserialize)]
 struct ForkReq {
     at_seq: i64,
     #[serde(default)]
     changes: HashMap<String, Change>,
+    /// `"exact"` (default) or `"approximate"`.
+    #[serde(default = "exact")]
+    restore: Mode,
 }
 
 async fn fork_branch(
@@ -329,9 +340,41 @@ async fn fork_branch(
         Some(_) => {}
     }
     check_disk(&state).await?;
-    let resp = detached(async move { Ok(fork::fork(&state, &id, req.at_seq, req.changes).await?) })
-        .await?;
+    let req = fork::ForkRequest {
+        at_seq: req.at_seq,
+        changes: req.changes,
+        restore: req.restore,
+    };
+    let resp = detached(async move { Ok(fork::fork_with(&state, &id, req).await?) }).await?;
     Ok(Json(resp))
+}
+
+/// `restore=exact|approximate` (default exact).
+fn parse_restore(q: &HashMap<String, String>) -> Result<Mode, ApiError> {
+    match q.get("restore").map(String::as_str) {
+        None | Some("") | Some("exact") => Ok(Mode::Exact),
+        Some("approximate") => Ok(Mode::Approximate),
+        Some(o) => Err(ApiError::bad(format!(
+            "restore must be exact or approximate, not {o:?}"
+        ))),
+    }
+}
+
+/// `{parts: [{part, how, estimate_seconds?}]}`: how each part of a fork at `at_seq` would be
+/// restored, or the refusal (409).
+async fn restore_plan(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Value> {
+    let at_seq: i64 = q
+        .get("at_seq")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| ApiError::bad("at_seq must be an integer"))?;
+    let mode = parse_restore(&q)?;
+    let parts =
+        detached(async move { Ok(fork::restore_plan(&state, &id, at_seq, mode).await?) }).await?;
+    Ok(Json(json!({"parts": parts})))
 }
 
 // ---------------------------------------------------------------- SSE

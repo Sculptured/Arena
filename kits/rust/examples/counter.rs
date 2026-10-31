@@ -7,6 +7,8 @@
 //! - "approx_and_replay": replay, plus approximate saves (reported `exact: false`).
 //! - "broken_restore": exact save, but a restore from a save gives 0 (a bug on purpose).
 //! - "nondeterministic": replay, but `add` adds a random 0..1000 from the OS (a bug on purpose).
+//!
+//! `--fingerprint <s>` adds `"machine": s` to the fingerprint, as if it ran on another machine.
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -54,6 +56,7 @@ struct Inst {
 
 pub struct Counter {
     flavour: Flavour,
+    fingerprint: Value,
     instances: Mutex<HashMap<String, Inst>>,
 }
 
@@ -101,8 +104,15 @@ impl Counter {
     pub fn new(flavour: Flavour) -> Counter {
         Counter {
             flavour,
+            fingerprint: json!({"example": "counter"}),
             instances: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The same counter reporting `machine` in its fingerprint.
+    pub fn on_machine(mut self, machine: &str) -> Counter {
+        self.fingerprint["machine"] = json!(machine);
+        self
     }
 
     /// The `add` tool: add `args.n` (plus noise, when nondeterministic) to the counter.
@@ -177,7 +187,7 @@ impl Part for Counter {
             protocol: PROTOCOL,
             restore: restore_of(self.flavour),
             uses_clock: true,
-            fingerprint: json!({"example": "counter"}),
+            fingerprint: self.fingerprint.clone(),
             tools: vec![
                 tool(
                     "add",
@@ -299,12 +309,22 @@ impl Part for Counter {
     }
 }
 
+/// The value after `--<name>` on the command line.
+fn arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    let i = args.iter().position(|a| a == name)?;
+    Some(args.get(i + 1).map(String::as_str).unwrap_or(""))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let flavour = match args.iter().position(|a| a == "--flavour") {
-        Some(i) => Flavour::parse(args.get(i + 1).map(String::as_str).unwrap_or(""))?,
+    let flavour = match arg(&args, "--flavour") {
+        Some(f) => Flavour::parse(f)?,
         None => Flavour::Exact,
     };
-    serve(Counter::new(flavour)).await
+    let mut counter = Counter::new(flavour);
+    if let Some(machine) = arg(&args, "--fingerprint") {
+        counter = counter.on_machine(machine);
+    }
+    serve(counter).await
 }

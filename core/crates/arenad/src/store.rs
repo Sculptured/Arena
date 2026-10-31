@@ -6,6 +6,7 @@ use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use tokio_postgres::{Client, NoTls, Row};
 
 use crate::{model::*, pg::Admin};
+use parts::proto::Mode;
 
 pub type RunId = String;
 pub type BranchId = String;
@@ -41,10 +42,12 @@ CREATE TABLE IF NOT EXISTS events (
     payload jsonb NOT NULL,
     PRIMARY KEY (branch_id, seq)
 );
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS restore_mode text;
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS restored jsonb NOT NULL DEFAULT '[]';
 "#;
 
-const BRANCH_COLS: &str =
-    "id, run_id, parent_id, start_seq, team, changes, fork_note, status, error, created_at, ended_at";
+const BRANCH_COLS: &str = "id, run_id, parent_id, start_seq, team, changes, fork_note, status, \
+     error, created_at, ended_at, restore_mode, restored";
 const EVENT_COLS: &str = "branch_id, seq, at, agent, kind, payload";
 
 fn new_id() -> String {
@@ -143,6 +146,26 @@ impl Store {
             )
             .await?;
         Ok(id)
+    }
+
+    /// Records how a fork's world was restored: the mode asked for and each part's restore.
+    pub async fn set_restore(
+        &self,
+        branch_id: &str,
+        mode: Mode,
+        restored: &[RestoredPart],
+    ) -> Result<()> {
+        self.client
+            .execute(
+                "UPDATE branches SET restore_mode = $2, restored = $3 WHERE id = $1",
+                &[
+                    &branch_id,
+                    &mode_name(mode),
+                    &serde_json::to_value(restored)?,
+                ],
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn append(
@@ -348,9 +371,26 @@ fn event_from(r: &Row) -> Result<Event> {
     })
 }
 
+fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Exact => "exact",
+        Mode::Approximate => "approximate",
+    }
+}
+
+fn parse_mode(s: &str) -> Result<Mode> {
+    match s {
+        "exact" => Ok(Mode::Exact),
+        "approximate" => Ok(Mode::Approximate),
+        o => Err(anyhow!("unknown restore mode {o}")),
+    }
+}
+
 fn branch_from(r: &Row) -> Result<Branch> {
     let status: String = r.get("status");
     let team: Value = r.get("team");
+    let mode: Option<String> = r.get("restore_mode");
+    let restored: Value = r.get("restored");
     Ok(Branch {
         id: r.get("id"),
         run_id: r.get("run_id"),
@@ -363,5 +403,7 @@ fn branch_from(r: &Row) -> Result<Branch> {
         error: r.get("error"),
         created_at: r.get("created_at"),
         ended_at: r.get("ended_at"),
+        restore_mode: mode.map(|m| parse_mode(&m)).transpose()?,
+        restored: serde_json::from_value(restored)?,
     })
 }

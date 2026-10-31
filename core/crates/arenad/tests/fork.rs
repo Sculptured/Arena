@@ -191,6 +191,18 @@ async fn order_status_in(fx: &Fx, branch: &str) -> String {
     docs[&key]["doc"]["status"].as_str().unwrap().to_string()
 }
 
+/// An exact fork of a world of exact saves is restored from the save; the run's first branch
+/// was restored from nothing.
+fn assert_restored_from_save(first: &Branch, child: &Branch) {
+    assert_eq!((first.restore_mode, first.restored.len()), (None, 0));
+    assert_eq!(child.restore_mode, Some(parts::proto::Mode::Exact));
+    let retail = RestoredPart {
+        part: "retail".into(),
+        how: RestoredHow::Save,
+    };
+    assert_eq!(child.restored, [retail]);
+}
+
 #[test]
 fn fork_sees_world_at_fork_step_not_after() {
     run(async {
@@ -222,6 +234,7 @@ fn fork_sees_world_at_fork_step_not_after() {
         assert_eq!(c.parent_id.as_deref(), Some(parent.as_str()));
         assert_eq!(c.start_seq, Some(at));
         assert_eq!(c.run_id, b.run_id);
+        assert_restored_from_save(&b, &c);
 
         let cevs = fx.state.store.events(&child).await.unwrap();
         // The child's timeline starts with the parent's events before the fork point.

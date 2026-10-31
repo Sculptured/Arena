@@ -1,19 +1,29 @@
 //! Fork: go back to step N of a branch, change components, and rerun from there with the
-//! world restored exactly as it was just before step N.
+//! world restored as it was just before step N: exactly (from saves, or by replay), or
+//! approximately when asked.
 
-use std::{collections::HashMap, sync::Arc};
+mod rerun;
+
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
     app::AppState,
+    clock::BranchClock,
     exec::BranchCtx,
     model::*,
-    recorded::{run_info, saves_at},
+    recorded::{run_info, saves_at_except},
+    restore::{restored, Refused},
     runner::{self, StartPoint},
-    world::{Saves, World, WorldFrom},
+    world::Saves,
 };
+
+pub use rerun::{part_plans, prepare, ForkRequest, PartPlan, Rerun};
 
 pub const REASON_EARLIER: &str = "a change targets an agent that finished earlier";
 pub const REASON_CLI: &str = "Claude Code and Codex sessions restart from the agent's start";
@@ -57,6 +67,12 @@ pub enum ForkError {
     NoRestorePoint { seq: i64 },
     /// An agent before the fork point has no recorded handoff note.
     MissingHandoff(String),
+    /// A part can't be restored in the mode asked for.
+    Refused(Refused),
+    /// Replaying a part gave back something else at step `seq` than the first time.
+    ReplayDiverged { part: String, seq: i64 },
+    /// A part to replay runs on a different machine or version than when the run started.
+    FingerprintMismatch { part: String },
     /// Storage or database failure.
     Internal(anyhow::Error),
 }
@@ -73,6 +89,15 @@ impl std::fmt::Display for ForkError {
                 "the write at step {seq} has no snapshot, so the world before this step can't be restored exactly"
             ),
             ForkError::MissingHandoff(a) => write!(f, "agent \"{a}\" has no recorded handoff note to carry over"),
+            ForkError::Refused(r) => write!(f, "{r}"),
+            ForkError::ReplayDiverged { part, seq } => write!(
+                f,
+                "replay of {part} diverged at step {seq}, so it can't be restored exactly"
+            ),
+            ForkError::FingerprintMismatch { part } => write!(
+                f,
+                "the {part} integration is running on a different machine or version than the original"
+            ),
             ForkError::Internal(e) => write!(f, "fork failed: {e:#}"),
         }
     }
@@ -302,6 +327,17 @@ pub fn plan_fork(
     at_seq: i64,
     changes: &HashMap<String, Change>,
 ) -> Result<ForkPlan, ForkError> {
+    plan_fork_with(events, team, at_seq, changes, &BTreeSet::new())
+}
+
+/// `plan_fork` for a world whose `replayed` parts are restored by replay: they need no save.
+pub fn plan_fork_with(
+    events: &[Event],
+    team: &Team,
+    at_seq: i64,
+    changes: &HashMap<String, Change>,
+    replayed: &BTreeSet<String>,
+) -> Result<ForkPlan, ForkError> {
     if team.agents.is_empty() {
         return Err(ForkError::UnknownAgent(String::new()));
     }
@@ -323,7 +359,7 @@ pub fn plan_fork(
         start.resume = None;
     }
     // 5. The world just before the start: per part, the save of its last write before it.
-    let restore = saves_at(events, start.seq - 1, &run_info(events).base)
+    let restore = saves_at_except(events, start.seq - 1, &run_info(events).base, replayed)
         .map_err(|n| ForkError::NoRestorePoint { seq: n.seq })?;
     let notes = planner.handoff_notes(a, start.seq)?;
     Ok(finish_plan(start, at_seq, restore, notes))
@@ -365,25 +401,61 @@ pub fn apply_changes(team: &Team, changes: &HashMap<String, Change>) -> Team {
     t
 }
 
-/// Forks `branch_id` at `at_seq` with `changes` and starts the new branch running.
+/// Forks `branch_id` at `at_seq` with `changes`, restoring exactly, and starts the new branch.
 pub async fn fork(
     state: &Arc<AppState>,
     branch_id: &str,
     at_seq: i64,
     changes: HashMap<String, Change>,
 ) -> Result<ForkResponse, ForkError> {
+    let restore = parts::proto::Mode::Exact;
+    let req = ForkRequest {
+        at_seq,
+        changes,
+        restore,
+    };
+    fork_with(state, branch_id, req).await
+}
+
+/// Forks `branch_id` as `req` asks and starts the new branch running. A refusal comes before
+/// anything is recorded; a replay that fails ends the new branch `infra_error`.
+pub async fn fork_with(
+    state: &Arc<AppState>,
+    branch_id: &str,
+    req: ForkRequest,
+) -> Result<ForkResponse, ForkError> {
     let parent = finished_branch(state, branch_id).await?;
     let events = state.store.events(branch_id).await?;
-    let plan = plan_fork(&events, &parent.team, at_seq, &changes)?;
+    let rerun = prepare(state, &events, &parent.team, &req).await?;
     let task_id = task_of(state, &events, &parent).await?;
-    let team = apply_changes(&parent.team, &changes);
-    let new_id = create_child(state, &parent, &plan, &team, &changes).await?;
-    let started = start_world(state, &events, branch_id, &new_id, &plan).await;
-    let world = runner::setup_or_infra_error(state, &new_id, started)
-        .await
-        .map_err(ForkError::Internal)?;
-    let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id);
-    Ok(spawn_child(state, ctx, plan))
+    let team = apply_changes(&parent.team, &req.changes);
+    let new_id = create_child(state, &parent, &rerun, &team, &req).await?;
+    let world = start_child_world(state, &events, &parent.id, &new_id, &rerun).await?;
+    let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id)
+        .with_clock(BranchClock::from_env(rerun.clock_ms));
+    Ok(spawn_child(state, ctx, rerun.plan))
+}
+
+/// How each part of a fork of `branch_id` at `at_seq` would be restored in `mode`.
+pub async fn restore_plan(
+    state: &AppState,
+    branch_id: &str,
+    at_seq: i64,
+    restore: parts::proto::Mode,
+) -> Result<Vec<PartPlan>, ForkError> {
+    let branch = state
+        .store
+        .find_branch(branch_id)
+        .await?
+        .ok_or_else(|| ForkError::UnknownBranch(branch_id.to_string()))?;
+    let events = state.store.events(branch_id).await?;
+    let req = ForkRequest {
+        at_seq,
+        changes: HashMap::new(),
+        restore,
+    };
+    let rerun = prepare(state, &events, &branch.team, &req).await?;
+    Ok(part_plans(&rerun, &events))
 }
 
 /// Runs the new branch from the plan's start point; the response names where it started.
@@ -424,26 +496,27 @@ async fn finished_branch(state: &AppState, branch_id: &str) -> Result<Branch, Fo
     }
 }
 
-/// Records the new branch: the parent's run, the fork point, the effective team and the changes.
+/// Records the new branch: the parent's run, the fork point, the effective team, the changes,
+/// and how its world is restored.
 async fn create_child(
     state: &AppState,
     parent: &Branch,
-    plan: &ForkPlan,
+    rerun: &Rerun,
     team: &Team,
-    changes: &HashMap<String, Change>,
+    req: &ForkRequest,
 ) -> anyhow::Result<String> {
-    let changes_json = serde_json::to_value(changes)?;
+    let changes_json = serde_json::to_value(&req.changes)?;
+    let plan = &rerun.plan;
     let from = Some((parent.id.as_str(), plan.start_seq));
-    state
-        .store
-        .create_branch(
-            &parent.run_id,
-            from,
-            team,
-            &changes_json,
-            plan.reason.clone(),
-        )
-        .await
+    let note = plan.reason.clone();
+    let store = &state.store;
+    let id = store
+        .create_branch(&parent.run_id, from, team, &changes_json, note)
+        .await?;
+    store
+        .set_restore(&id, req.restore, &restored(&rerun.hows()))
+        .await?;
+    Ok(id)
 }
 
 /// The task of the run: from `RunStart`, else from the run row.
@@ -461,29 +534,33 @@ async fn task_of(state: &AppState, events: &[Event], parent: &Branch) -> anyhow:
         .ok_or_else(|| anyhow::anyhow!("no run {} for branch {}", parent.run_id, parent.id))
 }
 
-/// Copies the parent's events before the fork point and starts the new branch's world from the
-/// plan's saves, with the run's benchmark and seed.
-async fn start_world(
+/// Copies the parent's events before the fork point and starts the new branch's world as the
+/// rerun plans it, with the run's benchmark and seed. A failure ends the new branch
+/// `infra_error` with its message.
+async fn start_child_world(
     state: &AppState,
     events: &[Event],
     parent: &str,
     new_id: &str,
-    plan: &ForkPlan,
-) -> anyhow::Result<World> {
-    state
-        .store
-        .copy_prefix(parent, new_id, plan.start_seq)
-        .await?;
-    let run = run_info(events);
-    let bench = state.hub.bench_describe(&run.benchmark).await?;
-    World::start(
-        state.hub.clone(),
-        &bench,
-        new_id,
-        run.seed,
-        WorldFrom::exact(plan.restore.clone()),
-    )
-    .await
+    rerun: &Rerun,
+) -> Result<crate::world::World, ForkError> {
+    let started = async {
+        let start = rerun.plan.start_seq;
+        state.store.copy_prefix(parent, new_id, start).await?;
+        rerun::start_world(state, events, new_id, rerun).await
+    }
+    .await;
+    if let Err(e) = &started {
+        let error = Some(match e {
+            ForkError::Internal(e) => format!("{e:#}"),
+            e => e.to_string(),
+        });
+        let _ = state
+            .store
+            .set_status(new_id, BranchStatus::InfraError, error)
+            .await;
+    }
+    started
 }
 
 #[cfg(test)]

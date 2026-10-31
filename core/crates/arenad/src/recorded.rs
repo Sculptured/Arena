@@ -1,13 +1,13 @@
-//! What a branch's events say about its world: the run's benchmark, seed, world and base saves
-//! (from `RunStart`), per part the save holding its state at a step, its final saves, and every
-//! save the events name. Runs recorded before integrations have a `snapshot` per write and no
+//! What a branch's events say about its world: the run's benchmark, seed, world, fingerprints
+//! and base saves (from `RunStart`), per part the save holding its state at a step, the arena
+//! clock at a step, its final saves, and every save the events name. Runs recorded before integrations have a `snapshot` per write and no
 //! `saves`: they read as part `retail`, with `world_base` as the base and the database
 //! `branch_<id>` as the final state.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use parts::proto::WorldPart;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     model::{Event, EventKind},
@@ -28,6 +28,8 @@ pub struct RunInfo {
     pub base: Saves,
     /// The parts of the run's world (empty for a run recorded before integrations).
     pub world: Vec<WorldPart>,
+    /// Each part's integration fingerprint at the run's start (empty when not recorded).
+    pub fingerprints: Map<String, Value>,
     /// False when the branch has no `RunStart` (its setup failed before recording one): it names
     /// no saves and has no world.
     pub started: bool,
@@ -47,14 +49,16 @@ fn saves_in(v: &Value) -> Option<Saves> {
 }
 
 /// The run facts of a branch's events (a run recorded before integrations: retail, seed 0,
-/// base `world_base`; a branch without `RunStart`: no base).
+/// base `world_base`; a branch without `RunStart`: no base). A run whose parts all keep no saves
+/// records `saves: {}`.
 pub fn run_info(events: &[Event]) -> RunInfo {
     let start = events
         .iter()
         .find(|e| e.kind == EventKind::RunStart)
         .map(|e| &e.payload);
-    let base = start.and_then(|p| saves_in(&p["saves"]));
+    let base = start.and_then(|p| serde_json::from_value::<Saves>(p["saves"].clone()).ok());
     let world = start.and_then(|p| serde_json::from_value(p["world"].clone()).ok());
+    let fingerprints = start.and_then(|p| p["fingerprints"].as_object().cloned());
     RunInfo {
         benchmark: start
             .and_then(|p| p["benchmark"].as_str())
@@ -69,7 +73,19 @@ pub fn run_info(events: &[Event]) -> RunInfo {
             (None, None) => Saves::new(),
         },
         world: world.unwrap_or_default(),
+        fingerprints: fingerprints.unwrap_or_default(),
     }
+}
+
+/// The arena clock just before step `before_seq`: the `clock_ms` of the last event before it
+/// that has one (a tool call or world event), else 0.
+pub fn clock_at(events: &[Event], before_seq: i64) -> i64 {
+    events
+        .iter()
+        .rev()
+        .filter(|e| e.seq < before_seq)
+        .find_map(|e| e.payload["clock_ms"].as_i64())
+        .unwrap_or(0)
 }
 
 /// The saves a tool call made: `saves`, or a legacy `snapshot` read as `{"retail": snapshot}`.
@@ -91,6 +107,16 @@ pub struct NoSave {
 /// else `base`. A committed write to a part with no save makes that part unrestorable until its
 /// next save (the earliest such write is reported).
 pub fn saves_at(events: &[Event], seq: i64, base: &Saves) -> Result<Saves, NoSave> {
+    saves_at_except(events, seq, base, &BTreeSet::new())
+}
+
+/// `saves_at` for every part but `skip` (parts restored without a save, by replay).
+pub fn saves_at_except(
+    events: &[Event],
+    seq: i64,
+    base: &Saves,
+    skip: &BTreeSet<String>,
+) -> Result<Saves, NoSave> {
     let mut at: BTreeMap<String, Result<String, i64>> = base
         .iter()
         .map(|(p, s)| (p.clone(), Ok(s.clone())))
@@ -107,6 +133,7 @@ pub fn saves_at(events: &[Event], seq: i64, base: &Saves) -> Result<Saves, NoSav
         at.extend(saved.into_iter().map(|(p, s)| (p, Ok(s))));
     }
     at.into_iter()
+        .filter(|(part, _)| !skip.contains(part))
         .map(|(part, s)| {
             s.map(|s| (part.clone(), s))
                 .map_err(|seq| NoSave { part, seq })
@@ -235,6 +262,7 @@ mod tests {
                 seed: 0,
                 base: legacy("world_base"),
                 world: vec![],
+                fingerprints: Map::new(),
                 started: true,
                 legacy: true,
             }
@@ -268,6 +296,44 @@ mod tests {
         assert_eq!(final_saves("x", &evs), Some(legacy("s_r2")));
         assert_eq!(final_saves("x", &evs[..2]), None, "no check yet");
         assert_eq!(names(&evs, "x"), ["base_r", "s_r1", "s_r2"]);
+    }
+
+    #[test]
+    fn a_run_whose_parts_keep_no_saves_is_not_legacy() {
+        let evs = vec![
+            ev(
+                1,
+                EventKind::RunStart,
+                json!({"benchmark": "b", "seed": 3, "saves": {}, "fingerprints": {"c": {"v": 1}}}),
+            ),
+            write(2, "c", Value::Null),
+        ];
+        let info = run_info(&evs);
+        assert!(!info.legacy && info.base.is_empty());
+        assert_eq!(info.fingerprints["c"], json!({"v": 1}));
+        // A replayed part's writes have no save, and need none.
+        let skip = BTreeSet::from(["c".to_string()]);
+        assert_eq!(
+            saves_at_except(&evs, 2, &info.base, &skip),
+            Ok(Saves::new())
+        );
+        assert_eq!(saves_at(&evs, 2, &info.base).unwrap_err().part, "c");
+    }
+
+    #[test]
+    fn the_clock_at_a_step_is_the_last_one_recorded_before_it() {
+        let call = |seq, clock: Value| ev(seq, EventKind::ToolCall, json!({"clock_ms": clock}));
+        let evs = vec![
+            ev(1, EventKind::RunStart, json!({})),
+            call(2, json!(120)),
+            ev(3, EventKind::WorldEvent, json!({"clock_ms": 450})),
+            ev(4, EventKind::ModelCall, json!({})),
+            call(5, Value::Null),
+        ];
+        assert_eq!(clock_at(&evs, 2), 0);
+        assert_eq!(clock_at(&evs, 3), 120);
+        assert_eq!(clock_at(&evs, 5), 450);
+        assert_eq!(clock_at(&evs, 99), 450);
     }
 
     #[test]

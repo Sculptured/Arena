@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod api;
 pub mod app;
+pub mod clock;
 pub mod compare;
 pub mod exec;
 pub mod fork;
@@ -11,7 +12,10 @@ pub mod model;
 pub mod pg;
 pub mod prompts;
 pub mod recorded;
+pub mod replay;
+pub mod restore;
 pub mod runner;
 pub mod saves;
 pub mod store;
+pub mod ticker;
 pub mod world;

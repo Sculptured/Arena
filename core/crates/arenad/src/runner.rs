@@ -82,7 +82,8 @@ pub async fn setup_or_infra_error<T>(state: &AppState, branch_id: &str, r: Resul
 }
 
 /// Starts the first branch's world from the base save and records `RunStart`:
-/// `{task_id, team, benchmark, world, seed, fingerprints, saves}`.
+/// `{task_id, team, benchmark, world, seed, base_seed, fingerprints, saves}` (`saves` names only
+/// the parts that keep saves; `base_seed` is the seed the base save was made with).
 async fn start_world(
     state: &AppState,
     bench: &BenchDescribe,
@@ -100,6 +101,7 @@ async fn start_world(
         "benchmark": bench.name,
         "world": bench.world,
         "seed": seed,
+        "base_seed": world::SHARED_SEED,
         "fingerprints": world.fingerprints(),
         "saves": world.saves(),
     });
@@ -119,11 +121,11 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
     let state = state.clone();
     tokio::spawn(async move {
         let branch_id = ctx.branch_id.clone();
-        let world = ctx.world.clone();
-        let inner = tokio::spawn(run_branch(state.clone(), ctx, from));
+        let inner = tokio::spawn(run_branch(state.clone(), ctx.clone(), from));
         if let Err(e) = inner.await {
             state.live.write().unwrap().remove(&branch_id);
-            world.stop().await;
+            ctx.stop_ticker().await;
+            ctx.world.stop().await;
             let _ = state
                 .store
                 .set_status(
@@ -136,16 +138,18 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
     });
 }
 
-/// Runs the agents from `from.agent_index`, scores the result, stops the world and sets the
-/// branch status. Never leaves the branch `running`.
+/// Runs the agents from `from.agent_index` (the clock ticking), scores the result, stops the
+/// world and sets the branch status. Never leaves the branch `running`.
 pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint) {
     state
         .live
         .write()
         .unwrap()
         .insert(ctx.branch_id.clone(), ctx.clone());
+    ctx.start_ticker(&state.store).await;
     let outcome = drive(&state, &ctx, from).await;
     state.live.write().unwrap().remove(&ctx.branch_id);
+    ctx.stop_ticker().await;
     ctx.world.stop().await;
     let (status, error) = match (ctx.fatal(), outcome) {
         // A world program stopped: whatever the agents did after it doesn't count.
@@ -320,7 +324,10 @@ async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
     let gold = world::ensure_gold(&state.hub, &bench, &ctx.task_id).await?;
     // Behind the gate: no late tool call lands between the final save and the diff.
     let _gate = ctx.gate().await;
-    let final_saves = ctx.world.save_all().await?;
+    let final_saves = {
+        let _paused = ctx.clock.paused();
+        ctx.world.save_all().await?
+    };
     let differing = ctx.world.diff_with(&gold).await?;
     let gold_db = ctx
         .world

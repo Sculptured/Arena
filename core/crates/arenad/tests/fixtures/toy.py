@@ -1,19 +1,27 @@
 """Toy arena-part/1 packages for arenad tests.
 
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
+              [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock] [--save-sleep MS]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
-      (read). It exits on its N-th call_tool (only once across restarts when FILE marks that it
-      did); every `save` after the first N is an error; --bad-diff answers `diff` without
-      `differing`; --log appends "<method> <instance>" per request to FILE. Saves are kept in
-      memory. `inspect` refuses keys `bad/..` (-32602). No `connect` (method not found).
-  toy.py bench --integration NAME [--clash] [--bench-tool [--tool-part PART]]
-      A benchmark whose world is one part `box` of integration NAME, with one task `t1`. Tools:
-      none; with --clash a `poke`; with --bench-tool a `ring` that reports it ran on PART
-      (default `box`). Gold: one `poke`.
+      (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
+      once across restarts when FILE marks that it did); every `save` after the first N is an
+      error; --bad-diff answers `diff` without `differing`; --log appends "<method> <instance>"
+      per request to FILE. Saves are kept in memory. `inspect` refuses keys `bad/..` (-32602). No
+      `connect` (method not found). --exact and --approximate set what `describe` reports (default
+      exact save): a part without exact saves or approximate ones can't `save` (-32001), and a
+      start from a save in a mode the part lacks is refused (-32001). With --uses-clock, `advance`
+      reports a change whenever the clock moved, and an `alarm` event on an instance's first
+      advance. --save-sleep makes every `save` take MS milliseconds.
+  toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
+               [--clash] [--bench-tool [--tool-part PART]]
+      A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
+      --part list. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
+      ran on PART (default `box`). Gold: one TOOL with JSON args (default `poke` with `{}`).
 """
 import json
 import os
 import sys
+import time
 
 ARGS = sys.argv[1:]
 
@@ -28,10 +36,17 @@ def opt(name, default):
     return ARGS[ARGS.index(name) + 1] if name in ARGS else default
 
 
+def opts(name):
+    return [ARGS[i + 1] for i, a in enumerate(ARGS) if a == name and i + 1 < len(ARGS)]
+
+
+PREFIX = opt("--prefix", "")
 TOOLS = [
-    {"name": "poke", "description": "Add one.", "inputSchema": {"type": "object", "properties": {}}, "effect": "write"},
-    {"name": "peek", "description": "Read the counter.", "inputSchema": {"type": "object", "properties": {}}, "effect": "read"},
+    {"name": PREFIX + "poke", "description": "Add one.", "inputSchema": {"type": "object", "properties": {}}, "effect": "write"},
+    {"name": PREFIX + "peek", "description": "Read the counter.", "inputSchema": {"type": "object", "properties": {}}, "effect": "read"},
 ]
+EXACT = opt("--exact", "save")
+APPROXIMATE = "--approximate" in ARGS
 
 
 class Part:
@@ -39,11 +54,11 @@ class Part:
         self.crash_on = int(opt("--crash-on-call", "0"))
         self.saves_ok = int(opt("--save-fails-after", "-1"))
         self.calls = self.saved = 0
-        self.counters, self.saves = {}, {}
+        self.counters, self.saves, self.clocks = {}, {}, {}
 
     def describe(self, p):
         return {"name": "toy", "version": "0.1.0", "protocol": 1,
-                "restore": {"exact": "save", "approximate": False}, "uses_clock": False,
+                "restore": {"exact": EXACT, "approximate": APPROXIMATE}, "uses_clock": "--uses-clock" in ARGS,
                 "fingerprint": {"toy": 1}, "tools": TOOLS}
 
     def value(self, target):
@@ -58,9 +73,21 @@ class Part:
         return table[key]
 
     def start(self, p):
-        src = (p.get("from") or {}).get("save")
-        self.counters[p["instance"]] = 0 if src is None else self.lookup(self.saves, src, "save")
+        src = p.get("from") or {}
+        mode_ok = EXACT == "save" or (src.get("mode") == "approximate" and APPROXIMATE)
+        if src and not mode_ok:
+            raise RpcError(-32001, "the toy can't restore from a save in that mode")
+        self.counters[p["instance"]] = 0 if not src else self.lookup(self.saves, src["save"], "save")
         return {}
+
+    def advance(self, p):
+        i, t = p["instance"], p["clock_ms"]
+        self.lookup(self.counters, i, "instance")
+        first = i not in self.clocks
+        changed = t > self.clocks.get(i, 0)
+        self.clocks[i] = max(t, self.clocks.get(i, 0))
+        events = [{"kind": "alarm", "text": "the toy woke up", "data": {"at": t}}] if first else []
+        return {"changed": changed, "events": events}
 
     def call_tool(self, p):
         self.calls += 1
@@ -68,10 +95,10 @@ class Part:
             self.crash()
         i = p["instance"]
         n = self.lookup(self.counters, i, "instance")
-        if p["name"] == "poke":
+        if p["name"] == PREFIX + "poke":
             self.counters[i] = n + 1
             return {"result": {"n": n + 1}, "reads": [], "writes": ["box/n"]}
-        if p["name"] == "peek":
+        if p["name"] == PREFIX + "peek":
             return {"result": {"n": n}, "reads": ["box/n"], "writes": []}
         return {"error": "unknown tool " + p["name"], "reads": [], "writes": []}
 
@@ -86,11 +113,14 @@ class Part:
         sys.exit(7)
 
     def save(self, p):
+        if EXACT != "save" and not APPROXIMATE:
+            raise RpcError(-32001, "the toy has no saves")
+        time.sleep(int(opt("--save-sleep", "0")) / 1000)
         self.saved += 1
         if 0 <= self.saves_ok < self.saved:
             raise RpcError(-32000, "the toy can't save today")
         self.saves[p["save"]] = self.lookup(self.counters, p["instance"], "instance")
-        return {"bytes": 1, "exact": True}
+        return {"bytes": 1, "exact": EXACT == "save"}
 
     def inspect(self, p):
         v = self.value(p["target"])
@@ -123,8 +153,7 @@ class Bench:
     def describe(self, p):
         tools = [dict(TOOLS[0], description="The benchmark's own poke.")] if "--clash" in ARGS else []
         tools += [RING] if "--bench-tool" in ARGS else []
-        return {"name": "toybench", "version": "0.1.0", "protocol": 1,
-                "world": [{"part": "box", "integration": opt("--integration", "toy"), "config": {}}],
+        return {"name": "toybench", "version": "0.1.0", "protocol": 1, "world": world(),
                 "tasks": [{"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n"}],
                 "instructions": "Be kind to the box.", "tools": tools}
 
@@ -137,7 +166,12 @@ class Bench:
         return {"error": "the toy benchmark has no working tools", "part": "box", "reads": [], "writes": []}
 
     def gold_actions(self, p):
-        return {"actions": [{"name": "poke", "args": {}}]}
+        return {"actions": [{"name": opt("--gold", "poke"), "args": json.loads(opt("--gold-args", "{}"))}]}
+
+
+def world():
+    parts = [spec.split("=", 1) for spec in opts("--part")] or [["box", opt("--integration", "toy")]]
+    return [{"part": part, "integration": integration, "config": {}} for part, integration in parts]
 
 
 def log(request):

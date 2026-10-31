@@ -10,7 +10,8 @@ use crate::{
     world::Saves,
 };
 
-/// `{status, seconds, tokens, cost_usd, cost_source}` for a finished branch. Only the branch's
+/// `{status, restore_mode, restored, seconds, tokens, cost_usd, cost_source}` for a finished
+/// branch (`restore_mode` null and `restored` empty for a run's first branch). Only the branch's
 /// own events count (`seq >= start_seq`): the inherited prefix belongs to its parent.
 pub fn summary(branch: &Branch, events: &[Event]) -> Value {
     let from = branch.start_seq.unwrap_or(0);
@@ -24,6 +25,8 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
         .map(|t| (t - branch.created_at).num_milliseconds() as f64 / 1000.0);
     json!({
         "status": branch.status,
+        "restore_mode": branch.restore_mode,
+        "restored": branch.restored,
         "seconds": seconds,
         "tokens": ends.iter().map(|e| e.tokens.unwrap_or(0)).sum::<i64>(),
         "cost_usd": ends.iter().fold(Some(0.0f64), |c, e| add_cost(c, e.cost_usd)),
@@ -189,6 +192,8 @@ mod tests {
             error: None,
             created_at: chrono::Utc::now(),
             ended_at: None,
+            restore_mode: None,
+            restored: vec![],
         }
     }
 

@@ -1,6 +1,7 @@
 //! The saves every run shares: the benchmark's base save (empty instances plus its `seed`) and
 //! one gold save per task (the base plus the task's gold actions). Each is made once, under a
-//! per-name lock, and an existing save counts as made.
+//! per-name lock, and an existing save counts as made. They are made with seed 0 and name only
+//! the parts that keep saves (a part with only replay starts fresh instead).
 
 use std::{
     collections::HashMap,
@@ -14,13 +15,13 @@ use parts::{
 };
 use serde_json::{json, Value};
 
-use crate::saves::save_exists;
+use crate::{restore::keeps_saves, saves::save_exists};
 
 use super::{
-    call, exact,
+    call, from_shared,
     ids::{base_names, gold_names, temp_branch_id},
-    plan::plan,
-    Saves, StartSaves, World,
+    plan::{plan, Plan},
+    Saves, World,
 };
 
 /// One lock per name for this process: a save is made once even when two runs start together.
@@ -36,36 +37,53 @@ async fn name_lock(name: &str) -> tokio::sync::OwnedMutexGuard<()> {
     l.lock_owned().await
 }
 
+/// The seed of the base and gold worlds (shared by every run).
+pub const SHARED_SEED: u64 = 0;
+
 /// True when every save in `names` exists.
-async fn saves_exist(hub: &Hub, bench: &BenchDescribe, names: &Saves) -> Result<bool> {
-    for p in &bench.world {
-        if !save_exists(hub, &p.integration, &names[&p.part]).await? {
-            return Ok(false);
+async fn saves_exist(hub: &Hub, planned: &Plan, names: &Saves) -> Result<bool> {
+    for p in &planned.parts {
+        if let Some(save) = names.get(&p.part.part) {
+            if !save_exists(hub, &p.part.integration, save).await? {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
 }
 
-/// Makes `names` unless they exist: a short-lived world (empty when `from` is None), `build` on
-/// it, then every part saved under its name.
+/// `names` of the parts that keep saves.
+fn kept_names(planned: &Plan, mut names: Saves) -> Saves {
+    names.retain(|part, _| {
+        let p = planned.parts.iter().find(|p| &p.part.part == part);
+        p.is_some_and(|p| keeps_saves(&p.describe.restore))
+    });
+    names
+}
+
+/// Makes `names` (of the parts that keep saves) unless they exist: a short-lived world (empty
+/// when `from` is None, else from those shared saves), `build` on it, then every part saved
+/// under its name.
 async fn ensure_saves(
     hub: &Arc<Hub>,
     bench: &BenchDescribe,
     names: Saves,
-    from: Option<StartSaves>,
+    from: Option<Saves>,
     build: impl AsyncFnOnce(&World) -> Result<()>,
 ) -> Result<Saves> {
+    let planned = plan(hub, bench).await?;
+    let names = kept_names(&planned, names);
     let _g = name_lock(&names.values().cloned().collect::<Vec<_>>().join(",")).await;
-    if saves_exist(hub, bench, &names).await? {
+    if saves_exist(hub, &planned, &names).await? {
         return Ok(names);
     }
-    let planned = plan(hub, bench).await?;
+    let from = from.map(|f| from_shared(&f, &planned.parts));
     let world = World::start_parts(
         hub.clone(),
         bench,
         planned,
         &temp_branch_id(),
-        0,
+        SHARED_SEED,
         from.as_ref(),
     )
     .await?;
@@ -98,7 +116,7 @@ pub async fn ensure_base(hub: &Arc<Hub>, bench: &BenchDescribe) -> Result<Saves>
 /// The gold save of each part for `task`: the base plus the task's gold actions, made once.
 pub async fn ensure_gold(hub: &Arc<Hub>, bench: &BenchDescribe, task: &str) -> Result<Saves> {
     let names = gold_names(bench, task);
-    let from = exact(ensure_base(hub, bench).await?);
+    let from = ensure_base(hub, bench).await?;
     ensure_saves(hub, bench, names, Some(from), async |w: &World| {
         apply_gold(w, task).await
     })

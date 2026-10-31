@@ -2,20 +2,21 @@
 //! integration program (shared by every branch through the hub), plus the benchmark program for
 //! the benchmark's own tools.
 
+mod clocked;
 mod ids;
 mod plan;
+mod saving;
 mod standard;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use parts::{
     proto::{
-        BenchDescribe, BenchToolOutput, Describe, Differing, Effect, ExactKind, Mode, ToolOutput,
+        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Mode, ToolOutput,
         ToolSchema, WorldPart,
     },
     CallError, Client, Hub,
@@ -23,44 +24,69 @@ use parts::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Map, Value};
 
+use crate::restore::keeps_saves;
+
+pub use clocked::PartEvent;
 pub use ids::{instance_id, new_save_id};
 pub use plan::{plan, Plan, PlannedPart, Route};
-pub use standard::{ensure_base, ensure_gold};
+pub use saving::StepSaves;
+pub use standard::{ensure_base, ensure_gold, SHARED_SEED};
 
 /// `{part: save}`.
 pub type Saves = BTreeMap<String, String>;
 
-/// Per part: the save it starts from and how to restore it.
-pub type StartSaves = BTreeMap<String, (String, Mode)>;
+/// How a part's instance starts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartStart {
+    /// From a save, in a mode.
+    Save(FromSave),
+    /// Empty, with the run's seed at clock 0 (to be replayed, or a part that keeps no saves).
+    Fresh,
+}
 
-/// Each part restored exactly from its save.
-pub fn exact(saves: Saves) -> StartSaves {
-    saves
-        .into_iter()
-        .map(|(p, s)| (p, (s, Mode::Exact)))
+/// Per part: how it starts. A part that keeps no saves and is not named starts fresh.
+pub type StartSaves = BTreeMap<String, PartStart>;
+
+/// The closest a part restores from a save: exactly when it keeps exact saves, else
+/// approximately.
+fn closest_mode(p: &PlannedPart) -> Mode {
+    match p.describe.restore.exact {
+        ExactKind::Save => Mode::Exact,
+        _ => Mode::Approximate,
+    }
+}
+
+/// Each part of `parts` named in `saves` started from its save, as closely as it restores (a
+/// shared base or gold save).
+fn from_shared(saves: &Saves, parts: &[PlannedPart]) -> StartSaves {
+    parts
+        .iter()
+        .filter_map(|p| {
+            let save = saves.get(&p.part.part)?.clone();
+            let mode = closest_mode(p);
+            Some((
+                p.part.part.clone(),
+                PartStart::Save(FromSave { save, mode }),
+            ))
+        })
         .collect()
 }
 
 /// Where a world starts from.
 pub enum WorldFrom {
-    /// The benchmark's base save (made on first use).
+    /// The benchmark's base save (made on first use), each part as closely as it restores.
     Base,
     /// Per part: the save and how to restore it.
     Saves(StartSaves),
 }
 
-impl WorldFrom {
-    /// Each part restored exactly from its save.
-    pub fn exact(saves: Saves) -> WorldFrom {
-        WorldFrom::Saves(exact(saves))
-    }
-}
-
-/// A failed world call. `fatal` when a program has stopped: the branch can't go on.
+/// A failed world call. `fatal` when a program has stopped: the branch can't go on. `code` is
+/// the part's own error code when it refused the call.
 #[derive(Debug, Clone)]
 pub struct WorldError {
     pub message: String,
     pub fatal: bool,
+    pub code: Option<i64>,
 }
 
 impl std::fmt::Display for WorldError {
@@ -76,7 +102,18 @@ impl WorldError {
         WorldError {
             message,
             fatal: false,
+            code: None,
         }
+    }
+}
+
+/// The context of a part's failed `start`: which part it was.
+#[derive(Debug, Clone)]
+pub struct StartingPart(pub String);
+
+impl std::fmt::Display for StartingPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "starting the part {}", self.0)
     }
 }
 
@@ -99,6 +136,23 @@ impl Part {
     fn label(&self) -> String {
         format!("the {} integration", self.name)
     }
+
+    /// True when the part keeps saves (a part with only replay is never saved).
+    fn keeps_saves(&self) -> bool {
+        keeps_saves(&self.describe.restore)
+    }
+
+    /// `call_tool` on the part's instance.
+    async fn call_tool(
+        &self,
+        name: &str,
+        args: Value,
+        clock_ms: i64,
+    ) -> Result<ToolOutput, WorldError> {
+        let params =
+            json!({"instance": self.instance, "name": name, "args": args, "clock_ms": clock_ms});
+        call(&self.client, &self.label(), "call_tool", params).await
+    }
 }
 
 #[derive(Default)]
@@ -107,6 +161,8 @@ struct Track {
     last: Saves,
     /// Parts written since their last save (a save failed).
     dirty: BTreeSet<String>,
+    /// Clock parts whose `advance` reported a change since their last save.
+    changed: BTreeSet<String>,
     stopped: bool,
 }
 
@@ -118,7 +174,6 @@ pub struct World {
     tools: Vec<(ToolSchema, Route)>,
     connections: Map<String, Value>,
     track: Mutex<Track>,
-    started: Instant,
 }
 
 fn stopped_message(what: &str, tail: &str) -> String {
@@ -139,6 +194,11 @@ async fn call<T: DeserializeOwned>(
         CallError::Stopped(tail) => WorldError {
             message: stopped_message(what, &tail),
             fatal: true,
+            code: None,
+        },
+        CallError::Part { code, .. } => WorldError {
+            code: Some(code),
+            ..WorldError::other(format!("{what}: {method} failed: {e}"))
         },
         other => WorldError::other(format!("{what}: {method} failed: {other}")),
     })
@@ -146,7 +206,8 @@ async fn call<T: DeserializeOwned>(
 
 impl World {
     /// Starts `bench`'s world for `branch_id`: one instance per part, from the base save or from
-    /// the given saves, all with `seed` at clock 0. Refuses a world with a tool-name clash.
+    /// the given saves, all with `seed` at clock 0 (passed with a save too). Refuses a world with
+    /// a tool-name clash.
     pub async fn start(
         hub: Arc<Hub>,
         bench: &BenchDescribe,
@@ -168,7 +229,7 @@ impl World {
         from: WorldFrom,
     ) -> Result<World> {
         let from = match from {
-            WorldFrom::Base => exact(ensure_base(&hub, bench).await?),
+            WorldFrom::Base => from_shared(&ensure_base(&hub, bench).await?, &planned.parts),
             WorldFrom::Saves(m) => m,
         };
         World::start_parts(hub, bench, planned, branch_id, seed, Some(&from)).await
@@ -188,7 +249,6 @@ impl World {
             tools,
             connections: Map::new(),
             track: Mutex::default(),
-            started: Instant::now(),
         }
     }
 
@@ -222,7 +282,7 @@ impl World {
         from: Option<&StartSaves>,
     ) -> Result<()> {
         let instance = instance_id(branch_id, &p.part.part);
-        let (params, save) = start_params(&p.part, &instance, seed, from)?;
+        let (params, save) = start_params(&p, &instance, seed, from)?;
         let client = self.hub.client(&p.part.integration).await?;
         let part = Part {
             name: p.part.part,
@@ -233,7 +293,7 @@ impl World {
         };
         let _: Value = call(&part.client, &part.label(), "start", params)
             .await
-            .with_context(|| format!("starting the part {}", part.name))?;
+            .with_context(|| StartingPart(part.name.clone()))?;
         if let Some(save) = save {
             self.track
                 .get_mut()
@@ -260,14 +320,9 @@ impl World {
 
     fn bench_client(&self) -> Result<&Client, WorldError> {
         self.bench_client.as_deref().ok_or_else(|| WorldError {
-            message: "no benchmark program".into(),
             fatal: true,
+            ..WorldError::other("no benchmark program".into())
         })
-    }
-
-    /// Milliseconds on the world's clock (real time since the world started).
-    pub fn clock_ms(&self) -> i64 {
-        self.started.elapsed().as_millis() as i64
     }
 
     /// The tools agents get (MCP shape plus `effect`).
@@ -288,6 +343,18 @@ impl World {
     /// The part names, in world order.
     pub fn part_names(&self) -> Vec<String> {
         self.parts.iter().map(|p| p.name.clone()).collect()
+    }
+
+    /// True when some part uses the arena clock.
+    pub fn uses_clock(&self) -> bool {
+        self.parts.iter().any(|p| p.describe.uses_clock)
+    }
+
+    /// The tool names `part` itself lists (empty for an unknown part).
+    pub fn part_tools(&self, part: &str) -> Vec<String> {
+        self.part(part)
+            .map(|p| p.describe.tools.iter().map(|t| t.name.clone()).collect())
+            .unwrap_or_default()
     }
 
     /// Each part's integration `fingerprint`.
@@ -333,14 +400,24 @@ impl World {
             Some(Route::Bench) => self.call_bench_tool(name, args).await,
             Some(Route::Part(i)) => {
                 let p = &self.parts[i];
-                let params = json!({"instance": p.instance, "name": name, "args": args, "clock_ms": clock_ms});
-                let output: ToolOutput = call(&p.client, &p.label(), "call_tool", params).await?;
+                let output = p.call_tool(name, args, clock_ms).await?;
                 Ok(Called {
                     output,
                     part: Some(p.name.clone()),
                 })
             }
         }
+    }
+
+    /// Runs `part`'s own tool `name` (for a replay).
+    pub async fn call_part_tool(
+        &self,
+        part: &str,
+        name: &str,
+        args: Value,
+        clock_ms: i64,
+    ) -> Result<ToolOutput, WorldError> {
+        self.part(part)?.call_tool(name, args, clock_ms).await
     }
 
     async fn call_bench_tool(&self, name: &str, args: Value) -> Result<Called, WorldError> {
@@ -352,11 +429,10 @@ impl World {
             params,
         )
         .await?;
-        if self.part(&o.part).is_err() {
-            let error = Some(format!("the benchmark named an unknown part {}", o.part));
+        if let Some(error) = self.bench_part_error(&o) {
             return Ok(Called {
                 output: ToolOutput {
-                    error,
+                    error: Some(error),
                     ..Default::default()
                 },
                 part: None,
@@ -374,100 +450,19 @@ impl World {
         })
     }
 
-    async fn save_as(&self, p: &Part, save: &str) -> Result<(), WorldError> {
-        let dir = self.hub.save_dir(&p.integration, save);
-        let _: Value = call(
-            &p.client,
-            &p.label(),
-            "save",
-            json!({"instance": p.instance, "save": save, "dir": dir}),
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Saves `p` under a new id and records it as the part's current state.
-    async fn save_new(&self, p: &Part) -> Result<String, WorldError> {
-        let save = new_save_id();
-        let saved = self.save_as(p, &save).await;
-        let mut t = self.track.lock().unwrap();
-        match saved {
-            Ok(()) => {
-                t.last.insert(p.name.clone(), save.clone());
-                t.dirty.remove(&p.name);
-                Ok(save)
-            }
-            Err(e) => {
-                t.dirty.insert(p.name.clone());
-                Err(e)
-            }
-        }
-    }
-
-    /// Saves the parts that changed with a call: the part it wrote to, if any. Returns the new
-    /// saves (`{}` when nothing changed). A part whose save fails stays unsaved until its next one.
-    pub async fn save_changed(&self, written_part: Option<&str>) -> Result<Saves, WorldError> {
-        let Some(name) = written_part else {
-            return Ok(Saves::new());
+    /// Why a benchmark tool's answer can't stand: it names an unknown part, or wrote to a part
+    /// without exact saves (whose replay can't repeat a benchmark's direct writes).
+    fn bench_part_error(&self, o: &BenchToolOutput) -> Option<String> {
+        let Ok(p) = self.part(&o.part) else {
+            return Some(format!("the benchmark named an unknown part {}", o.part));
         };
-        let save = self.save_new(self.part(name)?).await?;
-        Ok(Saves::from([(name.to_string(), save)]))
-    }
-
-    /// A save of every part's current state: its last save when nothing changed since, else a new one.
-    pub async fn save_all(&self) -> Result<Saves, WorldError> {
-        let mut out = Saves::new();
-        for p in &self.parts {
-            let reuse = {
-                let t = self.track.lock().unwrap();
-                t.last
-                    .get(&p.name)
-                    .filter(|_| !t.dirty.contains(&p.name))
-                    .cloned()
-            };
-            let save = match reuse {
-                Some(s) => s,
-                None => self.save_new(p).await?,
-            };
-            out.insert(p.name.clone(), save);
-        }
-        Ok(out)
-    }
-
-    /// Saves every part under the name `names` gives it.
-    async fn save_all_as(&self, names: &Saves) -> Result<(), WorldError> {
-        for p in &self.parts {
-            self.save_as(p, &names[&p.name]).await?;
-        }
-        Ok(())
-    }
-
-    /// Keys that differ between each part's live instance and `other[part]`, sorted; prefixed
-    /// `part:` only when the world has more than one part.
-    pub async fn diff_with(&self, other: &Saves) -> Result<Vec<String>, WorldError> {
-        let many = self.parts.len() > 1;
-        let mut out = vec![];
-        for p in &self.parts {
-            let save = other.get(&p.name).ok_or_else(|| {
-                WorldError::other(format!(
-                    "there is no save of the part {} to compare with",
-                    p.name
-                ))
-            })?;
-            let params = json!({"a": {"instance": p.instance}, "b": {"save": save}});
-            // A malformed answer is an error, never "nothing differs".
-            let d: Differing = call(&p.client, &p.label(), "diff", params).await?;
-            out.extend(d.differing.into_iter().map(|k| {
-                if many {
-                    format!("{}:{k}", p.name)
-                } else {
-                    k
-                }
-            }));
-        }
-        out.sort();
-        out.dedup();
-        Ok(out)
+        let exact = p.describe.restore.exact == ExactKind::Save;
+        (!exact && !o.writes.is_empty()).then(|| {
+            format!(
+                "benchmark tools write to {} directly, so it must have exact saves",
+                o.part
+            )
+        })
     }
 
     /// Every part's instance, and marks the world stopped; empty when it already was.
@@ -492,24 +487,36 @@ impl World {
     }
 }
 
+/// How `p` starts given `from` (None: every part empty). A part that keeps no saves and isn't
+/// named starts fresh; any other part must be named.
+fn part_start<'a>(p: &PlannedPart, from: Option<&'a StartSaves>) -> Result<Option<&'a FromSave>> {
+    let Some(from) = from else {
+        return Ok(None);
+    };
+    let name = &p.part.part;
+    match from.get(name) {
+        Some(PartStart::Save(f)) => Ok(Some(f)),
+        Some(PartStart::Fresh) => Ok(None),
+        None if !keeps_saves(&p.describe.restore) => Ok(None),
+        None => Err(anyhow!("there is no save to start the part {name} from")),
+    }
+}
+
 /// `start` params of a part, and the save it starts from (None for an empty start).
 fn start_params(
-    part: &WorldPart,
+    p: &PlannedPart,
     instance: &str,
     seed: u64,
     from: Option<&StartSaves>,
 ) -> Result<(Value, Option<String>)> {
+    let part: &WorldPart = &p.part;
     let mut params =
         json!({"instance": instance, "config": part.config, "seed": seed, "clock_ms": 0});
-    let Some(from) = from else {
+    let Some(f) = part_start(p, from)? else {
         return Ok((params, None));
     };
-    let name = &part.part;
-    let (save, mode) = from
-        .get(name)
-        .ok_or_else(|| anyhow!("there is no save to start the part {name} from"))?;
-    params["from"] = json!({"save": save, "mode": mode});
-    Ok((params, Some(save.clone())))
+    params["from"] = json!(f);
+    Ok((params, Some(f.save.clone())))
 }
 
 /// `connect` info of a part a benchmark may reach (exact saves only); None when it has none.
