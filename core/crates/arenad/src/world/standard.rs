@@ -3,22 +3,22 @@
 //! per-name lock, and an existing save counts as made.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use parts::{
-    proto::{BenchDescribe, Mode},
+    proto::{Action, BenchDescribe, GoldActions},
     CallError, Hub,
 };
 use serde_json::{json, Value};
 
 use super::{
-    call,
+    call, exact,
     ids::{base_names, gold_names, temp_branch_id},
     plan::plan,
-    Saves, World,
+    Saves, StartSaves, World,
 };
 
 /// One lock per name for this process: a save is made once even when two runs start together.
@@ -59,15 +59,23 @@ async fn ensure_saves(
     hub: &Arc<Hub>,
     bench: &BenchDescribe,
     names: Saves,
-    from: Option<BTreeMap<String, (String, Mode)>>,
+    from: Option<StartSaves>,
     build: impl AsyncFnOnce(&World) -> Result<()>,
 ) -> Result<Saves> {
-    plan(hub, bench).await?;
     let _g = name_lock(&names.values().cloned().collect::<Vec<_>>().join(",")).await;
     if saves_exist(hub, bench, &names).await? {
         return Ok(names);
     }
-    let world = World::start_parts(hub.clone(), bench, &temp_branch_id(), 0, from.as_ref()).await?;
+    let planned = plan(hub, bench).await?;
+    let world = World::start_parts(
+        hub.clone(),
+        bench,
+        planned,
+        &temp_branch_id(),
+        0,
+        from.as_ref(),
+    )
+    .await?;
     let built = async {
         build(&world).await?;
         world.save_all_as(&names).await.map_err(anyhow::Error::from)
@@ -96,12 +104,8 @@ pub async fn ensure_base(hub: &Arc<Hub>, bench: &BenchDescribe) -> Result<Saves>
 
 /// The gold save of each part for `task`: the base plus the task's gold actions, made once.
 pub async fn ensure_gold(hub: &Arc<Hub>, bench: &BenchDescribe, task: &str) -> Result<Saves> {
-    let names = gold_names(bench, task)?;
-    let base = ensure_base(hub, bench).await?;
-    let from = base
-        .into_iter()
-        .map(|(p, s)| (p, (s, Mode::Exact)))
-        .collect();
+    let names = gold_names(bench, task);
+    let from = exact(ensure_base(hub, bench).await?);
     ensure_saves(hub, bench, names, Some(from), async |w: &World| {
         apply_gold(w, task).await
     })
@@ -112,18 +116,17 @@ pub async fn ensure_gold(hub: &Arc<Hub>, bench: &BenchDescribe, task: &str) -> R
 /// Runs the task's gold actions. At least one gold write must succeed (a failing gold action
 /// changes nothing, as upstream).
 async fn apply_gold(world: &World, task: &str) -> Result<()> {
-    let gold: Value = call(
+    let params = json!({"task": task});
+    let gold: GoldActions = call(
         world.bench_client()?,
         &world.bench_label(),
         "gold_actions",
-        json!({"task": task}),
+        params,
     )
     .await?;
     let mut wrote = false;
-    for a in gold["actions"].as_array().into_iter().flatten() {
-        let c = world
-            .call_tool(a["name"].as_str().unwrap_or(""), a["args"].clone(), 0)
-            .await?;
+    for Action { name, args } in gold.actions {
+        let c = world.call_tool(&name, args, 0).await?;
         wrote |= c.output.error.is_none() && !c.output.writes.is_empty();
     }
     if !wrote {

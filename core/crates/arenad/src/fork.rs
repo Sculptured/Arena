@@ -3,7 +3,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use parts::proto::Mode;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -402,17 +401,12 @@ async fn start_world(
         .await?;
     let run = run_info(events);
     let bench = state.hub.bench_describe(&run.benchmark).await?;
-    let from = plan
-        .restore
-        .iter()
-        .map(|(p, s)| (p.clone(), (s.clone(), Mode::Exact)))
-        .collect();
     World::start(
         state.hub.clone(),
         &bench,
         new_id,
         run.seed,
-        WorldFrom::Saves(from),
+        WorldFrom::exact(plan.restore.clone()),
     )
     .await
 }

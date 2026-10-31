@@ -68,7 +68,11 @@ impl ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> ApiError {
-        ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+        let status = match e.downcast_ref::<runner::UnknownTask>() {
+            Some(_) => StatusCode::NOT_FOUND,
+            None => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        ApiError(status, format!("{e:#}"))
     }
 }
 
@@ -272,15 +276,6 @@ struct NewRun {
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let req: NewRun = parse_body(&body)?;
-    if !state
-        .bench()
-        .await?
-        .tasks
-        .iter()
-        .any(|t| t.id == req.task_id)
-    {
-        return Err(ApiError::not_found(format!("unknown task {}", req.task_id)));
-    }
     validate_team(&state, &req.team)?;
     check_disk(&state).await?;
     let (run_id, branch_id) =

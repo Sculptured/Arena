@@ -240,7 +240,10 @@ fn assert_run_start(rs: &Value) {
 async fn assert_passed_check(fx: &Fx, check: &CheckPayload) {
     assert!(check.passed);
     assert_eq!(check.differing_rows, Some(vec![]));
-    assert_eq!(check.gold_db.as_deref(), Some("gold_27_retail"));
+    assert_eq!(
+        check.gold_db.as_deref(),
+        Some("gold_retail_0_1_0_27_retail")
+    );
     let fin = check.final_saves.as_ref().expect("final saves");
     let key = "orders/#W7181492";
     let order = fx.hub.inspect_save(&fin["retail"], &[key]).await;
@@ -552,19 +555,32 @@ fn assert_crash_events(evs: &[Event]) {
     assert!(!kinds(evs).contains(&EventKind::Check));
 }
 
+/// A toy world whose part crashes on its 2nd tool call, once; it logs every request.
+fn crashy_world() -> (packages::ToyRoot, PathBuf) {
+    let dir = packages::toy_dir("crashy");
+    let (log, mark) = (dir.join("calls.log"), dir.join("crashed"));
+    let (log_s, mark_s) = (
+        log.to_string_lossy().into_owned(),
+        mark.to_string_lossy().into_owned(),
+    );
+    let args = [
+        "--crash-on-call",
+        "2",
+        "--crash-mark",
+        &mark_s,
+        "--log",
+        &log_s,
+    ];
+    (packages::toy_world("crashy", &args, &[]), log)
+}
+
 #[test]
 fn part_crash_ends_branch_infra_error() {
     run(async {
-        let root = packages::toy_world("crashy", &["--crash-on-call", "2"], &[]);
-        let up = FakeUpstream::start(vec![poke(), poke(), text_msg("Poked twice.")]).await;
-        let fx = setup_full(
-            "crash",
-            Some(&up),
-            Drv::Open,
-            std::slice::from_ref(&root.0),
-            "toybench",
-        )
-        .await;
+        let (root, log) = crashy_world();
+        // Run 1 pokes twice (the 2nd crashes the part); run 2 pokes once and finishes.
+        let up = FakeUpstream::start(vec![poke(), poke(), poke(), text_msg("Poked.")]).await;
+        let fx = toy_fx("crash", Some(&up), &root, Drv::Open).await;
         let (_run, branch) = runner::start_run(&fx.state, "t1", solo()).await.unwrap();
         let b = finished(&fx, &branch).await;
         assert_eq!(b.status, BranchStatus::InfraError);
@@ -577,8 +593,37 @@ fn part_crash_ends_branch_infra_error() {
         assert_crash_events(&fx.state.store.events(&branch).await.unwrap());
         // The agent stopped at the crash: no model call after the failed poke.
         assert_eq!(up.requests().len(), 2);
-        // The next use starts the program again.
-        assert!(fx.state.hub.describe("toy-crashy").await.is_ok());
+        // The crashed branch's instance was stopped (by the restarted program).
+        let stop = format!("stop {}", arenad::world::instance_id(&branch, "box"));
+        assert!(std::fs::read_to_string(&log).unwrap().contains(&stop));
+        // The next run uses the restarted program and passes.
+        let (_run, again) = runner::start_run(&fx.state, "t1", solo()).await.unwrap();
+        let b = finished(&fx, &again).await;
+        assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
+    })
+}
+
+/// A test app whose benchmark is the toy world in `root`.
+async fn toy_fx(tag: &str, up: Option<&FakeUpstream>, root: &packages::ToyRoot, drv: Drv) -> Fx {
+    setup_full(tag, up, drv, std::slice::from_ref(&root.0), "toybench").await
+}
+
+#[test]
+fn malformed_diff_is_infra_error_not_passed() {
+    run(async {
+        let root = packages::toy_world("baddiff", &["--bad-diff"], &[]);
+        let up = FakeUpstream::start(vec![poke(), text_msg("Poked.")]).await;
+        let fx = toy_fx("baddiff", Some(&up), &root, Drv::Open).await;
+        let (_run, branch) = runner::start_run(&fx.state, "t1", solo()).await.unwrap();
+        let b = finished(&fx, &branch).await;
+        assert_eq!(b.status, BranchStatus::InfraError);
+        let err = b.error.unwrap();
+        assert!(
+            err.contains("diff failed") && err.contains("bad result"),
+            "{err}"
+        );
+        let evs = fx.state.store.events(&branch).await.unwrap();
+        assert!(!kinds(&evs).contains(&EventKind::Check));
     })
 }
 
@@ -586,14 +631,7 @@ fn part_crash_ends_branch_infra_error() {
 fn tool_name_clash_refused() {
     run(async {
         let root = packages::toy_world("clash", &[], &["--clash"]);
-        let fx = setup_full(
-            "clash",
-            None,
-            Drv::Fail,
-            std::slice::from_ref(&root.0),
-            "toybench",
-        )
-        .await;
+        let fx = toy_fx("clash", None, &root, Drv::Fail).await;
         let e = runner::start_run(&fx.state, "t1", solo())
             .await
             .unwrap_err();

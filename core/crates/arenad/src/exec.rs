@@ -48,6 +48,11 @@ impl BranchCtx {
         self.handoffs.lock().unwrap().get(agent).cloned()
     }
 
+    /// Holds the branch gate: no tool call runs on the world until the guard drops.
+    pub async fn gate(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.gate.lock().await
+    }
+
     /// Why the branch can't go on (a world program stopped), once that has happened.
     pub fn fatal(&self) -> Option<String> {
         self.fatal.lock().unwrap().clone()
@@ -226,7 +231,7 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
-        let _gate = branch.gate.lock().await;
+        let _gate = branch.gate().await;
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }

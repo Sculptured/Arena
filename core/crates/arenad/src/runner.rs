@@ -10,7 +10,7 @@ use crate::{
     exec::BranchCtx,
     model::*,
     store::{BranchId, RunId},
-    world::{self, World, WorldFrom},
+    world::{self, Plan, World, WorldFrom},
 };
 
 /// Where a branch's work starts. `notes[j]` is the recorded handoff note of agent `j`
@@ -27,6 +27,18 @@ fn new_seed() -> u64 {
     (uuid::Uuid::new_v4().as_u128() as u64) & ((1 << 53) - 1)
 }
 
+/// The benchmark has no task with this id.
+#[derive(Debug)]
+pub struct UnknownTask(pub String);
+
+impl std::fmt::Display for UnknownTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown task {}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownTask {}
+
 /// Creates a run and its first branch (its world started from the benchmark's base save),
 /// records `RunStart`, and runs the team on a spawned task. A world whose tools clash is
 /// refused before anything is recorded.
@@ -37,15 +49,15 @@ pub async fn start_run(
 ) -> Result<(RunId, BranchId)> {
     let bench = state.bench().await?;
     if !bench.tasks.iter().any(|t| t.id == task_id) {
-        return Err(anyhow!("unknown task {task_id}"));
+        return Err(UnknownTask(task_id.to_string()).into());
     }
-    world::plan(&state.hub, &bench).await?;
+    let planned = world::plan(&state.hub, &bench).await?;
     let run_id = state.store.create_run(task_id, &team).await?;
     let branch_id = state
         .store
         .create_branch(&run_id, None, &team, &json!([]), None)
         .await?;
-    let started = start_world(state, &bench, &branch_id, task_id, &team).await;
+    let started = start_world(state, &bench, planned, &branch_id, task_id, &team).await;
     let world = setup_or_infra_error(state, &branch_id, started).await?;
     let ctx = Arc::new(BranchCtx::new(
         branch_id.clone(),
@@ -74,12 +86,14 @@ pub async fn setup_or_infra_error<T>(state: &AppState, branch_id: &str, r: Resul
 async fn start_world(
     state: &AppState,
     bench: &BenchDescribe,
+    planned: Plan,
     branch_id: &str,
     task_id: &str,
     team: &Team,
 ) -> Result<World> {
     let seed = new_seed();
-    let world = World::start(state.hub.clone(), bench, branch_id, seed, WorldFrom::Base).await?;
+    let hub = state.hub.clone();
+    let world = World::start_planned(hub, bench, planned, branch_id, seed, WorldFrom::Base).await?;
     let start = json!({
         "task_id": task_id,
         "team": team,
@@ -304,6 +318,8 @@ async fn check(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<Ending> {
 async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
     let bench = state.hub.bench_describe(ctx.world.bench()).await?;
     let gold = world::ensure_gold(&state.hub, &bench, &ctx.task_id).await?;
+    // Behind the gate: no late tool call lands between the final save and the diff.
+    let _gate = ctx.gate().await;
     let final_saves = ctx.world.save_all().await?;
     let differing = ctx.world.diff_with(&gold).await?;
     let gold_db = ctx

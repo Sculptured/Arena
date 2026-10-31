@@ -415,3 +415,21 @@ fn failed_save_is_recorded() {
         teardown(fx).await;
     })
 }
+
+#[test]
+fn benchmark_naming_an_unknown_part_is_a_tool_error() {
+    run(async {
+        let bench_args = ["--bench-tool", "--tool-part", "nowhere"];
+        let root = packages::toy_world("badpart", &[], &bench_args);
+        let fx = setup_with("badpart", std::slice::from_ref(&root.0), "toybench").await;
+        let r = call(&fx, "resolver", "ring", json!({})).await;
+        assert_eq!(r["isError"], true, "{r}");
+        assert_eq!(
+            r["content"][0]["text"],
+            "the benchmark named an unknown part nowhere"
+        );
+        let p = payload(&fx, 0).await;
+        assert!(p.part.is_none() && p.saves.is_none());
+        teardown(fx).await;
+    })
+}

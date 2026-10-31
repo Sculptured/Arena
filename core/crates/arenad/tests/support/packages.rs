@@ -175,10 +175,15 @@ impl Drop for ToyRoot {
     }
 }
 
+/// The folder `toy_root(tag, ..)` makes (for files the toy programs write, like `--log`).
+pub fn toy_dir(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("arenad-toy-{tag}-{}", std::process::id()))
+}
+
 /// Toy packages (`tests/fixtures/toy.py`) in a fresh folder: `(name, kind, args)` each, run as
 /// `python3 toy.py <args..>`. Pass `.0` to `TestHub::new` as an extra root.
 pub fn toy_root(tag: &str, packages: &[(&str, &str, &[&str])]) -> ToyRoot {
-    let root = std::env::temp_dir().join(format!("arenad-toy-{tag}-{}", std::process::id()));
+    let root = toy_dir(tag);
     let _ = std::fs::remove_dir_all(&root);
     for (name, kind, args) in packages {
         let d = root.join(name);

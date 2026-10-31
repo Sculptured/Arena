@@ -15,8 +15,8 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use parts::{
     proto::{
-        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, Mode, ToolOutput, ToolSchema,
-        WorldPart,
+        BenchDescribe, BenchToolOutput, Describe, Differing, Effect, ExactKind, Mode, ToolOutput,
+        ToolSchema, WorldPart,
     },
     CallError, Client, Hub,
 };
@@ -30,12 +30,30 @@ pub use standard::{ensure_base, ensure_gold};
 /// `{part: save}`.
 pub type Saves = BTreeMap<String, String>;
 
+/// Per part: the save it starts from and how to restore it.
+pub type StartSaves = BTreeMap<String, (String, Mode)>;
+
+/// Each part restored exactly from its save.
+pub fn exact(saves: Saves) -> StartSaves {
+    saves
+        .into_iter()
+        .map(|(p, s)| (p, (s, Mode::Exact)))
+        .collect()
+}
+
 /// Where a world starts from.
 pub enum WorldFrom {
     /// The benchmark's base save (made on first use).
     Base,
     /// Per part: the save and how to restore it.
-    Saves(BTreeMap<String, (String, Mode)>),
+    Saves(StartSaves),
+}
+
+impl WorldFrom {
+    /// Each part restored exactly from its save.
+    pub fn exact(saves: Saves) -> WorldFrom {
+        WorldFrom::Saves(exact(saves))
+    }
 }
 
 /// A failed world call. `fatal` when a program has stopped: the branch can't go on.
@@ -136,22 +154,24 @@ impl World {
         seed: u64,
         from: WorldFrom,
     ) -> Result<World> {
-        let from = match from {
-            WorldFrom::Base => ensure_base(&hub, bench)
-                .await?
-                .into_iter()
-                .map(|(p, s)| (p, (s, Mode::Exact)))
-                .collect(),
-            WorldFrom::Saves(m) => m,
-        };
-        World::start_parts(hub, bench, branch_id, seed, Some(&from)).await
+        let planned = plan(&hub, bench).await?;
+        World::start_planned(hub, bench, planned, branch_id, seed, from).await
     }
 
-    /// A world with no parts and no tools (for tests and for branches whose world isn't running).
-    pub fn empty(hub: Arc<Hub>, bench: &str) -> World {
-        let mut w = World::new(hub, bench, None, vec![]);
-        w.track.get_mut().unwrap().stopped = true;
-        w
+    /// `start` with the world's `plan` already made.
+    pub async fn start_planned(
+        hub: Arc<Hub>,
+        bench: &BenchDescribe,
+        planned: Plan,
+        branch_id: &str,
+        seed: u64,
+        from: WorldFrom,
+    ) -> Result<World> {
+        let from = match from {
+            WorldFrom::Base => exact(ensure_base(&hub, bench).await?),
+            WorldFrom::Saves(m) => m,
+        };
+        World::start_parts(hub, bench, planned, branch_id, seed, Some(&from)).await
     }
 
     fn new(
@@ -177,11 +197,12 @@ impl World {
     async fn start_parts(
         hub: Arc<Hub>,
         bench: &BenchDescribe,
+        planned: Plan,
         branch_id: &str,
         seed: u64,
-        from: Option<&BTreeMap<String, (String, Mode)>>,
+        from: Option<&StartSaves>,
     ) -> Result<World> {
-        let Plan { parts, tools } = plan(&hub, bench).await?;
+        let Plan { parts, tools } = planned;
         let bench_client = hub.client(&bench.name).await?;
         let mut world = World::new(hub, &bench.name, Some(bench_client), tools);
         for p in parts {
@@ -198,7 +219,7 @@ impl World {
         p: PlannedPart,
         branch_id: &str,
         seed: u64,
-        from: Option<&BTreeMap<String, (String, Mode)>>,
+        from: Option<&StartSaves>,
     ) -> Result<()> {
         let instance = instance_id(branch_id, &p.part.part);
         let (params, save) = start_params(&p.part, &instance, seed, from)?;
@@ -331,6 +352,16 @@ impl World {
             params,
         )
         .await?;
+        if self.part(&o.part).is_err() {
+            let error = Some(format!("the benchmark named an unknown part {}", o.part));
+            return Ok(Called {
+                output: ToolOutput {
+                    error,
+                    ..Default::default()
+                },
+                part: None,
+            });
+        }
         let output = ToolOutput {
             result: o.result,
             error: o.error,
@@ -423,19 +454,16 @@ impl World {
                     p.name
                 ))
             })?;
-            let d: Value = call(
-                &p.client,
-                &p.label(),
-                "diff",
-                json!({"a": {"instance": p.instance}, "b": {"save": save}}),
-            )
-            .await?;
-            let keys: Vec<String> =
-                serde_json::from_value(d["differing"].clone()).unwrap_or_default();
-            out.extend(
-                keys.into_iter()
-                    .map(|k| if many { format!("{}:{k}", p.name) } else { k }),
-            );
+            let params = json!({"a": {"instance": p.instance}, "b": {"save": save}});
+            // A malformed answer is an error, never "nothing differs".
+            let d: Differing = call(&p.client, &p.label(), "diff", params).await?;
+            out.extend(d.differing.into_iter().map(|k| {
+                if many {
+                    format!("{}:{k}", p.name)
+                } else {
+                    k
+                }
+            }));
         }
         out.sort();
         out.dedup();
@@ -469,7 +497,7 @@ fn start_params(
     part: &WorldPart,
     instance: &str,
     seed: u64,
-    from: Option<&BTreeMap<String, (String, Mode)>>,
+    from: Option<&StartSaves>,
 ) -> Result<(Value, Option<String>)> {
     let mut params =
         json!({"instance": instance, "config": part.config, "seed": seed, "clock_ms": 0});

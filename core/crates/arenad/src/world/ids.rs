@@ -1,7 +1,6 @@
 //! Instance and save ids arenad chooses (`^[a-z0-9_]{1,63}$`): instances `b_<branch>_<part>`,
 //! saves `s_<uuid>`, base saves `base_<bench>_<version>_<part>`, gold saves `gold_<task>_<part>`.
 
-use anyhow::{bail, Result};
 use parts::proto::{valid_id, BenchDescribe};
 
 use super::Saves;
@@ -43,31 +42,29 @@ pub fn temp_branch_id() -> String {
     format!("t{}", uuid::Uuid::new_v4().simple())
 }
 
+/// `<bench>_<version>`, with `.` and `-` turned into `_`.
+fn bench_middle(bench: &BenchDescribe) -> String {
+    format!("{}_{}", bench.name, bench.version).replace(['.', '-'], "_")
+}
+
 /// The base save of each part of `bench`'s world.
 pub fn base_names(bench: &BenchDescribe) -> Saves {
-    let version = bench.version.replace(['.', '-'], "_");
-    let middle = format!("{}_{version}", bench.name.replace('-', "_"));
+    names("base", &bench_middle(bench), bench)
+}
+
+/// The gold save of each part for `task`. A task id or part that doesn't fit an id is replaced
+/// by a hash.
+pub fn gold_names(bench: &BenchDescribe, task: &str) -> Saves {
+    names("gold", &format!("{}_{task}", bench_middle(bench)), bench)
+}
+
+fn names(prefix: &str, middle: &str, bench: &BenchDescribe) -> Saves {
+    let id = |p: &str| id_for(prefix, middle, p);
     bench
         .world
         .iter()
-        .map(|p| (p.part.clone(), id_for("base", &middle, &p.part)))
+        .map(|p| (p.part.clone(), id(&p.part)))
         .collect()
-}
-
-/// The gold save of each part for `task`.
-pub fn gold_names(bench: &BenchDescribe, task: &str) -> Result<Saves> {
-    if task.is_empty()
-        || !task
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
-        bail!("bad task id {task:?}");
-    }
-    Ok(bench
-        .world
-        .iter()
-        .map(|p| (p.part.clone(), id_for("gold", task, &p.part)))
-        .collect())
 }
 
 #[cfg(test)]
@@ -115,11 +112,12 @@ mod tests {
             base_names(&bench("0.1.0-rc.1"))["retail"],
             "base_retail_0_1_0_rc_1_retail"
         );
-        assert_eq!(
-            gold_names(&bench("0.1.0"), "27").unwrap()["retail"],
-            "gold_27_retail"
-        );
-        assert!(gold_names(&bench("0.1.0"), "../x").is_err());
+        let gold = |task: &str| gold_names(&bench("0.1.0"), task)["retail"].clone();
+        assert_eq!(gold("27"), "gold_retail_0_1_0_27_retail");
+        // Other task ids are hashed, deterministically and apart from each other.
+        assert!(valid_id(&gold("../x")) && gold("../x") == gold("../x"));
+        assert_ne!(gold("../x"), gold("../y"));
+        assert!(valid_id(&gold(&"t".repeat(80))));
         let s = new_save_id();
         assert!(valid_id(&s) && s.len() == 34);
     }

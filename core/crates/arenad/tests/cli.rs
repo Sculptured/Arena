@@ -12,7 +12,6 @@ use arenad::{
     store::Store,
     world::World,
 };
-use parts::{Hub, Registry};
 use serde_json::json;
 use tokio::sync::OnceCell;
 use world::{schema::load_base, snapshot::Worlds, testing};
@@ -162,26 +161,33 @@ fn fake(script: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
-fn bare_run(resume: Option<Vec<serde_json::Value>>) -> AgentRun {
+/// A running toy world for the driver tests (CLI drivers never touch the world).
+struct ToyWorld {
+    world: Arc<World>,
+    _hub: packages::TestHub,
+    _root: packages::ToyRoot,
+}
+
+async fn toy_world(tag: &str) -> ToyWorld {
+    let root = packages::toy_world(tag, &[], &[]);
+    let hub = packages::TestHub::new(std::slice::from_ref(&root.0));
+    let world = hub.start_world("toybench", "b1").await;
+    ToyWorld {
+        world,
+        _hub: hub,
+        _root: root,
+    }
+}
+
+fn bare_run(toy: &ToyWorld, resume: Option<Vec<serde_json::Value>>) -> AgentRun {
     let team = Team {
         id: "t".into(),
         name: "T".into(),
         agents: vec![spec(None)],
     };
+    let branch = BranchCtx::new("b1".into(), toy.world.clone(), team, "task".into());
     AgentRun {
-        branch: Arc::new(BranchCtx::new(
-            "b1".into(),
-            Arc::new(World::empty(
-                Arc::new(Hub::new(
-                    Registry::default(),
-                    PathBuf::new(),
-                    PathBuf::new(),
-                )),
-                "retail",
-            )),
-            team,
-            "task".into(),
-        )),
+        branch: Arc::new(branch),
         spec: spec(None),
         input: "ticket".into(),
         resume,
@@ -191,13 +197,14 @@ fn bare_run(resume: Option<Vec<serde_json::Value>>) -> AgentRun {
 #[test]
 fn resume_is_rejected() {
     run(async {
+        let toy = toy_world("cliresume").await;
         let r = ClaudeDriver::new("http://x")
-            .run(bare_run(Some(vec![])))
+            .run(bare_run(&toy, Some(vec![])))
             .await;
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("CLI agents cannot resume mid-run"));
         let r = CodexDriver::new("http://x")
-            .run(bare_run(Some(vec![])))
+            .run(bare_run(&toy, Some(vec![])))
             .await;
         assert_eq!(r.error.as_deref(), Some("CLI agents cannot resume mid-run"));
     })
@@ -206,15 +213,16 @@ fn resume_is_rejected() {
 #[test]
 fn driver_runs_binary_and_keeps_stderr_on_failure() {
     run(async {
+        let toy = toy_world("clibinary").await;
         let mut d = ClaudeDriver::new("http://x");
         d.binary = fake("echo boom >&2; echo 'not json'; exit 3");
-        let r = d.run(bare_run(None)).await;
+        let r = d.run(bare_run(&toy, None)).await;
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("boom"));
 
         let mut d = CodexDriver::new("http://x");
         d.binary = fake("echo 'bad news' >&2; exit 2");
-        let r = d.run(bare_run(None)).await;
+        let r = d.run(bare_run(&toy, None)).await;
         let e = r.error.unwrap();
         assert!(
             e.contains("exited with code 2") && e.contains("bad news"),
@@ -223,7 +231,7 @@ fn driver_runs_binary_and_keeps_stderr_on_failure() {
 
         let mut d = ClaudeDriver::new("http://x");
         d.binary = fake("cat <<'EOF'\n{\"is_error\":false,\"result\":\"hi\",\"total_cost_usd\":0.01,\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\nEOF");
-        let r = d.run(bare_run(None)).await;
+        let r = d.run(bare_run(&toy, None)).await;
         assert!(r.ok, "{:?}", r.error);
     })
 }
@@ -231,10 +239,11 @@ fn driver_runs_binary_and_keeps_stderr_on_failure() {
 #[test]
 fn driver_times_out() {
     run(async {
+        let toy = toy_world("clitimeout").await;
         let mut d = CodexDriver::new("http://x");
         d.binary = fake("sleep 30");
         d.timeout_secs = 1;
-        let r = d.run(bare_run(None)).await;
+        let r = d.run(bare_run(&toy, None)).await;
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("timed out after 1 s"));
         assert!(r.seconds < 10.0);
