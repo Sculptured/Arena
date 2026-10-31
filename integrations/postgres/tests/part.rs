@@ -338,7 +338,7 @@ async fn conformance_check_passes() {
                 .arg(&cf)
                 .env("ARENA_BIN_DIR", a.join("core/target/debug"))
                 .env("ARENA_SAVES", &sv)
-                .env("ARENA_PG_NS", &ns2)
+                .env("ARENA_PG_URL", format!("{}?arena_ns={}", url(), ns2))
                 .output()
                 .unwrap()
         })

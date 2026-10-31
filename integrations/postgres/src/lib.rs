@@ -1,7 +1,7 @@
 //! The generic `postgres` integration: each instance is a database, each save a copy of one.
 //!
 //! Databases are `pi_<ns><instance>` and `ps_<ns><save>`. `ns` is empty unless env `ARENA_PG_NS`
-//! sets it (tests use it to keep their databases apart from everyone else's). With an empty `ns`,
+//! (or `?arena_ns=` on `ARENA_PG_URL`) sets it (tests use it to keep their databases apart from everyone else's). With an empty `ns`,
 //! ids that name an existing legacy database (`snap_*`, `branch_*`, `gold_*`, `world_base`) are
 //! used as they are, so runs recorded before saves were parts still open.
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -38,7 +38,14 @@ fn internal(e: impl std::fmt::Display) -> PartError {
 impl Postgres {
     pub fn from_env() -> Postgres {
         let url = std::env::var("ARENA_PG_URL").unwrap_or_else(|_| DEFAULT_URL.into());
-        Postgres::new(&url, &std::env::var("ARENA_PG_NS").unwrap_or_default())
+        // arenad passes `ARENA_PG_URL` on to programs but not other variables, so the namespace can
+        // also ride on the URL as `?arena_ns=<ns>`.
+        let (url, from_url) = match url.split_once("?arena_ns=") {
+            Some((u, n)) => (u.to_string(), n.to_string()),
+            None => (url, String::new()),
+        };
+        let ns = std::env::var("ARENA_PG_NS").unwrap_or(from_url);
+        Postgres::new(&url, &ns)
     }
 
     pub fn new(url: &str, ns: &str) -> Postgres {
@@ -484,8 +491,14 @@ impl Part for Postgres {
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
+        // Saves only: live instances are working copies, and the conformance check requires the
+        // figure to fall back once its saves are dropped while its instances still run.
+        let mut prefixes = vec![format!("ps_{}", self.ns)];
+        if self.ns.is_empty() {
+            prefixes.push("snap_".into());
+        }
         let mut bytes = 0i64;
-        for p in self.prefixes(true) {
+        for p in prefixes {
             for (_, s) in self.pg.list(&p).await.map_err(internal)? {
                 bytes += s;
             }
@@ -534,17 +547,5 @@ impl Part for Postgres {
     async fn connect(&self, p: IdParams) -> Result<Value, PartError> {
         let db = self.instance_db(&p.instance).await?;
         Ok(json!({"url": self.pg.db_url(&db)}))
-    }
-}
-
-impl Postgres {
-    /// Prefixes of the databases this part owns (`usage` counts all four kinds).
-    fn prefixes(&self, with_legacy: bool) -> Vec<String> {
-        let mut v = vec![format!("pi_{}", self.ns), format!("ps_{}", self.ns)];
-        if with_legacy && self.ns.is_empty() {
-            v.push("snap_".into());
-            v.push("branch_".into());
-        }
-        v
     }
 }
