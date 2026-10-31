@@ -1,0 +1,11 @@
+kind = "integration"
+name = "counter-py"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", "../..", "python", "counter.py"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = {} }
+
+[[example]]
+tool = "get"
+args = {}

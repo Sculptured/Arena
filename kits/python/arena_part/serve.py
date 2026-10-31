@@ -1,0 +1,168 @@
+"""Line protocol loop, method dispatch and id validation. Serial: one request at a time."""
+import json
+import re
+import sys
+
+from . import errors
+from .errors import PartError
+
+_ID = re.compile(r"[a-z0-9_]{1,63}")
+_ID_MSG = "instance and save ids must match [a-z0-9_]{1,63}"
+
+
+class Part:
+    """An integration: one program that holds many instances and saves of one kind of system.
+    Methods take and return plain JSON values (dicts, lists). Override what you need."""
+
+    def describe(self):
+        raise NotImplementedError("describe")
+
+    def start(self, instance, config, seed, clock_ms, from_=None):
+        raise NotImplementedError("start")
+
+    def call_tool(self, instance, name, args, clock_ms):
+        raise NotImplementedError("call_tool")
+
+    def advance(self, instance, clock_ms):
+        return {"changed": False, "events": []}
+
+    def save(self, instance, save, dir):
+        raise NotImplementedError("save")
+
+    def inspect(self, target, keys):
+        raise NotImplementedError("inspect")
+
+    def diff(self, a, b):
+        raise NotImplementedError("diff")
+
+    def drop_save(self, save):
+        raise NotImplementedError("drop_save")
+
+    def stop(self, instance):
+        raise NotImplementedError("stop")
+
+    def usage(self):
+        raise NotImplementedError("usage")
+
+    def gc(self, keep):
+        return {"dropped": 0, "bytes": 0}
+
+    def connect(self, instance):
+        raise errors.method_not_found("connect")
+
+
+def _valid_id(v) -> bool:
+    return isinstance(v, str) and _ID.fullmatch(v) is not None
+
+
+def ids_ok(params) -> bool:
+    """Every `instance`, `save`, `keep` entry (also inside target, a, b, from) must be a valid id."""
+    if not isinstance(params, dict):
+        return True
+    for k, v in params.items():
+        if k in ("instance", "save"):
+            ok = _valid_id(v)
+        elif k == "keep":
+            ok = not isinstance(v, list) or all(_valid_id(s) for s in v)
+        elif k in ("target", "a", "b", "from"):
+            ok = ids_ok(v)
+        else:
+            ok = True
+        if not ok:
+            return False
+    return True
+
+
+def _need(params, *names):
+    if not isinstance(params, dict):
+        raise errors.invalid("invalid params: expected an object")
+    missing = [n for n in names if n not in params]
+    if missing:
+        raise errors.invalid(f"invalid params: missing {', '.join(missing)}")
+    return [params[n] for n in names]
+
+
+def dispatch(part, method, params):
+    if method == "describe":
+        return part.describe()
+    if method == "start":
+        instance, config, seed, clock_ms = _need(params, "instance", "config", "seed", "clock_ms")
+        part.start(instance, config, seed, clock_ms, params.get("from"))
+        return {}
+    if method == "call_tool":
+        out = part.call_tool(*_need(params, "instance", "name", "args", "clock_ms"))
+        out = dict(out)
+        out.setdefault("reads", [])
+        out.setdefault("writes", [])
+        return out
+    if method == "advance":
+        return part.advance(*_need(params, "instance", "clock_ms"))
+    if method == "save":
+        return part.save(*_need(params, "instance", "save", "dir"))
+    if method == "inspect":
+        target, keys = _need(params, "target", "keys")
+        return part.inspect(target, keys)
+    if method == "diff":
+        return part.diff(*_need(params, "a", "b"))
+    if method == "drop_save":
+        part.drop_save(*_need(params, "save"))
+        return {}
+    if method == "stop":
+        part.stop(*_need(params, "instance"))
+        return {}
+    if method == "usage":
+        return part.usage()
+    if method == "gc":
+        return part.gc(*_need(params, "keep"))
+    if method == "connect":
+        return part.connect(*_need(params, "instance"))
+    raise errors.method_not_found(method)
+
+
+def _response(id_, out=None, err=None):
+    if err is not None:
+        return {"jsonrpc": "2.0", "id": id_, "error": {"code": err.code, "message": err.message}}
+    return {"jsonrpc": "2.0", "id": id_, "result": out}
+
+
+def _handle(part, req):
+    """Returns (id or None, response dict or None when no reply is due)."""
+    if not isinstance(req, dict):
+        return _response(None, err=PartError(-32600, "invalid request"))
+    has_id = "id" in req
+    id_ = req.get("id")
+    method = req.get("method")
+    params = req.get("params")
+    if params is None:
+        params = {}
+    try:
+        if not isinstance(method, str) or not method:
+            raise PartError(-32600, "invalid request")
+        if not ids_ok(params):
+            raise errors.invalid(_ID_MSG)
+        resp = _response(id_, dispatch(part, method, params))
+    except PartError as e:
+        resp = _response(id_, err=e)
+    except Exception as e:  # a raising handler is answered, not fatal
+        print(f"arena-part: handler failed: {e!r}", file=sys.stderr)
+        resp = _response(id_, err=errors.internal(f"internal error: {e}"))
+    return resp if has_id else None
+
+
+def serve(part, stdin=None, stdout=None):
+    """Serve a part until the input closes: read a request line, answer it, repeat."""
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+    for line in stdin:
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            req = json.loads(text)
+        except ValueError as e:
+            resp = _response(None, err=PartError(-32700, f"parse error: {e}"))
+        else:
+            resp = _handle(part, req)
+        if resp is not None:
+            stdout.write(json.dumps(resp, separators=(",", ":")) + "\n")
+            stdout.flush()
