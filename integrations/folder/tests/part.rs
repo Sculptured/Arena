@@ -304,3 +304,47 @@ fn conformance_check_passes() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// A folder with a file nobody can read, so copying it fails part way.
+fn unreadable_folder(s: &Saves) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let d = s.0.join("seed");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("a"), "a").unwrap();
+    fs::write(d.join("b"), "b").unwrap();
+    fs::set_permissions(d.join("b"), fs::Permissions::from_mode(0o000)).unwrap();
+    d
+}
+
+#[tokio::test]
+async fn failed_start_leaves_no_folder() {
+    let s = Saves::new("failstart");
+    let p = s.part();
+    let seed = unreadable_folder(&s);
+    assert!(p
+        .start(start("a", json!({"root": seed}), None))
+        .await
+        .is_err());
+    assert!(!s.0.join("folder/.live/a").exists());
+}
+
+#[tokio::test]
+async fn failed_save_leaves_no_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Saves::new("failsave");
+    let p = s.part();
+    p.start(start("a", json!({}), None)).await.unwrap();
+    write(&p, "a", "a", "a").await;
+    write(&p, "a", "b", "b").await;
+    let live = s.0.join("folder/.live/a/b");
+    fs::set_permissions(&live, fs::Permissions::from_mode(0o000)).unwrap();
+    let dir = s.save_dir("s1");
+    let params = SaveParams {
+        instance: "a".into(),
+        save: "s1".into(),
+        dir: dir.to_string_lossy().into(),
+    };
+    assert!(p.save(params).await.is_err());
+    assert!(!dir.exists());
+    assert!(p.drop_save(SaveId { save: "s1".into() }).await.is_ok());
+}

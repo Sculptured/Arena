@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use arena_part::helpers::compose::Project;
+use arena_part::helpers::folder;
 
 /// A running instance: its project and the volumes a save holds.
 #[derive(Debug, Clone)]
@@ -27,17 +28,21 @@ pub fn export_all(inst: &Instance, into: &Path) -> Result<u64> {
     Ok(bytes)
 }
 
-/// Writes every volume to `dir`, exactly as it is; returns the bytes written. The project is
-/// stopped meanwhile and started again, also when copying fails.
+/// Writes every volume to `dir`, exactly as it is; returns the bytes written. A start is always
+/// attempted after the stop, whatever happened, and the first error is returned. A failed save
+/// leaves no folder behind.
 pub fn save_all(inst: &Instance, dir: &Path) -> Result<u64> {
-    inst.project.stop()?;
-    let copied = std::fs::create_dir_all(dir)
-        .map_err(Into::into)
-        .and_then(|()| export_all(inst, dir));
+    let stopped = inst.project.stop();
+    let copied = stopped.and_then(|()| {
+        std::fs::create_dir_all(dir)?;
+        export_all(inst, dir)
+    });
     let started = inst.project.start();
-    let bytes = copied?;
-    started?;
-    Ok(bytes)
+    let saved = copied.and_then(|bytes| started.map(|()| bytes));
+    if saved.is_err() {
+        folder::discard(dir);
+    }
+    saved
 }
 
 /// Creates the project's volumes, fills them from the archives in `save`, and starts the project.

@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use arena_part::helpers::compose::{valid_volume, DEFAULT_HELPER};
+use arena_part::helpers::compose::{valid_image, valid_volume, DEFAULT_HELPER};
 use arena_part::PartError;
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,8 +30,11 @@ impl Config {
                 c.compose_file
             )));
         }
-        match c.volumes.iter().find(|v| !valid_volume(v)) {
-            Some(v) => Err(PartError::invalid(format!("{v:?} is not a volume name"))),
+        if let Some(v) = c.volumes.iter().find(|v| !valid_volume(v)) {
+            return Err(PartError::invalid(format!("{v:?} is not a volume name")));
+        }
+        match c.helper_image.as_deref().filter(|i| !valid_image(i)) {
+            Some(i) => Err(PartError::invalid(format!("{i:?} is not an image name"))),
             None => Ok(c),
         }
     }

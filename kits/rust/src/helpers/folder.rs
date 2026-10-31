@@ -30,6 +30,11 @@ pub fn restore(save: &Path, dst: &Path) -> io::Result<()> {
     copy_tree(save, dst, None).map(|_| ())
 }
 
+/// Removes a folder left half written by a failed save or start (errors are ignored).
+pub fn discard(dir: &Path) {
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Bytes of the files under `path`, recursively (0 when it doesn't exist).
 pub fn size(path: &Path) -> u64 {
     let Ok(rd) = fs::read_dir(path) else {
@@ -98,6 +103,7 @@ fn copy_tree(src: &Path, dst: &Path, prev: Option<&Path>) -> io::Result<u64> {
             copy_file(&s, &d, p.as_deref())?
         };
     }
+    fs::set_permissions(dst, fs::metadata(src)?.permissions())?; // last: it may forbid writing
     Ok(written)
 }
 

@@ -28,6 +28,14 @@ pub fn valid_volume(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// An image name or reference: not empty, no leading `-`, only `[A-Za-z0-9._/:@-]`.
+pub fn valid_image(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/:@-".contains(&b))
+}
+
 #[derive(Debug, Clone)]
 pub struct Project {
     name: String,
@@ -70,18 +78,26 @@ impl Project {
     }
 
     /// Moves volumes through `image` instead of the default helper.
-    pub fn with_helper(mut self, image: &str) -> Project {
+    pub fn with_helper(mut self, image: &str) -> Result<Project> {
+        if !valid_image(image) {
+            bail!("{image:?} is not an image name");
+        }
         self.helper = image.into();
-        self
+        Ok(self)
+    }
+
+    /// A `docker` command with the project's environment (and never `COMPOSE_PROJECT_NAME`).
+    fn docker(&self) -> Command {
+        let mut cmd = Command::new("docker");
+        cmd.env_remove("COMPOSE_PROJECT_NAME").envs(&self.env);
+        cmd
     }
 
     fn compose(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new("docker");
+        let mut cmd = self.docker();
         cmd.args(["compose", "-p", &self.name, "-f"])
             .arg(&self.compose_file)
-            .args(args)
-            .env_remove("COMPOSE_PROJECT_NAME")
-            .envs(&self.env);
+            .args(args);
         cmd
     }
 
@@ -118,7 +134,7 @@ impl Project {
 
     fn helper_tar(&self, volume: &str, flags: &[&str], interactive: bool) -> Result<Command> {
         let mount = format!("{}:/v", self.volume_name(volume)?);
-        let mut cmd = Command::new("docker");
+        let mut cmd = self.docker();
         cmd.args(["run", "--rm", "--pull", "never", "--network", "none"]);
         if interactive {
             cmd.arg("-i");
@@ -152,6 +168,8 @@ mod tests {
     #[test]
     fn names_are_checked() {
         assert!(valid_volume("data") && valid_volume("pg-data_1"));
+        assert!(valid_image("redis:6.2-alpine") && valid_image("ghcr.io/a/b@sha256"));
+        assert!(!valid_image("") && !valid_image("-v") && !valid_image("a b"));
         assert!(!valid_volume("../x") && !valid_volume("a b") && !valid_volume(""));
         let p = |n| Project::new(n, Path::new("c.yml"), &BTreeMap::new());
         assert!(p("arena_t1").is_ok());

@@ -91,3 +91,41 @@ fn digest_sees_content_and_names() {
 fn size_of_missing_is_zero() {
     assert_eq!(size(Path::new("/nonexistent/arena_kit")), 0);
 }
+
+#[test]
+fn copies_keep_folder_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = Tmp::new("modes");
+    let (live, s1, back) = (t.0.join("live"), t.0.join("s1"), t.0.join("back"));
+    put(&live, "locked/f", "x");
+    fs::set_permissions(live.join("locked"), fs::Permissions::from_mode(0o550)).unwrap();
+    copy_save(&live, &s1, None).unwrap();
+    restore(&s1, &back).unwrap();
+    for dir in [&s1, &back] {
+        let mode = fs::metadata(dir.join("locked"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o550);
+    }
+    for dir in [&live, &s1, &back] {
+        fs::set_permissions(dir.join("locked"), fs::Permissions::from_mode(0o750)).unwrap();
+    }
+}
+
+#[test]
+fn sweep_removes_only_stale_folders() {
+    use arena_part::helpers::temp_dir::{sweep_stale, TempDir};
+    use std::time::{Duration, SystemTime};
+    let t = Tmp::new("sweep");
+    let (old, fresh) = (t.0.join("old"), t.0.join("fresh"));
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&fresh).unwrap();
+    let day = SystemTime::now() - Duration::from_secs(86400);
+    fs::File::open(&old).unwrap().set_modified(day).unwrap();
+    sweep_stale(&t.0, Duration::from_secs(3600));
+    assert!(!old.exists() && fresh.exists());
+    let scratch = TempDir::new_in(&t.0, "x").unwrap();
+    assert!(scratch.path().is_dir());
+    sweep_stale(&t.0.join("missing"), Duration::ZERO);
+}

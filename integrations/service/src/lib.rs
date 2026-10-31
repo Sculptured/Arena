@@ -31,23 +31,23 @@ pub struct Service {
     live: Live,
 }
 
-fn internal(e: impl std::fmt::Display) -> PartError {
-    PartError::internal(format!("{e:#}"))
-}
-
 /// Runs `f` on a thread of its own: Docker calls take seconds.
 async fn blocking<T, F>(f: F) -> Result<T, PartError>
 where
     F: FnOnce() -> Result<T, PartError> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await.map_err(internal)?
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(PartError::internal_from)?
 }
 
 impl Service {
     /// Saves under env `ARENA_SAVES`.
     pub fn from_env() -> Service {
-        Service::with(SaveDirs::new(PACKAGE))
+        let saves = SaveDirs::new(PACKAGE);
+        saves.sweep_scratch();
+        Service::with(saves)
     }
 
     /// Saves in `package_folder` (`<ARENA_SAVES>/service`).
@@ -77,19 +77,16 @@ impl Service {
             .ok_or_else(|| PartError::unknown(format!("no save {save}")))
     }
 
-    fn scratch(&self) -> PathBuf {
-        self.saves.root().join(".tmp")
-    }
-
     /// The digests of a target's volumes: a save's folders, or a copy of a live instance's volumes.
     async fn digests(&self, t: &Target) -> Result<view::DigestMap, PartError> {
         match t {
             Target::Save { save } => view::digests(&self.save_dir(save)?),
             Target::Instance { instance } => {
-                let (inst, scratch) = (self.instance(instance)?, self.scratch());
+                let (inst, scratch) = (self.instance(instance)?, self.saves.scratch());
                 blocking(move || {
-                    let tmp = TempDir::new_in(&scratch, "inspect").map_err(internal)?;
-                    volumes::export_all(&inst, tmp.path()).map_err(internal)?;
+                    let tmp =
+                        TempDir::new_in(&scratch, "inspect").map_err(PartError::internal_from)?;
+                    volumes::export_all(&inst, tmp.path()).map_err(PartError::internal_from)?;
                     view::digests(tmp.path())
                 })
                 .await
@@ -101,9 +98,13 @@ impl Service {
 /// The instance `id` with `config`, its project not yet run.
 fn new_instance(id: &str, config: &Config) -> Result<Instance, PartError> {
     let name = format!("arena_{id}");
-    let project = Project::new(&name, &config.compose_file, &config.env).map_err(internal)?;
+    let project =
+        Project::new(&name, &config.compose_file, &config.env).map_err(PartError::internal_from)?;
+    let project = project
+        .with_helper(config.helper())
+        .map_err(PartError::internal_from)?;
     Ok(Instance {
-        project: project.with_helper(config.helper()),
+        project,
         volumes: config.volumes.clone(),
     })
 }
@@ -119,7 +120,7 @@ fn bring_up(inst: &Instance, save: Option<&Path>) -> Result<(), PartError> {
     };
     start().map_err(|e| {
         let _ = inst.project.down_with_volumes();
-        internal(e)
+        PartError::internal_from(e)
     })
 }
 
@@ -146,8 +147,16 @@ impl Part for Service {
             Some(f) => Some(self.save_dir(&f.save)?),
             None => None,
         };
-        blocking(move || bring_up(&inst, from.as_deref())).await?;
-        self.live.record(&p.instance, &p.config).map_err(internal)
+        // recorded first, so a project that comes up is never unknown to a restarted program
+        let id = &p.instance;
+        self.live
+            .record(id, &p.config)
+            .map_err(PartError::internal_from)?;
+        let up = blocking(move || bring_up(&inst, from.as_deref())).await;
+        if up.is_err() {
+            self.live.forget(id);
+        }
+        up
     }
 
     async fn call_tool(&self, p: CallToolParams) -> Result<ToolOutput, PartError> {
@@ -162,7 +171,9 @@ impl Part for Service {
         let inst = self.instance(&p.instance)?;
         let dir = PathBuf::from(&p.dir);
         let to = dir.clone();
-        let bytes = blocking(move || volumes::save_all(&inst, &to).map_err(internal)).await?;
+        let bytes =
+            blocking(move || volumes::save_all(&inst, &to).map_err(PartError::internal_from))
+                .await?;
         self.saves.note(&p.save, &dir);
         Ok(Saved { bytes, exact: true })
     }
@@ -179,12 +190,17 @@ impl Part for Service {
     }
 
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {
-        self.saves.remove(&p.save).map_err(internal)
+        self.saves.remove(&p.save).map_err(PartError::internal_from)
     }
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
         let inst = self.instance(&p.instance)?;
-        blocking(move || inst.project.down_with_volumes().map_err(internal)).await?;
+        blocking(move || {
+            inst.project
+                .down_with_volumes()
+                .map_err(PartError::internal_from)
+        })
+        .await?;
         self.live.forget(&p.instance);
         Ok(())
     }

@@ -31,14 +31,12 @@ pub struct Folder {
     live: Mutex<HashMap<String, Instance>>,
 }
 
-fn internal(e: impl std::fmt::Display) -> PartError {
-    PartError::internal(e.to_string())
-}
-
 impl Folder {
     /// Saves under env `ARENA_SAVES`.
     pub fn from_env() -> Folder {
-        Folder::with(SaveDirs::new(PACKAGE))
+        let saves = SaveDirs::new(PACKAGE);
+        saves.sweep_scratch();
+        Folder::with(saves)
     }
 
     /// Saves in `package_folder` (`<ARENA_SAVES>/folder`).
@@ -81,14 +79,15 @@ impl Folder {
     /// Fills `dir` from a save, from the `root` the config names, or leaves it empty.
     fn fill(&self, dir: &Path, p: &StartParams) -> Result<(), PartError> {
         if let Some(from) = &p.from {
-            return folder::restore(&self.save_dir(&from.save)?, dir).map_err(internal);
+            return folder::restore(&self.save_dir(&from.save)?, dir)
+                .map_err(PartError::internal_from);
         }
         match p.config.get("root").and_then(Value::as_str) {
             Some(seed) if Path::new(seed).is_dir() => {
-                folder::restore(Path::new(seed), dir).map_err(internal)
+                folder::restore(Path::new(seed), dir).map_err(PartError::internal_from)
             }
             Some(seed) => Err(PartError::invalid(format!("root {seed:?} is not a folder"))),
-            None => std::fs::create_dir_all(dir).map_err(internal),
+            None => std::fs::create_dir_all(dir).map_err(PartError::internal_from),
         }
     }
 }
@@ -112,8 +111,11 @@ impl Part for Folder {
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
         let dir = self.live_root.join(&p.instance);
-        let _ = std::fs::remove_dir_all(&dir);
-        self.fill(&dir, &p)?;
+        folder::discard(&dir);
+        if let Err(e) = self.fill(&dir, &p) {
+            folder::discard(&dir);
+            return Err(e);
+        }
         let prev_save = p.from.as_ref().and_then(|f| self.saves.find(&f.save));
         self.instances()
             .insert(p.instance, Instance { dir, prev_save });
@@ -132,7 +134,10 @@ impl Part for Folder {
             .get(&p.instance)
             .and_then(|i| i.prev_save.clone());
         let to = PathBuf::from(&p.dir);
-        let bytes = folder::copy_save(&dir, &to, prev.as_deref()).map_err(internal)?;
+        let bytes = folder::copy_save(&dir, &to, prev.as_deref()).map_err(|e| {
+            folder::discard(&to); // no half-written save
+            PartError::internal_from(e)
+        })?;
         self.saves.note(&p.save, &to);
         if let Some(i) = self.instances().get_mut(&p.instance) {
             i.prev_save = Some(to);
@@ -152,13 +157,22 @@ impl Part for Folder {
     }
 
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {
-        self.saves.remove(&p.save).map_err(internal)
+        self.saves.remove(&p.save).map_err(PartError::internal_from)
     }
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
         let dir = self.instance_dir(&p.instance)?;
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(PartError::internal_from(format!(
+                    "cannot remove {dir:?}: {e}"
+                )));
+            }
+        }
         self.instances().remove(&p.instance);
-        std::fs::remove_dir_all(dir).map_err(internal)
+        Ok(())
     }
 
     /// Everything the part keeps is inside `ARENA_SAVES`, which arenad measures.

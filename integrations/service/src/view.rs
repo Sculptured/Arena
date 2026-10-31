@@ -8,10 +8,6 @@ use arena_part::proto::Docs;
 use arena_part::PartError;
 use serde_json::{json, Map, Value};
 
-fn internal(e: impl std::fmt::Display) -> PartError {
-    PartError::internal(e.to_string())
-}
-
 /// The key a volume has in `inspect` and `diff`.
 pub fn volume_key(volume: &str) -> String {
     format!("volume/{volume}")
@@ -20,8 +16,8 @@ pub fn volume_key(volume: &str) -> String {
 /// The digest of every volume archive (`<volume>.tar`) in `root` (a save, or a live export), by key.
 pub fn digests(root: &Path) -> Result<DigestMap, PartError> {
     let mut out = BTreeMap::new();
-    for entry in std::fs::read_dir(root).map_err(internal)? {
-        let path = entry.map_err(internal)?.path();
+    for entry in std::fs::read_dir(root).map_err(PartError::internal_from)? {
+        let path = entry.map_err(PartError::internal_from)?.path();
         let Some(volume) = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -31,7 +27,7 @@ pub fn digests(root: &Path) -> Result<DigestMap, PartError> {
         };
         out.insert(
             volume_key(volume),
-            tar_digest::digest(&path).map_err(internal)?,
+            tar_digest::digest(&path).map_err(PartError::internal_from)?,
         );
     }
     Ok(out)

@@ -35,6 +35,10 @@ impl PartError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(-32603, message)
     }
+    /// -32603 from any error, with its causes (`{e:#}`).
+    pub fn internal_from(e: impl fmt::Display) -> Self {
+        Self::internal(format!("{e:#}"))
+    }
     /// -32601: method not found.
     pub fn method_not_found(method: &str) -> Self {
         Self::new(-32601, format!("method not found: {method}"))
