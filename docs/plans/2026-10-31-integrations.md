@@ -279,7 +279,7 @@
 
 The user asked (2026-10-31) that the code stay modular, DRY and in short functions. `arena/AGENTS.md` and `arena/clippy.toml` (threshold 30) now say so.
 
-**Files:** non-test code in `kits/rust`, `kits/python`, `core/crates/parts`, `integrations/postgres` and `benchmarks/retail` (including the copied `tools.rs`), plus `[lints]` wiring.
+**Files:** non-test code in `kits/rust`, `kits/python`, `core/crates/parts`, `core/crates/arenad` (pre-existing long functions such as `fork::plan_fork`, `main`, `mcp::handle`, `open::drive`, `parts::client::spawn_with_env`), `integrations/postgres` and `benchmarks/retail` (including the copied `tools.rs`), plus `[lints]` wiring.
 
 - [ ] **Step 1:** Add `[workspace.lints.clippy] too_many_lines = "warn"` to `arena/Cargo.toml` and `[lints] workspace = true` to every package crate. Task 7 does the same for `core`.
 - [ ] **Step 2:** List the functions over 30 lines with `cargo clippy --all-targets -- -W clippy::too_many_lines` in both workspaces. Refactor each into helpers around real responsibilities. Remove duplicated logic. Behaviour stays identical: the existing tests are the proof (`benchmarks/retail`'s 68-task gold sweep covers `tools.rs`).
