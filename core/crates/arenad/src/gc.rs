@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use parts::{
-    proto::{GcResult, WorldPart},
+    proto::{kept, GcResult, WorldPart},
     Hub,
 };
 
@@ -14,7 +14,7 @@ use crate::{
     recorded::{named_saves, NamedSave},
     saves::{self, integration_of, integrations, world_of},
     store::Store,
-    world::{base_names, gold_names, instance_id},
+    world::instance_id,
 };
 
 /// Bytes the arena keeps: the `usage` of each integration `benchmark`'s world uses, plus the
@@ -27,9 +27,12 @@ pub async fn usage(hub: &Hub, benchmark: &str) -> Result<u64> {
     Ok(bytes)
 }
 
+/// The shared saves of every benchmark and version, as `gc` keep prefixes.
+const SHARED_KEEP: [&str; 2] = ["base_*", "gold_*"];
+
 /// The shared saves every run starts from or is checked against: never dropped with a run.
 fn is_shared(save: &str) -> bool {
-    save.starts_with("base_") || save.starts_with("gold_")
+    kept(&SHARED_KEEP, save)
 }
 
 /// Per integration, what deleting a run frees: the saves to drop and the instances to stop.
@@ -78,13 +81,14 @@ pub async fn delete_run(store: &Store, hub: &Hub, run_id: &str) -> Result<usize>
     Ok(drop_doomed(hub, &doomed, run_id).await)
 }
 
-/// Drops the saves and stops the instances; failures are logged. The number of saves dropped.
+/// Drops the saves and stops the instances; failures are logged. The number of saves dropped
+/// (a save that was already gone doesn't count).
 async fn drop_doomed(hub: &Hub, doomed: &Doomed, run_id: &str) -> usize {
     let mut dropped = 0;
     for (integration, list) in &doomed.saves {
         for save in list {
             match saves::drop_save(hub, integration, save).await {
-                Ok(()) => dropped += 1,
+                Ok(existed) => dropped += usize::from(existed),
                 Err(e) => eprintln!("delete run {run_id}: could not drop {save}: {e:#}"),
             }
         }
@@ -99,8 +103,8 @@ async fn drop_doomed(hub: &Hub, doomed: &Doomed, run_id: &str) -> usize {
     dropped
 }
 
-/// Every save the store's events name, plus the base and gold saves of `benchmark`.
-async fn keep_list(store: &Store, hub: &Hub, benchmark: &str) -> Result<Vec<String>> {
+/// Every save the store's events name, plus the base and gold saves of every benchmark.
+async fn keep_list(store: &Store) -> Result<Vec<String>> {
     let mut by_branch: BTreeMap<String, Vec<Event>> = BTreeMap::new();
     for e in store.events_naming_saves().await? {
         by_branch.entry(e.branch_id.clone()).or_default().push(e);
@@ -110,19 +114,15 @@ async fn keep_list(store: &Store, hub: &Hub, benchmark: &str) -> Result<Vec<Stri
         .flat_map(|(b, events)| named_saves(b, events))
         .map(|n| n.save)
         .collect();
-    let bench = hub.bench_describe(benchmark).await?;
-    keep.extend(base_names(&bench).into_values());
-    for t in &bench.tasks {
-        keep.extend(gold_names(&bench, &t.id).into_values());
-    }
+    keep.extend(SHARED_KEEP.map(String::from));
     Ok(keep.into_iter().collect())
 }
 
 /// Asks each integration `benchmark`'s world uses to drop the saves no event names (and its
-/// instances, none of which runs yet). Integrations without `gc` are skipped; a failing one is
-/// logged. Logs `gc: dropped N saves (X MB)`.
+/// instances, none of which runs yet), and removes the save folders not kept. Integrations
+/// without `gc` are skipped; a failing one is logged. Logs `gc: dropped N saves (X MB)`.
 pub async fn run_startup_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcResult> {
-    let keep = keep_list(store, hub, benchmark).await?;
+    let keep = keep_list(store).await?;
     let mut total = GcResult::default();
     for i in integrations(hub, benchmark).await? {
         match saves::gc(hub, &i, &keep).await {

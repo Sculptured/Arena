@@ -538,3 +538,31 @@ async fn legacy_drop_save_drops_snap_and_branch_only() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn gc_keep_prefix_keeps_matching_saves() {
+    let ns = ns();
+    let n = ns.clone();
+    with_cleanup(&ns, &[], move || async move {
+        let p = Postgres::new(&url(), &n).with_sql_tools();
+        p.start(start("i", cfg(), None)).await.unwrap();
+        save(&p, "i", "gold_x").await;
+        save(&p, "i", "s_toss").await;
+        p.stop(IdParams {
+            instance: "i".into(),
+        })
+        .await
+        .unwrap();
+        let r = p
+            .gc(GcParams {
+                keep: vec!["gold_*".into()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.dropped, 1, "{r:?}");
+        let t = Templates::new(&url());
+        assert!(t.exists(&format!("ps_{n}gold_x")).await.unwrap());
+        assert!(!t.exists(&format!("ps_{n}s_toss")).await.unwrap());
+    })
+    .await;
+}

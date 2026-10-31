@@ -527,13 +527,14 @@ struct GcKind {
 }
 
 impl GcKind {
-    fn is_kept(&self, name: &str, keep: &HashSet<&str>, live: &HashSet<String>) -> bool {
+    /// Kept when `keep` names its id (an entry ending in `*` is a prefix), or a live instance.
+    fn is_kept(&self, name: &str, keep: &[String], live: &HashSet<String>) -> bool {
         let id = if self.strip {
             &name[self.prefix.len()..]
         } else {
             name
         };
-        keep.contains(id) || (self.instance && live.contains(name))
+        kept(keep, id) || (self.instance && live.contains(name))
     }
 }
 
@@ -711,12 +712,11 @@ impl Part for Postgres {
     }
 
     async fn gc(&self, p: GcParams) -> Result<GcResult, PartError> {
-        let keep: HashSet<&str> = p.keep.iter().map(String::as_str).collect();
         let live: HashSet<String> = self.live.lock().unwrap().clone();
         let mut doomed = vec![];
         for kind in self.gc_kinds() {
             for (name, size) in self.pg.list(&kind.prefix).await.map_err(internal)? {
-                if !kind.is_kept(&name, &keep, &live) {
+                if !kind.is_kept(&name, &p.keep, &live) {
                     doomed.push((name, size));
                 }
             }

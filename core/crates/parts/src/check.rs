@@ -404,14 +404,16 @@ impl Run<'_> {
         Ok(format!("usage {usage_before} -> {after} bytes"))
     }
 
+    /// What the part keeps: its `usage` (outside the save storage) plus its save folders.
     async fn usage(&self) -> Res<u64> {
         let v = self
             .call("usage", json!({}))
             .await
             .map_err(|e| format!("usage: {e}"))?;
-        v["bytes"]
+        let own = v["bytes"]
             .as_u64()
-            .ok_or_else(|| "usage gave no bytes".into())
+            .ok_or_else(|| "usage gave no bytes".to_string())?;
+        Ok(own + self.hub.package_saves_bytes(&self.package))
     }
 
     async fn restore_step(&mut self, d: &Describe, config: &Value) -> Res<String> {

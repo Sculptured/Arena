@@ -60,7 +60,15 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
 }
 
 async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
-    let hub = TestHub::new(&[]);
+    setup_on(tag, TestHub::new(&[]), upstream, tweak).await
+}
+
+async fn setup_on(
+    tag: &str,
+    hub: TestHub,
+    upstream: &FakeUpstream,
+    tweak: impl FnOnce(&mut Config),
+) -> Fx {
     let (store, clean) = app_support::meta_store("api", tag).await;
     let (state, base) =
         app_support::open_app(store, hub.hub.clone(), &upstream.base_url, tweak).await;
@@ -418,6 +426,27 @@ async fn bad_rows_requests(fx: &Fx, b: &str, seq: i64) {
     }
 }
 
+/// The order and the user just before the gold write, after it, and after the wrong write.
+async fn assert_rows_at_steps(fx: &Fx, b: &str, [s_gold, s_wrong]: [i64; 2]) {
+    let keys = format!("orders/%23W7181492,users/{USER},users/nobody");
+    let at = async |seq: i64, extra: &str| fx.get(&rows_path(b, seq, &keys, extra)).await;
+    let doc = |v: &Value, key: &str, field: &str| v["rows"][key]["doc"][field].clone();
+    let (order, user) = (format!("orders/{ORDER}"), format!("users/{USER}"));
+    let (st, v) = at(s_gold - 1, "").await;
+    assert_eq!((st, &v["seq"]), (200, &json!(s_gold - 1)), "{v}");
+    assert_eq!(doc(&v, &order, "status"), "delivered", "{v}");
+    assert!(v["rows"]["users/nobody"].is_null());
+    let addr_before = doc(&v, &user, "address")["address1"].clone();
+    assert!(addr_before.is_string(), "{v}");
+    let (_, v) = at(s_gold, "").await;
+    assert_eq!(doc(&v, &order, "status"), "exchange requested");
+    assert_eq!(doc(&v, &user, "address")["address1"], addr_before);
+    let (st, v) = at(s_wrong, "&part=retail").await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(doc(&v, &user, "address")["address1"], "1 Wrong St");
+    assert_eq!(doc(&v, &order, "status"), "exchange requested");
+}
+
 /// Rows are read with `inspect` from the save holding the part's state after the step.
 #[test]
 fn rows_via_inspect_before_after() {
@@ -428,25 +457,7 @@ fn rows_via_inspect_before_after() {
         let b = fx.run_to_end("27", &solo()).await;
         let s_gold = seq_of(&fx, &b, "exchange_delivered_order_items").await;
         let s_wrong = seq_of(&fx, &b, "modify_user_address").await;
-        let keys = format!("orders/%23W7181492,users/{USER},users/nobody");
-        let (order, user) = (format!("orders/{ORDER}"), format!("users/{USER}"));
-        let at = async |seq: i64, extra: &str| fx.get(&rows_path(&b, seq, &keys, extra)).await;
-
-        let (st, v) = at(s_gold - 1, "").await;
-        assert_eq!((st, &v["seq"]), (200, &json!(s_gold - 1)), "{v}");
-        assert_eq!(v["rows"][&order]["doc"]["status"], "delivered", "{v}");
-        assert!(v["rows"]["users/nobody"].is_null());
-        let addr_before = v["rows"][&user]["doc"]["address"]["address1"].clone();
-        assert!(addr_before.is_string(), "{v}");
-
-        let (_, v) = at(s_gold, "").await;
-        assert_eq!(v["rows"][&order]["doc"]["status"], "exchange requested");
-        assert_eq!(v["rows"][&user]["doc"]["address"]["address1"], addr_before);
-
-        let (st, v) = at(s_wrong, "&part=retail").await;
-        assert_eq!(st, 200, "{v}");
-        assert_eq!(v["rows"][&user]["doc"]["address"]["address1"], "1 Wrong St");
-        assert_eq!(v["rows"][&order]["doc"]["status"], "exchange requested");
+        assert_rows_at_steps(&fx, &b, [s_gold, s_wrong]).await;
         bad_rows_requests(&fx, &b, s_gold).await;
         teardown(fx, &[&b]).await;
     })
@@ -622,5 +633,137 @@ fn api_rejects_foreign_host_headers() {
             assert_eq!(r.status().as_u16(), want, "host {host}");
         }
         drop(fx.state);
+    })
+}
+
+// ---------------------------------------------------------------- hand-made toy worlds
+
+/// An app whose hub also has the toy integration `toy-<tag>`, for branches recorded by hand.
+struct Toy {
+    fx: Fx,
+    part: String,
+    _root: packages::ToyRoot,
+}
+
+async fn toy(tag: &str) -> Toy {
+    let up = FakeUpstream::start(vec![]).await;
+    let root = packages::toy_world(tag, &[], &[]);
+    let hub = TestHub::new(std::slice::from_ref(&root.0));
+    let fx = setup_on(tag, hub, &up, |_| {}).await;
+    let part = format!("toy-{tag}");
+    Toy {
+        fx,
+        part,
+        _root: root,
+    }
+}
+
+impl Toy {
+    /// A toy save `save` whose counter is `n`.
+    async fn save(&self, save: &str, n: usize) {
+        let c = self.fx.state.hub.client(&self.part).await.unwrap();
+        let start = json!({"instance": "mk", "config": {}, "seed": 0, "clock_ms": 0});
+        c.call::<Value>("start", start).await.unwrap();
+        let poke = json!({"instance": "mk", "name": "poke", "args": {}, "clock_ms": 0});
+        for _ in 0..n {
+            c.call::<Value>("call_tool", poke.clone()).await.unwrap();
+        }
+        let dir = self.fx.state.hub.save_dir(&self.part, save);
+        let params = json!({"instance": "mk", "save": save, "dir": dir});
+        c.call::<Value>("save", params).await.unwrap();
+    }
+
+    /// A finished branch: a `RunStart` of a world of toy `parts` starting from `base`, then
+    /// `events`. Its id.
+    async fn branch(&self, parts: &[&str], base: Value, events: Vec<(EventKind, Value)>) -> String {
+        let store = &self.fx.state.store;
+        let run_id = store.create_run("t1", &team()).await.unwrap();
+        let b = store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
+        let world: Vec<Value> = parts
+            .iter()
+            .map(|p| json!({"part": p, "integration": self.part, "config": {}}))
+            .collect();
+        let start = json!({"benchmark": "toybench", "world": world, "seed": 0, "saves": base});
+        store
+            .append(&b, None, EventKind::RunStart, start)
+            .await
+            .unwrap();
+        for (kind, payload) in events {
+            store.append(&b, None, kind, payload).await.unwrap();
+        }
+        store
+            .set_status(&b, BranchStatus::Passed, None)
+            .await
+            .unwrap();
+        b
+    }
+}
+
+fn poked(save: &str) -> (EventKind, Value) {
+    let p = json!({"name": "poke", "error": null, "writes": ["box/n"], "part": "box", "saves": {"box": save}});
+    (EventKind::ToolCall, p)
+}
+
+/// The part's refusal of a key (`-32602`) is a 400 with its message; a save that is gone a 409.
+#[test]
+fn rows_part_errors_are_400_and_409() {
+    run(async {
+        let t = toy("rowserr").await;
+        t.save("s_t1", 1).await;
+        let b = t
+            .branch(
+                &["box"],
+                json!({"box": "s_t1"}),
+                vec![poked("s_t1"), poked("s_gone")],
+            )
+            .await;
+        let (st, v) = t.fx.get(&rows_path(&b, 2, "box/n", "")).await;
+        assert_eq!((st, &v["rows"]["box/n"]["n"]), (200, &json!(1)), "{v}");
+        let (st, v) = t.fx.get(&rows_path(&b, 2, "bad/x", "")).await;
+        assert_eq!(
+            (st, v["error"].as_str()),
+            (400, Some("the toy has no bad keys"))
+        );
+        let (st, v) = t.fx.get(&rows_path(&b, 3, "box/n", "")).await;
+        assert_eq!(
+            (st, v["error"].as_str()),
+            (409, Some("the saved state for that step is gone"))
+        );
+    })
+}
+
+fn checked(final_saves: Value) -> (EventKind, Value) {
+    (
+        EventKind::Check,
+        json!({"passed": true, "differing_rows": [], "final_saves": final_saves}),
+    )
+}
+
+/// In a world of two parts, differing keys are prefixed `part:`; a branch without a final save
+/// of a part can't be compared (409).
+#[test]
+fn compare_prefixes_keys_in_a_two_part_world() {
+    run(async {
+        let t = toy("twoparts").await;
+        for (save, n) in [("s_a1", 1), ("s_a2", 2), ("s_b", 0)] {
+            t.save(save, n).await;
+        }
+        let base = json!({"a": "s_b", "b": "s_b"});
+        let branch = async |end: Value| {
+            t.branch(&["a", "b"], base.clone(), vec![checked(end)])
+                .await
+        };
+        let x = branch(json!({"a": "s_a1", "b": "s_b"})).await;
+        let y = branch(json!({"a": "s_a2", "b": "s_b"})).await;
+        let z = branch(json!({"a": "s_a1"})).await;
+        let (st, v) = t.fx.get(&format!("/api/compare?a={x}&b={y}")).await;
+        assert_eq!(st, 200, "{v}");
+        let want = json!([{"key": "a:box/n", "a": {"n": 1}, "b": {"n": 2}}]);
+        assert_eq!(v["differing_rows"], want);
+        let (st, v) = t.fx.get(&format!("/api/compare?a={x}&b={z}")).await;
+        assert_eq!(st, 409, "{v}");
     })
 }

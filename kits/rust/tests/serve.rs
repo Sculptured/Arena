@@ -169,6 +169,15 @@ async fn bad_instance_id_is_32602() {
 }
 
 #[tokio::test]
+async fn gc_keep_takes_ids_and_prefixes() {
+    let mut c = client();
+    let r = c.call("gc", json!({"keep": ["s_1", "base_*", "*"]})).await;
+    assert_eq!(r["result"]["dropped"], 0, "{r}");
+    let r = c.call("gc", json!({"keep": ["Bad*"]})).await;
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+}
+
+#[tokio::test]
 async fn save_then_start_from_save_restores() {
     let mut c = client();
     start(&mut c, "i1").await;

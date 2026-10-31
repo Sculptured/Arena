@@ -209,7 +209,8 @@ fn response(id: Value, out: R<Value>) -> Value {
     }
 }
 
-/// Every `instance`, `save`, `keep` entry (also inside `target`, `a`, `b`, `from`) must be a valid id.
+/// Every `instance`, `save` (also inside `target`, `a`, `b`, `from`) must be a valid id, and every
+/// `keep` entry an id or an id prefix followed by `*`.
 fn ids_ok(params: &Value) -> bool {
     let Some(o) = params.as_object() else {
         return true;
@@ -219,7 +220,7 @@ fn ids_ok(params: &Value) -> bool {
             "instance" | "save" => v.as_str().is_some_and(valid_id),
             "keep" => v
                 .as_array()
-                .is_none_or(|a| a.iter().all(|s| s.as_str().is_some_and(valid_id))),
+                .is_none_or(|a| a.iter().all(|s| s.as_str().is_some_and(valid_keep))),
             "target" | "a" | "b" | "from" => ids_ok(v),
             _ => true,
         };

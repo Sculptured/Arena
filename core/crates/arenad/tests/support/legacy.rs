@@ -33,6 +33,11 @@ impl LegacyDbs {
         admin().create_db_from(name, template).await.unwrap();
     }
 
+    /// Drops the database `name` at the end (one something else makes).
+    pub fn track(&self, name: &str) {
+        self.clean.add(name);
+    }
+
     /// Runs `sql` in the database `db`.
     pub async fn execute(&self, db: &str, sql: &str) {
         let url = admin().db_url(db);
@@ -105,25 +110,27 @@ pub async fn legacy_run(
         .create_branch(&run_id, None, team, &json!([]), None)
         .await
         .unwrap();
-    let agent = team.agents.last().unwrap();
-    let start = json!({"task_id": "27", "team": team});
-    store
-        .append(&branch, None, EventKind::RunStart, start)
-        .await
-        .unwrap();
-    for (kind, payload) in agent_events(agent, snap) {
-        let who = Some(agent.id.as_str());
+    for (who, kind, payload) in run_events(team, snap) {
         store.append(&branch, who, kind, payload).await.unwrap();
     }
-    let check = json!({"passed": true, "gold_db": "gold_27", "differing_rows": []});
-    store
-        .append(&branch, None, EventKind::Check, check)
-        .await
-        .unwrap();
-    store
-        .set_status(&branch, BranchStatus::Passed, None)
-        .await
-        .unwrap();
+    let passed = BranchStatus::Passed;
+    store.set_status(&branch, passed, None).await.unwrap();
     dbs.copy(&format!("branch_{branch}"), final_db).await;
     (run_id, branch)
+}
+
+/// The run's events, `(agent, kind, payload)`: `RunStart`, the last agent's events, `Check`.
+fn run_events<'a>(team: &'a Team, snap: &str) -> Vec<(Option<&'a str>, EventKind, Value)> {
+    let agent = team.agents.last().unwrap();
+    let id = Some(agent.id.as_str());
+    let start = json!({"task_id": "27", "team": team});
+    let mut events = vec![(None, EventKind::RunStart, start)];
+    events.extend(
+        agent_events(agent, snap)
+            .into_iter()
+            .map(|(k, p)| (id, k, p)),
+    );
+    let check = json!({"passed": true, "gold_db": "gold_27", "differing_rows": []});
+    events.push((None, EventKind::Check, check));
+    events
 }

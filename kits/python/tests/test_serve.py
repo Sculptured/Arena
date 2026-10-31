@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from arena_part import Part, PartError, FixedStep, serve
+from arena_part import Part, PartError, FixedStep, kept, serve
 import counter
 from conftest import Client
 
@@ -55,11 +55,18 @@ def test_bad_instance_id_is_32602():
         ("start", {"instance": "i1", "config": {}, "seed": 1, "clock_ms": 0,
                    "from": {"save": "X", "mode": "exact"}}),
         ("gc", {"keep": ["ok", "NOT ok"]}),
+        ("gc", {"keep": ["Bad*"]}),
         ("stop", {"instance": 5}),
     ],
 )
 def test_nested_ids_are_validated(method, params):
     assert client().call(method, params)["error"]["code"] == -32602
+
+
+def test_gc_keep_takes_prefixes():
+    assert "result" in client().call("gc", {"keep": ["s_1", "base_*", "*"]})
+    assert kept(["s_1", "gold_*"], "gold_x") and kept(["s_1"], "s_1")
+    assert not kept(["s_1", "gold_*"], "s_12")
 
 
 def test_missing_params_is_32602():

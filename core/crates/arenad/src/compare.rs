@@ -85,6 +85,14 @@ impl FinalState {
     }
 }
 
+/// A part of `a`'s world that one of the two final states has no save of.
+pub fn missing_part<'a>(a: &'a FinalState, b: &FinalState) -> Option<&'a str> {
+    a.world
+        .iter()
+        .map(|p| p.part.as_str())
+        .find(|p| !a.saves.contains_key(*p) || !b.saves.contains_key(*p))
+}
+
 /// `[{key, a, b}]` for every key that differs between two final states, sorted: per part of
 /// `a`'s world, the `diff` of both final saves with each side's docs. Keys are prefixed `part:`
 /// only when the world has more than one part.

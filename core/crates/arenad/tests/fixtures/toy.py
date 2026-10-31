@@ -5,7 +5,7 @@
       (read). It exits on its N-th call_tool (only once across restarts when FILE marks that it
       did); every `save` after the first N is an error; --bad-diff answers `diff` without
       `differing`; --log appends "<method> <instance>" per request to FILE. Saves are kept in
-      memory. No `connect` (method not found).
+      memory. `inspect` refuses keys `bad/..` (-32602). No `connect` (method not found).
   toy.py bench --integration NAME [--clash] [--bench-tool [--tool-part PART]]
       A benchmark whose world is one part `box` of integration NAME, with one task `t1`. Tools:
       none; with --clash a `poke`; with --bench-tool a `ring` that reports it ran on PART
@@ -94,7 +94,10 @@ class Part:
 
     def inspect(self, p):
         v = self.value(p["target"])
-        return {"docs": {k: ({"n": v} if k == "box/n" else None) for k in (p.get("keys") or ["box/n"])}}
+        keys = p.get("keys") or ["box/n"]
+        if any(k.startswith("bad/") for k in keys):
+            raise RpcError(-32602, "the toy has no bad keys")
+        return {"docs": {k: ({"n": v} if k == "box/n" else None) for k in keys}}
 
     def diff(self, p):
         if "--bad-diff" in ARGS:

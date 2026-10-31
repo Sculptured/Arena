@@ -28,6 +28,9 @@ pub struct RunInfo {
     pub base: Saves,
     /// The parts of the run's world (empty for a run recorded before integrations).
     pub world: Vec<WorldPart>,
+    /// False when the branch has no `RunStart` (its setup failed before recording one): it names
+    /// no saves and has no world.
+    pub started: bool,
     /// True for a run recorded before integrations (its `RunStart` names no saves).
     pub legacy: bool,
 }
@@ -44,7 +47,7 @@ fn saves_in(v: &Value) -> Option<Saves> {
 }
 
 /// The run facts of a branch's events (a run recorded before integrations: retail, seed 0,
-/// base `world_base`).
+/// base `world_base`; a branch without `RunStart`: no base).
 pub fn run_info(events: &[Event]) -> RunInfo {
     let start = events
         .iter()
@@ -58,8 +61,13 @@ pub fn run_info(events: &[Event]) -> RunInfo {
             .unwrap_or(LEGACY_PART)
             .to_string(),
         seed: start.and_then(|p| p["seed"].as_u64()).unwrap_or(0),
-        legacy: base.is_none(),
-        base: base.unwrap_or_else(|| legacy(LEGACY_BASE)),
+        started: start.is_some(),
+        legacy: start.is_some() && base.is_none(),
+        base: match (start, base) {
+            (_, Some(b)) => b,
+            (Some(_), None) => legacy(LEGACY_BASE),
+            (None, None) => Saves::new(),
+        },
         world: world.unwrap_or_default(),
     }
 }
@@ -227,6 +235,7 @@ mod tests {
                 seed: 0,
                 base: legacy("world_base"),
                 world: vec![],
+                started: true,
                 legacy: true,
             }
         );
@@ -259,6 +268,14 @@ mod tests {
         assert_eq!(final_saves("x", &evs), Some(legacy("s_r2")));
         assert_eq!(final_saves("x", &evs[..2]), None, "no check yet");
         assert_eq!(names(&evs, "x"), ["base_r", "s_r1", "s_r2"]);
+    }
+
+    #[test]
+    fn a_branch_without_run_start_names_nothing() {
+        let info = run_info(&[]);
+        assert!(!info.started && !info.legacy && info.base.is_empty());
+        assert_eq!(final_saves("b1", &[]), None);
+        assert!(named_saves("b1", &[]).is_empty());
     }
 
     #[test]

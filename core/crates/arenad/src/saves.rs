@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use parts::{
-    proto::{Differing, Docs, GcResult, Usage, WorldPart},
+    proto::{kept, Differing, Docs, GcResult, Usage, WorldPart},
     CallError, Hub,
 };
 use serde::de::DeserializeOwned;
@@ -28,12 +28,17 @@ async fn call<T: DeserializeOwned>(
         .with_context(|| format!("the {integration} integration: {method}"))
 }
 
-/// The part's own error code, when `e` is one.
-pub fn part_code(e: &anyhow::Error) -> Option<i64> {
+/// The part's own error, `(code, message)`, when `e` is one.
+pub fn part_refusal(e: &anyhow::Error) -> Option<(i64, &str)> {
     match e.downcast_ref::<CallError>() {
-        Some(CallError::Part { code, .. }) => Some(*code),
+        Some(CallError::Part { code, message }) => Some((*code, message.as_str())),
         _ => None,
     }
+}
+
+/// The part's own error code, when `e` is one.
+pub fn part_code(e: &anyhow::Error) -> Option<i64> {
+    part_refusal(e).map(|(code, _)| code)
 }
 
 /// The docs of `keys` in `save` (empty for no keys: `inspect` with none would read everything).
@@ -58,11 +63,24 @@ pub async fn diff(hub: &Hub, integration: &str, a: &str, b: &str) -> Result<Vec<
     Ok(d.differing)
 }
 
-/// Drops `save` and the folder arenad made for it.
-pub async fn drop_save(hub: &Hub, integration: &str, save: &str) -> Result<()> {
-    let _: Value = call(hub, integration, "drop_save", json!({"save": save})).await?;
+/// True when the integration has `save` (probed with `inspect` of a key no part has).
+pub async fn save_exists(hub: &Hub, integration: &str, save: &str) -> Result<bool> {
+    let params = json!({"target": {"save": save}, "keys": ["arena/probe"]});
+    match call::<Value>(hub, integration, "inspect", params).await {
+        Ok(_) => Ok(true),
+        Err(e) if part_code(&e) == Some(-32002) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Drops `save` and the folder arenad made for it; false when there was no such save.
+pub async fn drop_save(hub: &Hub, integration: &str, save: &str) -> Result<bool> {
+    let existed = save_exists(hub, integration, save).await?;
+    if existed {
+        let _: Value = call(hub, integration, "drop_save", json!({"save": save})).await?;
+    }
     hub.remove_save_dir(integration, save);
-    Ok(())
+    Ok(existed)
 }
 
 /// Stops `instance` (a no-op for an instance that is not running).
@@ -77,32 +95,42 @@ pub async fn usage(hub: &Hub, integration: &str) -> Result<u64> {
     Ok(u.bytes)
 }
 
-/// Drops the integration's saves not in `keep` (and its instances not running); None when the
-/// integration has no `gc`.
+/// Drops the integration's saves not in `keep` (an entry ending in `*` is a prefix) and its
+/// instances not running, then the save folders `keep` doesn't keep; None when the integration
+/// has no `gc`.
 pub async fn gc(hub: &Hub, integration: &str, keep: &[String]) -> Result<Option<GcResult>> {
-    match call(hub, integration, "gc", json!({"keep": keep})).await {
-        Ok(r) => Ok(Some(r)),
-        Err(e) if part_code(&e) == Some(-32601) => Ok(None),
-        Err(e) => Err(e),
+    let r = match call(hub, integration, "gc", json!({"keep": keep})).await {
+        Ok(r) => r,
+        Err(e) if part_code(&e) == Some(-32601) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for save in hub.save_dirs(integration) {
+        if !kept(keep, &save) {
+            hub.remove_save_dir(integration, &save);
+        }
     }
+    Ok(Some(r))
 }
 
-/// The parts of a branch's world with their integrations: as its `RunStart` recorded them, else
-/// (runs recorded before integrations) as the run's benchmark names them now.
+/// The parts of a branch's world with their integrations: as its `RunStart` recorded them; for
+/// a run recorded before integrations, as the run's benchmark names them now; none for a branch
+/// without `RunStart`.
 pub async fn world_of(hub: &Hub, events: &[Event]) -> Result<Vec<WorldPart>> {
     let info = run_info(events);
-    if !info.world.is_empty() {
+    if !info.legacy {
         return Ok(info.world);
     }
     Ok(hub.bench_describe(&info.benchmark).await?.world)
 }
 
+/// The part called `part` in `world`.
+pub fn part_named<'a>(world: &'a [WorldPart], part: &str) -> Option<&'a WorldPart> {
+    world.iter().find(|p| p.part == part)
+}
+
 /// The integration of `part` in `world`.
 pub fn integration_of<'a>(world: &'a [WorldPart], part: &str) -> Option<&'a str> {
-    world
-        .iter()
-        .find(|p| p.part == part)
-        .map(|p| p.integration.as_str())
+    part_named(world, part).map(|p| p.integration.as_str())
 }
 
 /// The integrations `benchmark`'s world uses, each once.

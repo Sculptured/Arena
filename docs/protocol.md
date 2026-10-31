@@ -68,6 +68,11 @@ environment from arenad, disk only under the save storage given to it.
   part reports (an alarm, a shipment arriving) are recorded as world events.
 - `save` reports `exact: false` when the save may not capture everything (an approximate save).
 - `inspect` with an empty `keys` list returns every key the part has for that target.
+- `usage` counts only what the part keeps outside `ARENA_SAVES` (databases, files elsewhere). arenad
+  measures the save folders under `ARENA_SAVES` itself, so a part whose saves all live there reports 0.
+- `gc` drops the saves not in `keep` (and instances that are not running). A `keep` entry is a save id,
+  or an id prefix followed by `*`: `base_*` keeps every save whose id starts with `base_`. After a
+  `gc`, arenad removes the folders under `ARENA_SAVES/<part>/` whose names `keep` does not keep.
 
 ## Benchmark calls
 

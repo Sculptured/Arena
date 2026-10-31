@@ -7,12 +7,14 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use parts::{
     proto::{Action, BenchDescribe, GoldActions},
-    CallError, Hub,
+    Hub,
 };
 use serde_json::{json, Value};
+
+use crate::saves::save_exists;
 
 use super::{
     call, exact,
@@ -34,20 +36,11 @@ async fn name_lock(name: &str) -> tokio::sync::OwnedMutexGuard<()> {
     l.lock_owned().await
 }
 
-/// True when every save in `names` exists (probed with `inspect` of a key no part has).
+/// True when every save in `names` exists.
 async fn saves_exist(hub: &Hub, bench: &BenchDescribe, names: &Saves) -> Result<bool> {
     for p in &bench.world {
-        let c = hub.client(&p.integration).await?;
-        let r: Result<Value, CallError> = c
-            .call(
-                "inspect",
-                json!({"target": {"save": names[&p.part]}, "keys": ["arena/probe"]}),
-            )
-            .await;
-        match r {
-            Ok(_) => {}
-            Err(CallError::Part { code: -32002, .. }) => return Ok(false),
-            Err(e) => return Err(anyhow!("the {} integration: {e}", p.integration)),
+        if !save_exists(hub, &p.integration, &names[&p.part]).await? {
+            return Ok(false);
         }
     }
     Ok(true)

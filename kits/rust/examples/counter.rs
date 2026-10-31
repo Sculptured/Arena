@@ -80,19 +80,6 @@ fn read_save(save: &str) -> Result<State, PartError> {
     })
 }
 
-fn dir_bytes(dir: &std::path::Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    rd.flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => dir_bytes(&e.path()),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
-}
-
 fn os_random_1000() -> i64 {
     let mut b = [0u8; 4];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
@@ -307,9 +294,8 @@ impl Part for Counter {
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
-        Ok(Usage {
-            bytes: dir_bytes(&saves_root()),
-        })
+        // Every save lives in ARENA_SAVES, which arenad measures itself: nothing else is kept.
+        Ok(Usage { bytes: 0 })
     }
 }
 

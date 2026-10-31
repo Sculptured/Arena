@@ -521,7 +521,7 @@ struct LegacyFx {
     /// Seq of the write whose snapshot is `snap`.
     write: i64,
     _clean: Cleanup,
-    _dbs: LegacyDbs,
+    dbs: LegacyDbs,
 }
 
 impl LegacyFx {
@@ -552,7 +552,7 @@ impl LegacyFx {
             state,
             base,
             _clean: clean,
-            _dbs: dbs,
+            dbs,
         }
     }
 
@@ -605,6 +605,9 @@ impl LegacyFx {
         let (st, v) = app_support::send(req.json(&json!({"at_seq": at}))).await;
         assert_eq!((st, v["start_seq"].as_i64()), (200, Some(at)), "{v}");
         let child = v["branch_id"].as_str().unwrap().to_string();
+        // Its instance, with no namespace: dropped when the branch ends, and at the end if not.
+        let instance = arenad::world::instance_id(&child, "retail");
+        self.dbs.track(&format!("pi_{instance}"));
         let ended = self.ended(&child).await;
         let cevs = self.state.store.events(&child).await.unwrap();
         let reads = tool_results(&cevs, "get_order_details", at);
@@ -631,7 +634,9 @@ impl LegacyFx {
         let req = self
             .http
             .delete(self.url(&format!("/api/runs/{}", self.names.run_a)));
-        assert_eq!(app_support::send(req).await.0, 200);
+        let (st, v) = app_support::send(req).await;
+        // The snapshot and a's database; the child's `branch_<id>` never existed, so isn't counted.
+        assert_eq!((st, v["dropped"].as_u64()), (200, Some(2)), "{v}");
         let admin = pg::admin();
         let exists = async |db: &str| admin.exists(db).await.unwrap();
         assert!(!exists(&self.names.snap).await, "the snapshot is dropped");

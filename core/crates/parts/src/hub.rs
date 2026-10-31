@@ -136,18 +136,40 @@ impl Hub {
 
     /// Bytes on disk under the save storage.
     pub fn saves_bytes(&self) -> u64 {
-        fn walk(p: &Path) -> u64 {
-            let Ok(rd) = std::fs::read_dir(p) else {
-                return 0;
-            };
-            rd.filter_map(Result::ok)
-                .map(|e| match e.metadata() {
-                    Ok(m) if m.is_dir() => walk(&e.path()),
-                    Ok(m) => m.len(),
-                    Err(_) => 0,
-                })
-                .sum()
-        }
-        walk(&self.saves_root)
+        dir_bytes(&self.saves_root)
     }
+
+    /// Bytes on disk under `package`'s save folders.
+    pub fn package_saves_bytes(&self, package: &str) -> u64 {
+        dir_bytes(&self.saves_root.join(package))
+    }
+
+    /// The names of `package`'s save folders (`<saves_root>/<package>/<save>`) that are save ids.
+    pub fn save_dirs(&self, package: &str) -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(self.saves_root.join(package)) else {
+            return vec![];
+        };
+        let mut out: Vec<String> = rd
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| valid_id(n))
+            .collect();
+        out.sort();
+        out
+    }
+}
+
+/// Bytes of the files under `p`, recursively (0 when it doesn't exist).
+fn dir_bytes(p: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(p) else {
+        return 0;
+    };
+    rd.filter_map(Result::ok)
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_bytes(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
 }

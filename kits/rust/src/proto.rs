@@ -17,6 +17,23 @@ pub fn valid_id(s: &str) -> bool {
     )
 }
 
+/// A `gc` keep entry: a save id, or an id prefix followed by `*` (`base_*` keeps every save whose
+/// id starts with `base_`).
+pub fn valid_keep(s: &str) -> bool {
+    match s.strip_suffix('*') {
+        Some(prefix) => prefix.is_empty() || valid_id(prefix),
+        None => valid_id(s),
+    }
+}
+
+/// True when `keep` (`gc` entries, see `valid_keep`) keeps the save `id`.
+pub fn kept<S: AsRef<str>>(keep: &[S], id: &str) -> bool {
+    keep.iter().any(|k| match k.as_ref().strip_suffix('*') {
+        Some(prefix) => id.starts_with(prefix),
+        None => k.as_ref() == id,
+    })
+}
+
 /// Package names: `^[a-z0-9-]{1,40}$`.
 pub fn valid_package_name(s: &str) -> bool {
     all(
@@ -286,6 +303,15 @@ mod tests {
         assert!(!valid_id(&"a".repeat(64)));
         assert!(valid_package_name("ridgeline-plant"));
         assert!(!valid_package_name("a_b"));
+    }
+
+    #[test]
+    fn keep_entries() {
+        assert!(valid_keep("s_1") && valid_keep("base_*") && valid_keep("*"));
+        assert!(!valid_keep("Base_*") && !valid_keep("a*b") && !valid_keep("**"));
+        let keep = ["s_1", "gold_*"];
+        assert!(kept(&keep, "s_1") && kept(&keep, "gold_x_1"));
+        assert!(!kept(&keep, "s_12") && !kept(&keep, "xgold_1"));
     }
 
     #[test]

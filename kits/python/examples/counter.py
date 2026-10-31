@@ -48,10 +48,6 @@ def read_save(save: str) -> dict:
     return {"value": int(v.get("value", 0)), "secs": int(v.get("secs", 0))}
 
 
-def dir_bytes(d: Path) -> int:
-    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
-
-
 def tool(name, description, props, effect):
     return {
         "name": name,
@@ -168,7 +164,8 @@ class Counter(Part):
         self.instances.pop(instance, None)
 
     def usage(self):
-        return {"bytes": dir_bytes(saves_root())}
+        # Every save lives in ARENA_SAVES, which arenad measures itself: nothing else is kept.
+        return {"bytes": 0}
 
 
 def main(argv):

@@ -335,13 +335,46 @@ fn startup_gc_keeps_named_saves() {
         assert!(!kept.is_empty(), "{kept:?}");
         kept.extend(shared_saves().map(String::from));
         orphan_save(&fx, "s_orphan").await;
-        assert!(save_exists(&fx, "s_orphan").await);
+        let folder = |s: &str| fx._hub.saves.join("postgres").join(s);
+        assert!(save_exists(&fx, "s_orphan").await && folder("s_orphan").is_dir());
 
         let r = arenad::gc::run_startup_gc(&fx.state.store, &fx.state.hub, "retail")
             .await
             .unwrap();
         assert!(r.dropped >= 1 && r.bytes > 0, "{r:?}");
         assert!(!save_exists(&fx, "s_orphan").await, "the orphan is dropped");
+        assert!(!folder("s_orphan").exists(), "with its folder");
         assert_saves(&fx, &kept, true).await;
+        assert!(kept.iter().all(|s| folder(s).is_dir()), "kept folders stay");
+    })
+}
+
+/// A run whose only branch failed before recording anything names no saves and no world: it is
+/// deleted without asking any integration or benchmark (this hub has none).
+#[test]
+fn delete_run_without_events_needs_no_benchmark() {
+    run(async {
+        let saves =
+            std::env::temp_dir().join(format!("arenad-saves-t8empty{}", std::process::id()));
+        let registry = parts::Registry::scan(&[]).unwrap();
+        let hub = Arc::new(parts::Hub::new(registry, packages::bin_dir(), saves));
+        let (store, _clean) = app_support::meta_store("disk", "noevents").await;
+        let (state, base) = app_support::open_app(store, hub, "http://127.0.0.1:9", |_| {}).await;
+        let run_id = state.store.create_run("27", &team()).await.unwrap();
+        let b = state
+            .store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
+        let failed = Some("setup failed".to_string());
+        state
+            .store
+            .set_status(&b, BranchStatus::InfraError, failed)
+            .await
+            .unwrap();
+        let req = reqwest::Client::new().delete(format!("{base}/api/runs/{run_id}"));
+        let (st, v) = app_support::send(req).await;
+        assert_eq!((st, v["dropped"].as_u64()), (200, Some(0)), "{v}");
+        assert!(state.store.runs().await.unwrap().is_empty());
     })
 }

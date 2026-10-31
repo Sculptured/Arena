@@ -3,7 +3,8 @@
 Each instance is a database `pi_<instance>`; each save is a copy of it, `ps_<save>`, made with
 `CREATE DATABASE .. TEMPLATE`. Saves are kept by Postgres itself (the `dir` of `save` is ignored) and
 restore exactly. `stop` drops the instance's database, so save first. `usage` counts the sizes of
-`pi_*` and `ps_*` databases, and `gc {keep}` drops saves not kept and instances not running.
+`pi_*` and `ps_*` databases, and `gc {keep}` drops saves not kept (an entry ending in `*` keeps every save id with that prefix)
+and instances not running.
 
 - Start with config `init_sql` runs it in a fresh empty database; start `from` a save copies it.
 - `inspect` keys are `<table>/<primary key>` (tables with a one-column primary key); `diff` compares all rows.

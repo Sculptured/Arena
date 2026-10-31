@@ -55,15 +55,28 @@ def _valid_id(v) -> bool:
     return isinstance(v, str) and _ID.fullmatch(v) is not None
 
 
+def _valid_keep(v) -> bool:
+    """A `gc` keep entry: a save id, or an id prefix followed by `*` (`base_*`)."""
+    if isinstance(v, str) and v.endswith("*"):
+        return v == "*" or _valid_id(v[:-1])
+    return _valid_id(v)
+
+
+def kept(keep, save_id) -> bool:
+    """True when the `gc` keep entries keep `save_id` (an entry ending in `*` is a prefix)."""
+    return any(save_id.startswith(k[:-1]) if k.endswith("*") else k == save_id for k in keep)
+
+
 def ids_ok(params) -> bool:
-    """Every `instance`, `save`, `keep` entry (also inside target, a, b, from) must be a valid id."""
+    """Every `instance`, `save` (also inside target, a, b, from) must be a valid id, and every
+    `keep` entry an id or an id prefix followed by `*`."""
     if not isinstance(params, dict):
         return True
     for k, v in params.items():
         if k in ("instance", "save"):
             ok = _valid_id(v)
         elif k == "keep":
-            ok = not isinstance(v, list) or all(_valid_id(s) for s in v)
+            ok = not isinstance(v, list) or all(_valid_keep(s) for s in v)
         elif k in ("target", "a", "b", "from"):
             ok = ids_ok(v)
         else:

@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use parts::{proto::WorldPart, CallError};
+use parts::proto::WorldPart;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{
@@ -35,7 +35,7 @@ use crate::{
     prompts,
     recorded::{final_saves, run_info, saves_at},
     runner,
-    saves::{self, part_code, world_of},
+    saves::{self, part_code, part_named, part_refusal, world_of},
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -509,11 +509,8 @@ fn rows_part<'a>(
     step: &Event,
     world: &'a [WorldPart],
 ) -> Result<&'a WorldPart, ApiError> {
-    let name = asked.or(step.payload["part"].as_str());
-    match name {
-        Some(n) => world
-            .iter()
-            .find(|p| p.part == n)
+    match asked.or(step.payload["part"].as_str()) {
+        Some(n) => part_named(world, n)
             .ok_or_else(|| ApiError::bad(format!("there is no part {n} in this world"))),
         None => world
             .first()
@@ -521,13 +518,12 @@ fn rows_part<'a>(
     }
 }
 
-/// A part's refusal of the request (`-32602`) is a bad request with the part's message.
-fn part_error(e: anyhow::Error) -> ApiError {
-    match e.downcast_ref::<CallError>() {
-        Some(CallError::Part {
-            code: -32602,
-            message,
-        }) => ApiError::bad(message.clone()),
+/// A part's refusal of the keys (`-32602`) is a bad request with the part's message; a save that
+/// is gone (`-32002`) a conflict.
+fn rows_error(e: anyhow::Error) -> ApiError {
+    match part_refusal(&e) {
+        Some((-32602, message)) => ApiError::bad(message),
+        Some((-32002, _)) => ApiError::conflict("the saved state for that step is gone"),
         _ => e.into(),
     }
 }
@@ -551,7 +547,7 @@ async fn read_rows(state: &AppState, events: &[Event], q: &RowsQuery) -> Result<
         .ok_or_else(|| ApiError::bad(format!("there is no save of the part {}", part.part)))?;
     let docs = saves::inspect(&state.hub, &part.integration, save, &q.keys)
         .await
-        .map_err(part_error)?;
+        .map_err(rows_error)?;
     Ok(json!({"seq": q.seq, "rows": docs}))
 }
 
@@ -628,6 +624,11 @@ async fn compare_branches(
         _ => return Err(ApiError::bad("a and b are required")),
     };
     let [a, b] = sides(&state, [a, b]).await?;
+    if let Some(part) = compare::missing_part(&a.end, &b.end) {
+        return Err(ApiError::conflict(format!(
+            "a branch has no final state of the part {part}"
+        )));
+    }
     let rows = match compare::differing_rows(&state.hub, &a.end, &b.end).await {
         // A save that is gone: a branch recorded before integrations whose database is missing.
         Err(e) if part_code(&e) == Some(-32002) => return Err(ApiError::conflict(NO_FINAL_STATE)),
