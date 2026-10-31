@@ -24,7 +24,10 @@ pub async fn usage(worlds: &Worlds) -> Result<(usize, i64)> {
 /// (databases dropped, bytes they used).
 pub async fn collect_orphans(store: &Store, worlds: &Worlds) -> Result<(usize, i64)> {
     let keep = store.referenced_dbs().await?;
-    let prefixes: Vec<&str> = ["branch_", "snap_"].into_iter().chain(TEMP_PREFIXES).collect();
+    let prefixes: Vec<&str> = ["branch_", "snap_"]
+        .into_iter()
+        .chain(TEMP_PREFIXES)
+        .collect();
     collect_orphans_with(worlds, &prefixes, &keep).await
 }
 

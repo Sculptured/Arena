@@ -26,7 +26,11 @@ fn team() -> Team {
 }
 
 fn db_name(tag: &str) -> String {
-    format!("arena_test_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!(
+        "arena_test_{}_{}",
+        tag,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 async fn fresh(tag: &str) -> (Admin, String, Store, testing::Cleanup) {
@@ -48,10 +52,19 @@ fn append_assigns_increasing_seq() {
     run(async {
         let (admin, name, store, _g) = fresh("append").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
-        let b = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
+        let b = store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
         let mut rx = store.subscribe();
-        let e1 = store.append(&b, None, EventKind::RunStart, json!({})).await.unwrap();
-        let e2 = store.append(&b, Some("a"), EventKind::Handoff, json!({"note": "x"})).await.unwrap();
+        let e1 = store
+            .append(&b, None, EventKind::RunStart, json!({}))
+            .await
+            .unwrap();
+        let e2 = store
+            .append(&b, Some("a"), EventKind::Handoff, json!({"note": "x"}))
+            .await
+            .unwrap();
         assert_eq!((e1.seq, e2.seq), (1, 2));
         assert_eq!(rx.recv().await.unwrap().seq, 1);
         assert_eq!(rx.recv().await.unwrap().seq, 2);
@@ -62,7 +75,10 @@ fn append_assigns_increasing_seq() {
         for i in 0..20 {
             let (s, b) = (store.clone(), b.clone());
             hs.push(tokio::spawn(async move {
-                s.append(&b, None, EventKind::ToolCall, json!({ "i": i })).await.unwrap().seq
+                s.append(&b, None, EventKind::ToolCall, json!({ "i": i }))
+                    .await
+                    .unwrap()
+                    .seq
             }));
         }
         let mut seqs = vec![];
@@ -79,7 +95,10 @@ fn append_assigns_increasing_seq() {
         let br = store.branch(&b).await.unwrap();
         assert_eq!(br.status, BranchStatus::Running);
         assert!(br.ended_at.is_none());
-        store.set_status(&b, BranchStatus::Passed, None).await.unwrap();
+        store
+            .set_status(&b, BranchStatus::Passed, None)
+            .await
+            .unwrap();
         let br = store.branch(&b).await.unwrap();
         assert_eq!(br.status, BranchStatus::Passed);
         assert!(br.ended_at.is_some());
@@ -97,18 +116,36 @@ fn copy_prefix_keeps_seqs_and_new_events_continue_after() {
     run(async {
         let (admin, name, store, _g) = fresh("copy").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
-        let parent = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
+        let parent = store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
         for i in 0..5 {
-            store.append(&parent, None, EventKind::ToolCall, json!({ "i": i })).await.unwrap();
+            store
+                .append(&parent, None, EventKind::ToolCall, json!({ "i": i }))
+                .await
+                .unwrap();
         }
         let child = store
-            .create_branch(&run_id, Some((&parent, 4)), &team(), &json!([{"prompt": "x"}]), Some("note".into()))
+            .create_branch(
+                &run_id,
+                Some((&parent, 4)),
+                &team(),
+                &json!([{"prompt": "x"}]),
+                Some("note".into()),
+            )
             .await
             .unwrap();
         store.copy_prefix(&parent, &child, 4).await.unwrap();
         let copied = store.events(&child).await.unwrap();
-        assert_eq!(copied.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
-        let e = store.append(&child, None, EventKind::ToolCall, json!({})).await.unwrap();
+        assert_eq!(
+            copied.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let e = store
+            .append(&child, None, EventKind::ToolCall, json!({}))
+            .await
+            .unwrap();
         assert_eq!(e.seq, 4);
         assert_eq!(store.events(&parent).await.unwrap().len(), 5);
         let b = store.branch(&child).await.unwrap();
@@ -124,16 +161,28 @@ fn open_marks_running_branches_interrupted() {
     run(async {
         let (admin, name, store, _g) = fresh("interrupt").await;
         let run_id = store.create_run("task", &team()).await.unwrap();
-        let running = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
-        let passed = store.create_branch(&run_id, None, &team(), &json!([]), None).await.unwrap();
-        store.set_status(&passed, BranchStatus::Passed, None).await.unwrap();
+        let running = store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
+        let passed = store
+            .create_branch(&run_id, None, &team(), &json!([]), None)
+            .await
+            .unwrap();
+        store
+            .set_status(&passed, BranchStatus::Passed, None)
+            .await
+            .unwrap();
         drop(store);
 
         let store = Store::open_named(&admin, &name).await.unwrap();
         let r = store.branch(&running).await.unwrap();
         assert_eq!(r.status, BranchStatus::Interrupted);
         assert!(r.ended_at.is_some());
-        assert_eq!(store.branch(&passed).await.unwrap().status, BranchStatus::Passed);
+        assert_eq!(
+            store.branch(&passed).await.unwrap().status,
+            BranchStatus::Passed
+        );
         done(admin, name, store).await;
     })
 }

@@ -1,4 +1,9 @@
-use std::{future::Future, pin::Pin, sync::{Arc, Weak}, time::Instant};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Weak},
+    time::Instant,
+};
 
 use serde_json::{json, Value};
 use world::tools;
@@ -38,7 +43,9 @@ pub struct OpenDriver {
 
 impl OpenDriver {
     pub fn new(state: Arc<AppState>) -> OpenDriver {
-        OpenDriver { state: Arc::downgrade(&state) }
+        OpenDriver {
+            state: Arc::downgrade(&state),
+        }
     }
 }
 
@@ -96,7 +103,12 @@ impl OpenDriver {
         }
     }
 
-    async fn drive(&self, run: &AgentRun, totals: &mut [i64; 3], cost: &mut Option<f64>) -> Result<(), Fault> {
+    async fn drive(
+        &self,
+        run: &AgentRun,
+        totals: &mut [i64; 3],
+        cost: &mut Option<f64>,
+    ) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
         let agent = run.spec.id.as_str();
         let url = format!(
@@ -112,15 +124,27 @@ impl OpenDriver {
         for _ in 0..MAX_MODEL_CALLS {
             let mut body = json!({"messages": messages, "tools": tools});
             body["model"] = json!(run.spec.model.as_deref().unwrap_or(DEFAULT_OPEN_MODEL));
-            let resp = http.post(&url).json(&body).send().await.map_err(|e| format!("gateway request failed: {e}"))?;
+            let resp = http
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("gateway request failed: {e}"))?;
             let status = resp.status();
-            let text = resp.text().await.map_err(|e| format!("gateway response unreadable: {e}"))?;
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("gateway response unreadable: {e}"))?;
             if !status.is_success() {
                 return Err(format!("model call failed ({status}): {text}").into());
             }
-            let v: Value = serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?;
+            let v: Value =
+                serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?;
             let usage = &v["usage"];
-            for (i, k) in ["prompt_tokens", "completion_tokens", "total_tokens"].iter().enumerate() {
+            for (i, k) in ["prompt_tokens", "completion_tokens", "total_tokens"]
+                .iter()
+                .enumerate()
+            {
                 totals[i] += usage[k].as_i64().unwrap_or(0);
             }
             *cost = match (*cost, usage["cost"].as_f64()) {
@@ -146,15 +170,21 @@ impl OpenDriver {
                 let parsed = if raw.trim().is_empty() {
                     Some(json!({}))
                 } else {
-                    serde_json::from_str::<Value>(raw).ok().filter(Value::is_object)
+                    serde_json::from_str::<Value>(raw)
+                        .ok()
+                        .filter(Value::is_object)
                 };
                 let Some(args) = parsed else {
                     let content = json!({"error": format!(
                         "arguments for {name} were not valid JSON (the output may have been cut off); the tool was not run")});
-                    messages.push(json!({"role": "tool", "tool_call_id": id, "content": content.to_string()}));
+                    messages.push(
+                        json!({"role": "tool", "tool_call_id": id, "content": content.to_string()}),
+                    );
                     continue;
                 };
-                let res = exec.run_outcome(&run.branch, agent, &name, args, Some(id.clone())).await;
+                let res = exec
+                    .run_outcome(&run.branch, agent, &name, args, Some(id.clone()))
+                    .await;
                 let content = match &res {
                     Ok(v) => v.to_string(),
                     Err(e) => json!({"error": e}).to_string(),
@@ -165,6 +195,8 @@ impl OpenDriver {
                 }
             }
         }
-        Err(Fault::Model(format!("agent exceeded {MAX_MODEL_CALLS} model calls")))
+        Err(Fault::Model(format!(
+            "agent exceeded {MAX_MODEL_CALLS} model calls"
+        )))
     }
 }

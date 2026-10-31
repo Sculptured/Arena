@@ -19,7 +19,14 @@ pub struct BranchCtx {
 
 impl BranchCtx {
     pub fn new(branch_id: String, db: String, team: Team, task_id: String) -> BranchCtx {
-        BranchCtx { branch_id, db, team, task_id, handoffs: Mutex::new(HashMap::new()), gate: tokio::sync::Mutex::new(()) }
+        BranchCtx {
+            branch_id,
+            db,
+            team,
+            task_id,
+            handoffs: Mutex::new(HashMap::new()),
+            gate: tokio::sync::Mutex::new(()),
+        }
     }
 
     pub fn is_last(&self, agent: &str) -> bool {
@@ -63,7 +70,10 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Value {
-        match self.run_outcome(branch, agent, name, args, tool_call_id).await {
+        match self
+            .run_outcome(branch, agent, name, args, tool_call_id)
+            .await
+        {
             Ok(v) => v,
             Err(e) => json!({"error": e}),
         }
@@ -125,7 +135,8 @@ impl ToolExec {
             snapshot_error,
             tool_call_id,
         };
-        self.record(branch, agent, EventKind::ToolCall, &payload).await?;
+        self.record(branch, agent, EventKind::ToolCall, &payload)
+            .await?;
         outcome
     }
 
@@ -136,7 +147,11 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
-        let note = args.get("note").and_then(Value::as_str).map(str::trim).unwrap_or("");
+        let note = args
+            .get("note")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
         let outcome: Result<String, String> = if branch.is_last(agent) {
             Err("handoff is not available to the last agent".to_string())
         } else if note.is_empty() {
@@ -152,7 +167,8 @@ impl ToolExec {
         };
         match outcome {
             Ok(note) => {
-                self.record(branch, agent, EventKind::Handoff, &HandoffPayload { note }).await?;
+                self.record(branch, agent, EventKind::Handoff, &HandoffPayload { note })
+                    .await?;
                 Ok(json!({"ok": true}))
             }
             Err(e) => {
@@ -167,7 +183,8 @@ impl ToolExec {
                     snapshot_error: None,
                     tool_call_id,
                 };
-                self.record(branch, agent, EventKind::ToolCall, &payload).await?;
+                self.record(branch, agent, EventKind::ToolCall, &payload)
+                    .await?;
                 Err(e)
             }
         }

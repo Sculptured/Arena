@@ -87,11 +87,20 @@ impl Store {
             )
             .await?;
         let (tx, _) = broadcast::channel(1024);
-        Ok(Store { client, tx, locks: Mutex::new(HashMap::new()) })
+        Ok(Store {
+            client,
+            tx,
+            locks: Mutex::new(HashMap::new()),
+        })
     }
 
     fn lock_for(&self, branch: &str) -> std::sync::Arc<AsyncMutex<()>> {
-        self.locks.lock().unwrap().entry(branch.to_string()).or_default().clone()
+        self.locks
+            .lock()
+            .unwrap()
+            .entry(branch.to_string())
+            .or_default()
+            .clone()
     }
 
     pub async fn create_run(&self, task_id: &str, team: &Team) -> Result<RunId> {
@@ -123,7 +132,15 @@ impl Store {
             .execute(
                 "INSERT INTO branches (id, run_id, parent_id, start_seq, team, changes, fork_note)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                &[&id, &run_id, &parent_id, &start_seq, &serde_json::to_value(team)?, changes, &fork_note],
+                &[
+                    &id,
+                    &run_id,
+                    &parent_id,
+                    &start_seq,
+                    &serde_json::to_value(team)?,
+                    changes,
+                    &fork_note,
+                ],
             )
             .await?;
         Ok(id)
@@ -182,14 +199,19 @@ impl Store {
     }
 
     pub async fn branch(&self, id: &str) -> Result<Branch> {
-        self.find_branch(id).await?.ok_or_else(|| anyhow!("no such branch: {id}"))
+        self.find_branch(id)
+            .await?
+            .ok_or_else(|| anyhow!("no such branch: {id}"))
     }
 
     /// Like `branch`, but a missing branch is `Ok(None)` rather than an error.
     pub async fn find_branch(&self, id: &str) -> Result<Option<Branch>> {
         let row = self
             .client
-            .query_opt(&format!("SELECT {BRANCH_COLS} FROM branches WHERE id = $1"), &[&id])
+            .query_opt(
+                &format!("SELECT {BRANCH_COLS} FROM branches WHERE id = $1"),
+                &[&id],
+            )
             .await?;
         row.as_ref().map(branch_from).transpose()
     }
@@ -197,11 +219,17 @@ impl Store {
     pub async fn runs(&self) -> Result<Vec<RunSummary>> {
         let runs = self
             .client
-            .query("SELECT id, task_id, created_at FROM runs ORDER BY created_at DESC, id", &[])
+            .query(
+                "SELECT id, task_id, created_at FROM runs ORDER BY created_at DESC, id",
+                &[],
+            )
             .await?;
         let branches = self
             .client
-            .query(&format!("SELECT {BRANCH_COLS} FROM branches ORDER BY created_at, id"), &[])
+            .query(
+                &format!("SELECT {BRANCH_COLS} FROM branches ORDER BY created_at, id"),
+                &[],
+            )
             .await?;
         let mut by_run: HashMap<String, Vec<Branch>> = HashMap::new();
         for r in &branches {
@@ -233,12 +261,22 @@ impl Store {
         Ok(out)
     }
 
-    async fn snapshots_where(&self, cond: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> Result<Vec<String>> {
+    async fn snapshots_where(
+        &self,
+        cond: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<Vec<String>> {
         let sql = format!(
             "SELECT DISTINCT payload->>'snapshot' FROM events
              WHERE kind = 'tool_call' AND payload->>'snapshot' IS NOT NULL AND {cond}"
         );
-        Ok(self.client.query(&sql, params).await?.iter().map(|r| r.get(0)).collect())
+        Ok(self
+            .client
+            .query(&sql, params)
+            .await?
+            .iter()
+            .map(|r| r.get(0))
+            .collect())
     }
 
     /// Deletes the run's branches, events and the run itself, and returns every database
@@ -271,13 +309,23 @@ impl Store {
     pub async fn run_has_running(&self, run_id: &str) -> Result<bool> {
         Ok(self
             .client
-            .query_one("SELECT EXISTS (SELECT 1 FROM branches WHERE run_id = $1 AND status = 'running')", &[&run_id])
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM branches WHERE run_id = $1 AND status = 'running')",
+                &[&run_id],
+            )
             .await?
             .get(0))
     }
 
     pub async fn run_exists(&self, run_id: &str) -> Result<bool> {
-        Ok(self.client.query_one("SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1)", &[&run_id]).await?.get(0))
+        Ok(self
+            .client
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1)",
+                &[&run_id],
+            )
+            .await?
+            .get(0))
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -285,7 +333,12 @@ impl Store {
     }
 
     /// Copies `from`'s events with `seq < before_seq` onto `to`, keeping their seqs.
-    pub async fn copy_prefix(&self, from_branch: &str, to_branch: &str, before_seq: i64) -> Result<()> {
+    pub async fn copy_prefix(
+        &self,
+        from_branch: &str,
+        to_branch: &str,
+        before_seq: i64,
+    ) -> Result<()> {
         let lock = self.lock_for(to_branch);
         let _g = lock.lock().await;
         self.client

@@ -44,7 +44,13 @@ async fn worlds() -> Arc<Worlds> {
 }
 
 fn agent(id: &str) -> AgentSpec {
-    AgentSpec { id: id.into(), name: id.into(), kind: AgentKind::Open, model: None, prompt: "p".into() }
+    AgentSpec {
+        id: id.into(),
+        name: id.into(),
+        kind: AgentKind::Open,
+        model: None,
+        prompt: "p".into(),
+    }
 }
 
 struct Fx {
@@ -58,32 +64,59 @@ struct Fx {
 
 async fn setup(tag: &str) -> Fx {
     let worlds = worlds().await;
-    let meta = format!("arena_test_mcp_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let meta = format!(
+        "arena_test_mcp_{}_{}",
+        tag,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
     let clean = Cleanup::new();
     clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
-    let team = Team { id: "t".into(), name: "T".into(), agents: vec![agent("triage"), agent("resolver")] };
+    let team = Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![agent("triage"), agent("resolver")],
+    };
     let run_id = store.create_run("task", &team).await.unwrap();
-    let branch = store.create_branch(&run_id, None, &team, &json!([]), None).await.unwrap();
-    let db = worlds.new_branch(&format!("mcptest_{}", branch), Source::Base).await.unwrap();
+    let branch = store
+        .create_branch(&run_id, None, &team, &json!([]), None)
+        .await
+        .unwrap();
+    let db = worlds
+        .new_branch(&format!("mcptest_{}", branch), Source::Base)
+        .await
+        .unwrap();
     let state = Arc::new(AppState::new(
         store.clone(),
         worlds.clone(),
         Config::new(data_dir()),
     ));
-    state
-        .live
-        .write()
-        .unwrap()
-        .insert(branch.clone(), Arc::new(BranchCtx::new(branch.clone(), db.clone(), team, "task".into())));
+    state.live.write().unwrap().insert(
+        branch.clone(),
+        Arc::new(BranchCtx::new(
+            branch.clone(),
+            db.clone(),
+            team,
+            "task".into(),
+        )),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app::router(state)).await.unwrap() });
-    Fx { store, worlds, _clean: clean, branch, db, url: format!("http://127.0.0.1:{port}/mcp") }
+    Fx {
+        store,
+        worlds,
+        _clean: clean,
+        branch,
+        db,
+        url: format!("http://127.0.0.1:{port}/mcp"),
+    }
 }
 
 async fn teardown(fx: Fx, extra: &[String]) {
-    let Fx { store, worlds, db, .. } = fx;
+    let Fx {
+        store, worlds, db, ..
+    } = fx;
     drop(store);
     worlds.drop_db(&db).await.unwrap();
     for d in extra {
@@ -104,8 +137,13 @@ async fn rpc(fx: &Fx, agent: &str, body: Value) -> (u16, Value) {
 }
 
 async fn call(fx: &Fx, agent: &str, name: &str, args: Value) -> Value {
-    let (s, v) = rpc(fx, agent, json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
-        "params":{"name":name,"arguments":args}})).await;
+    let (s, v) = rpc(
+        fx,
+        agent,
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":name,"arguments":args}}),
+    )
+    .await;
     assert_eq!(s, 200);
     v["result"].clone()
 }
@@ -116,21 +154,41 @@ fn address_args() -> Value {
 }
 
 fn names(v: &Value) -> Vec<String> {
-    v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    v["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
 }
 
 #[test]
 fn initialize_and_notification() {
     run(async {
         let fx = setup("init").await;
-        let (s, v) = rpc(&fx, "triage", json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})).await;
+        let (s, v) = rpc(
+            &fx,
+            "triage",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        )
+        .await;
         assert_eq!(s, 200);
         assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(v["result"]["serverInfo"]["name"], "arena-retail");
         assert_eq!(v["result"]["capabilities"], json!({"tools":{}}));
-        let (s, _) = rpc(&fx, "triage", json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await;
+        let (s, _) = rpc(
+            &fx,
+            "triage",
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        )
+        .await;
         assert_eq!(s, 202);
-        let (s, _) = rpc(&fx, "nobody", json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).await;
+        let (s, _) = rpc(
+            &fx,
+            "nobody",
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
         assert_eq!(s, 404);
         teardown(fx, &[]).await;
     })
@@ -157,7 +215,10 @@ fn triage_write_is_refused_and_recorded() {
         let fx = setup("refuse").await;
         let r = call(&fx, "triage", "modify_user_address", address_args()).await;
         assert_eq!(r["isError"], true);
-        assert_eq!(r["content"][0]["text"], "Write tools are not available to this agent");
+        assert_eq!(
+            r["content"][0]["text"],
+            "Write tools are not available to this agent"
+        );
         let evs = fx.store.events(&fx.branch).await.unwrap();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].kind, EventKind::ToolCall);
@@ -167,12 +228,24 @@ fn triage_write_is_refused_and_recorded() {
         assert!(p.snapshot.is_none());
         // DB untouched.
         let before = {
-            let b = fx.worlds.new_branch(&format!("mcpcmp_{}", fx.branch), Source::Base).await.unwrap();
-            let d = fx.worlds.with_client(&b, async |c| dump(c).await).await.unwrap();
+            let b = fx
+                .worlds
+                .new_branch(&format!("mcpcmp_{}", fx.branch), Source::Base)
+                .await
+                .unwrap();
+            let d = fx
+                .worlds
+                .with_client(&b, async |c| dump(c).await)
+                .await
+                .unwrap();
             fx.worlds.drop_db(&b).await.unwrap();
             d
         };
-        let now = fx.worlds.with_client(&fx.db, async |c| dump(c).await).await.unwrap();
+        let now = fx
+            .worlds
+            .with_client(&fx.db, async |c| dump(c).await)
+            .await
+            .unwrap();
         assert_eq!(before, now);
         teardown(fx, &[]).await;
     })
@@ -189,15 +262,34 @@ fn resolver_write_snapshots() {
         assert_eq!(evs.len(), 1);
         let p: ToolCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
         let snap = p.snapshot.expect("snapshot");
-        let b2 = fx.worlds.new_branch(&format!("mcpfork_{}", fx.branch), Source::Snapshot(snap.clone())).await.unwrap();
+        let b2 = fx
+            .worlds
+            .new_branch(
+                &format!("mcpfork_{}", fx.branch),
+                Source::Snapshot(snap.clone()),
+            )
+            .await
+            .unwrap();
         let (live, forked) = (
-            fx.worlds.with_client(&fx.db, async |c| dump(c).await).await.unwrap(),
-            fx.worlds.with_client(&b2, async |c| dump(c).await).await.unwrap(),
+            fx.worlds
+                .with_client(&fx.db, async |c| dump(c).await)
+                .await
+                .unwrap(),
+            fx.worlds
+                .with_client(&b2, async |c| dump(c).await)
+                .await
+                .unwrap(),
         );
         assert_eq!(live, forked);
         assert!(forked.to_string().contains("7 Mcp Road"));
         // A read does not snapshot.
-        let r = call(&fx, "resolver", "get_user_details", json!({"user_id":"ethan_garcia_1261"})).await;
+        let r = call(
+            &fx,
+            "resolver",
+            "get_user_details",
+            json!({"user_id":"ethan_garcia_1261"}),
+        )
+        .await;
         assert_eq!(r["isError"], false);
         let evs = fx.store.events(&fx.branch).await.unwrap();
         let p: ToolCallPayload = serde_json::from_value(evs[1].payload.clone()).unwrap();
@@ -218,7 +310,12 @@ fn bad_calls_are_tool_errors_not_500() {
             json!({"arguments":{}}),
         ];
         for (i, params) in cases.iter().enumerate() {
-            let (s, v) = rpc(&fx, "resolver", json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":params})).await;
+            let (s, v) = rpc(
+                &fx,
+                "resolver",
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":params}),
+            )
+            .await;
             assert_eq!(s, 200, "case {i}");
             assert_eq!(v["result"]["isError"], true, "case {i}: {v}");
             let evs = fx.store.events(&fx.branch).await.unwrap();
@@ -246,7 +343,13 @@ fn handoff_records_once_and_is_not_for_last_agent() {
         let kinds: Vec<_> = evs.iter().map(|e| e.kind).collect();
         assert_eq!(
             kinds,
-            vec![EventKind::ToolCall, EventKind::ToolCall, EventKind::Handoff, EventKind::ToolCall, EventKind::ToolCall]
+            vec![
+                EventKind::ToolCall,
+                EventKind::ToolCall,
+                EventKind::Handoff,
+                EventKind::ToolCall,
+                EventKind::ToolCall
+            ]
         );
         let h: HandoffPayload = serde_json::from_value(evs[2].payload.clone()).unwrap();
         assert_eq!(h.note, "user wants X");
@@ -260,7 +363,9 @@ async fn seed_second_user(fx: &Fx) -> (String, String) {
     let ids: Vec<String> = fx
         .worlds
         .with_client(&fx.db, async |c| {
-            let rows = c.query("SELECT id FROM users ORDER BY id LIMIT 2", &[]).await?;
+            let rows = c
+                .query("SELECT id FROM users ORDER BY id LIMIT 2", &[])
+                .await?;
             Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
         })
         .await
@@ -279,8 +384,18 @@ fn parallel_writes_snapshot_in_order() {
         let fx = setup("par").await;
         let (u1, u2) = seed_second_user(&fx).await;
         let (a, b) = tokio::join!(
-            call(&fx, "resolver", "modify_user_address", addr_for(&u1, "1 Alpha Way")),
-            call(&fx, "resolver", "modify_user_address", addr_for(&u2, "2 Beta Way")),
+            call(
+                &fx,
+                "resolver",
+                "modify_user_address",
+                addr_for(&u1, "1 Alpha Way")
+            ),
+            call(
+                &fx,
+                "resolver",
+                "modify_user_address",
+                addr_for(&u2, "2 Beta Way")
+            ),
         );
         assert_eq!(a["isError"], false, "{a}");
         assert_eq!(b["isError"], false, "{b}");
@@ -293,8 +408,20 @@ fn parallel_writes_snapshot_in_order() {
             let p: ToolCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
             let line = p.args["address1"].as_str().unwrap().to_string();
             let snap = p.snapshot.expect("snapshot");
-            let d = fx.worlds.new_branch(&format!("mcppar{}_{}", i, fx.branch), Source::Snapshot(snap.clone())).await.unwrap();
-            let dumped = fx.worlds.with_client(&d, async |c| dump(c).await).await.unwrap().to_string();
+            let d = fx
+                .worlds
+                .new_branch(
+                    &format!("mcppar{}_{}", i, fx.branch),
+                    Source::Snapshot(snap.clone()),
+                )
+                .await
+                .unwrap();
+            let dumped = fx
+                .worlds
+                .with_client(&d, async |c| dump(c).await)
+                .await
+                .unwrap()
+                .to_string();
             seen.push(line.clone());
             for l in ["1 Alpha Way", "2 Beta Way"] {
                 let expected = seen.iter().any(|s| s == l);
@@ -314,15 +441,28 @@ fn failed_snapshot_is_recorded() {
         let ctx = BranchCtx::new(
             fx.branch.clone(),
             fx.db.clone(),
-            Team { id: "t".into(), name: "T".into(), agents: vec![agent("resolver")] },
+            Team {
+                id: "t".into(),
+                name: "T".into(),
+                agents: vec![agent("resolver")],
+            },
             "task".into(),
         );
         // An open session on the branch DB makes `CREATE DATABASE .. TEMPLATE` fail.
-        let (_keep, conn) = tokio_postgres::connect(&fx.worlds.admin().db_url(&fx.db), tokio_postgres::NoTls)
-            .await
-            .unwrap();
+        let (_keep, conn) =
+            tokio_postgres::connect(&fx.worlds.admin().db_url(&fx.db), tokio_postgres::NoTls)
+                .await
+                .unwrap();
         tokio::spawn(conn);
-        let v = exec.run(&ctx, "resolver", "modify_user_address", address_args(), None).await;
+        let v = exec
+            .run(
+                &ctx,
+                "resolver",
+                "modify_user_address",
+                address_args(),
+                None,
+            )
+            .await;
         assert!(v.get("error").is_none(), "{v}");
         let evs = fx.store.events(&fx.branch).await.unwrap();
         let p: ToolCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();

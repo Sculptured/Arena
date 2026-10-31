@@ -18,11 +18,17 @@ async fn main() -> anyhow::Result<()> {
     let url = std::env::var("ARENA_PG_URL")
         .unwrap_or_else(|_| "postgres://arena:arena@127.0.0.1:5544/postgres".to_string());
     let port: u16 = match std::env::var("ARENA_PORT") {
-        Ok(p) => p.parse().map_err(|_| anyhow::anyhow!("ARENA_PORT {p:?} is not a port number"))?,
+        Ok(p) => p
+            .parse()
+            .map_err(|_| anyhow::anyhow!("ARENA_PORT {p:?} is not a port number"))?,
         Err(_) => 4510,
     };
-    let data_dir = PathBuf::from(std::env::var("ARENA_DATA").unwrap_or_else(|_| "../data/retail".to_string()));
-    let ui_dist = std::env::var("ARENA_UI_DIST").ok().filter(|p| !p.is_empty()).map(PathBuf::from);
+    let data_dir =
+        PathBuf::from(std::env::var("ARENA_DATA").unwrap_or_else(|_| "../data/retail".to_string()));
+    let ui_dist = std::env::var("ARENA_UI_DIST")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
 
     let admin = Admin::connect(&url).await?;
     let store = Arc::new(Store::open(&admin).await?);

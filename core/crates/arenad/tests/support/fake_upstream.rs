@@ -23,12 +23,21 @@ struct St {
 
 impl FakeUpstream {
     pub async fn start(script: Vec<Value>) -> FakeUpstream {
-        let state = Arc::new(St { script, seen: Mutex::new(vec![]), headers: Mutex::new(vec![]) });
-        let app = Router::new().route("/chat/completions", post(handle)).with_state(state.clone());
+        let state = Arc::new(St {
+            script,
+            seen: Mutex::new(vec![]),
+            headers: Mutex::new(vec![]),
+        });
+        let app = Router::new()
+            .route("/chat/completions", post(handle))
+            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        FakeUpstream { base_url: format!("http://127.0.0.1:{port}"), state }
+        FakeUpstream {
+            base_url: format!("http://127.0.0.1:{port}"),
+            state,
+        }
     }
 
     /// Every request body received, in order.
@@ -52,12 +61,18 @@ async fn handle(
         seen.push(body);
         seen.len()
     };
-    st.headers
-        .lock()
-        .unwrap()
-        .push(headers.get("authorization").and_then(|v| v.to_str().ok()).map(str::to_string));
+    st.headers.lock().unwrap().push(
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+    );
     let Some(msg) = st.script.get(n - 1).or(st.script.last()) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": "empty script"}}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"message": "empty script"}})),
+        )
+            .into_response();
     };
     if let Some(code) = msg.get("_status").and_then(Value::as_u64) {
         return (

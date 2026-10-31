@@ -18,9 +18,14 @@ use arenad::{
 use fake_upstream::FakeUpstream;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
-use world::{schema::load_base, snapshot::Worlds, testing::{self, Cleanup}};
+use world::{
+    schema::load_base,
+    snapshot::Worlds,
+    testing::{self, Cleanup},
+};
 
-static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+static RT: LazyLock<tokio::runtime::Runtime> =
+    LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
@@ -44,11 +49,21 @@ async fn worlds() -> Arc<Worlds> {
 }
 
 fn agent(id: &str) -> AgentSpec {
-    AgentSpec { id: id.into(), name: id.into(), kind: AgentKind::Open, model: Some("fake/model".into()), prompt: format!("You are {id}.") }
+    AgentSpec {
+        id: id.into(),
+        name: id.into(),
+        kind: AgentKind::Open,
+        model: Some("fake/model".into()),
+        prompt: format!("You are {id}."),
+    }
 }
 
 fn team() -> Team {
-    Team { id: "t".into(), name: "T".into(), agents: vec![agent("triage"), agent("resolver")] }
+    Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![agent("triage"), agent("resolver")],
+    }
 }
 
 struct Fx {
@@ -64,7 +79,11 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
 
 async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
     let worlds = worlds().await;
-    let meta = format!("arena_test_api_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let meta = format!(
+        "arena_test_api_{}_{}",
+        tag,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
     let clean = Cleanup::new();
     clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
@@ -80,7 +99,12 @@ async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut 
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, _clean: clean, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() }
+    Fx {
+        state,
+        _clean: clean,
+        base: format!("http://127.0.0.1:{port}"),
+        http: reqwest::Client::new(),
+    }
 }
 
 /// Drops the branches' databases, the snapshots their events name, and the metadata database.
@@ -107,17 +131,30 @@ async fn teardown(fx: Fx, branches: &[&str]) {
 
 impl Fx {
     async fn get(&self, path: &str) -> (u16, Value) {
-        let r = self.http.get(format!("{}{path}", self.base)).send().await.unwrap();
+        let r = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .send()
+            .await
+            .unwrap();
         (r.status().as_u16(), r.json().await.unwrap())
     }
 
     async fn post(&self, path: &str, body: Value) -> (u16, Value) {
-        let r = self.http.post(format!("{}{path}", self.base)).json(&body).send().await.unwrap();
+        let r = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
         (r.status().as_u16(), r.json().await.unwrap())
     }
 
     async fn run_to_end(&self, task: &str, team: &Team) -> String {
-        let (st, v) = self.post("/api/runs", json!({"task_id": task, "team": team})).await;
+        let (st, v) = self
+            .post("/api/runs", json!({"task_id": task, "team": team}))
+            .await;
         assert_eq!(st, 200, "{v}");
         let id = v["branch_id"].as_str().unwrap().to_string();
         self.wait(&id).await;
@@ -153,9 +190,21 @@ const USER: &str = "isabella_johansson_2152";
 
 fn triage_script() -> Vec<Value> {
     vec![
-        tool_msg(vec![("t1", "find_user_id_by_name_zip", json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}))]),
-        tool_msg(vec![("t2", "get_order_details", json!({"order_id": ORDER}))]),
-        tool_msg(vec![("t3", "handoff", json!({"note": "Isabella wants to exchange an item in #W7181492."}))]),
+        tool_msg(vec![(
+            "t1",
+            "find_user_id_by_name_zip",
+            json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}),
+        )]),
+        tool_msg(vec![(
+            "t2",
+            "get_order_details",
+            json!({"order_id": ORDER}),
+        )]),
+        tool_msg(vec![(
+            "t3",
+            "handoff",
+            json!({"note": "Isabella wants to exchange an item in #W7181492."}),
+        )]),
     ]
 }
 
@@ -166,8 +215,17 @@ fn read_order(id: &str) -> Value {
 fn gold_write() -> Value {
     let tasks = Tasks::load(&data_dir()).unwrap();
     let t = tasks.get("27").unwrap();
-    let a = t["evaluation_criteria"]["actions"].as_array().unwrap().iter().find(|a| a["name"] == "exchange_delivered_order_items").unwrap();
-    tool_msg(vec![("w1", "exchange_delivered_order_items", a["arguments"].clone())])
+    let a = t["evaluation_criteria"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "exchange_delivered_order_items")
+        .unwrap();
+    tool_msg(vec![(
+        "w1",
+        "exchange_delivered_order_items",
+        a["arguments"].clone(),
+    )])
 }
 
 fn wrong_write() -> Value {
@@ -198,9 +256,17 @@ fn frames(body: &str) -> Vec<(String, String)> {
 
 /// Reads the SSE stream until a `status` frame has arrived.
 async fn read_stream(fx: &Fx, branch: &str) -> Vec<(String, String)> {
-    let mut resp = fx.http.get(format!("{}/api/branches/{branch}/stream", fx.base)).send().await.unwrap();
+    let mut resp = fx
+        .http
+        .get(format!("{}/api/branches/{branch}/stream", fx.base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
+    assert!(resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
     let mut body = String::new();
     let read = async {
         while let Some(chunk) = resp.chunk().await.unwrap() {
@@ -210,7 +276,9 @@ async fn read_stream(fx: &Fx, branch: &str) -> Vec<(String, String)> {
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(60), read).await.expect("no status frame");
+    tokio::time::timeout(Duration::from_secs(60), read)
+        .await
+        .expect("no status frame");
     frames(&body)
 }
 
@@ -232,18 +300,46 @@ fn post_run_then_stream_until_status() {
         assert_eq!(dt["agents"].as_array().unwrap().len(), 2);
 
         // Validation errors.
-        let (st, v) = fx.post("/api/runs", json!({"task_id": "nope", "team": team()})).await;
+        let (st, v) = fx
+            .post("/api/runs", json!({"task_id": "nope", "team": team()}))
+            .await;
         assert_eq!((st, v["error"].is_string()), (404, true));
-        let dup = Team { agents: vec![agent("a"), agent("a")], ..team() };
-        assert_eq!(fx.post("/api/runs", json!({"task_id": "27", "team": dup})).await.0, 400);
-        let bad = Team { agents: vec![agent("Bad Id")], ..team() };
-        assert_eq!(fx.post("/api/runs", json!({"task_id": "27", "team": bad})).await.0, 400);
-        let none = Team { agents: vec![], ..team() };
-        assert_eq!(fx.post("/api/runs", json!({"task_id": "27", "team": none})).await.0, 400);
+        let dup = Team {
+            agents: vec![agent("a"), agent("a")],
+            ..team()
+        };
+        assert_eq!(
+            fx.post("/api/runs", json!({"task_id": "27", "team": dup}))
+                .await
+                .0,
+            400
+        );
+        let bad = Team {
+            agents: vec![agent("Bad Id")],
+            ..team()
+        };
+        assert_eq!(
+            fx.post("/api/runs", json!({"task_id": "27", "team": bad}))
+                .await
+                .0,
+            400
+        );
+        let none = Team {
+            agents: vec![],
+            ..team()
+        };
+        assert_eq!(
+            fx.post("/api/runs", json!({"task_id": "27", "team": none}))
+                .await
+                .0,
+            400
+        );
         assert_eq!(fx.post("/api/runs", json!({"task_id": "27"})).await.0, 400);
         assert_eq!(fx.get("/api/branches/nope").await.0, 404);
 
-        let (st, v) = fx.post("/api/runs", json!({"task_id": "27", "team": team()})).await;
+        let (st, v) = fx
+            .post("/api/runs", json!({"task_id": "27", "team": team()}))
+            .await;
         assert_eq!(st, 200, "{v}");
         let branch = v["branch_id"].as_str().unwrap().to_string();
         let run_id = v["run_id"].as_str().unwrap().to_string();
@@ -253,9 +349,17 @@ fn post_run_then_stream_until_status() {
         assert_eq!(last.0, "status");
         let status: Value = serde_json::from_str(&last.1).unwrap();
         assert_eq!(status["status"], "passed", "{status}");
-        let evs: Vec<Value> = fr.iter().filter(|(n, _)| n == "event").map(|(_, d)| serde_json::from_str(d).unwrap()).collect();
+        let evs: Vec<Value> = fr
+            .iter()
+            .filter(|(n, _)| n == "event")
+            .map(|(_, d)| serde_json::from_str(d).unwrap())
+            .collect();
         let seqs: Vec<i64> = evs.iter().map(|e| e["seq"].as_i64().unwrap()).collect();
-        assert_eq!(seqs, (1..=seqs.len() as i64).collect::<Vec<_>>(), "ordered, no gaps or duplicates");
+        assert_eq!(
+            seqs,
+            (1..=seqs.len() as i64).collect::<Vec<_>>(),
+            "ordered, no gaps or duplicates"
+        );
         assert_eq!(evs.last().unwrap()["kind"], "check");
 
         // After the end, a new stream replays everything and ends with status immediately.
@@ -266,7 +370,12 @@ fn post_run_then_stream_until_status() {
         assert_eq!(b["events"].as_array().unwrap().len(), seqs.len());
         assert_eq!(b["status"], "passed");
         let (_, runs) = fx.get("/api/runs").await;
-        let r = runs.as_array().unwrap().iter().find(|r| r["id"] == run_id.as_str()).unwrap();
+        let r = runs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == run_id.as_str())
+            .unwrap();
         assert_eq!(r["branches"][0]["id"], branch.as_str());
         assert_eq!(r["branches"][0]["status"], "passed");
         teardown(fx, &[&branch]).await;
@@ -293,12 +402,19 @@ fn compare_reports_first_divergence_and_rows() {
         assert!(v["a"]["seconds"].as_f64().unwrap() >= 0.0);
 
         let aevs = fx.state.store.events(&a).await.unwrap();
-        let first_write = aevs.iter().find(|e| e.payload["name"] == "exchange_delivered_order_items").unwrap().seq;
+        let first_write = aevs
+            .iter()
+            .find(|e| e.payload["name"] == "exchange_delivered_order_items")
+            .unwrap()
+            .seq;
         assert_eq!(v["first_divergent_seq"], first_write);
 
         let rows = v["differing_rows"].as_array().unwrap();
         let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
-        assert_eq!(keys, vec![format!("orders/{ORDER}"), format!("users/{USER}")]);
+        assert_eq!(
+            keys,
+            vec![format!("orders/{ORDER}"), format!("users/{USER}")]
+        );
         assert_eq!(rows[0]["a"]["status"], "exchange requested");
         assert_eq!(rows[0]["b"]["status"], "delivered");
         assert_eq!(rows[1]["b"]["address"]["address1"], "1 Wrong St");
@@ -316,40 +432,89 @@ fn compare_reports_first_divergence_and_rows() {
 fn rows_at_seq_shows_state_after_that_step() {
     run(async {
         let mut script = triage_script();
-        script.extend([read_order("r1"), gold_write(), wrong_write(), text_msg("Done.")]);
+        script.extend([
+            read_order("r1"),
+            gold_write(),
+            wrong_write(),
+            text_msg("Done."),
+        ]);
         let up = FakeUpstream::start(script).await;
         let fx = setup("rows", &up).await;
         let b = fx.run_to_end("27", &team()).await;
         let evs = fx.state.store.events(&b).await.unwrap();
         let seq_of = |name: &str| evs.iter().find(|e| e.payload["name"] == name).unwrap().seq;
-        let (s_gold, s_wrong) = (seq_of("exchange_delivered_order_items"), seq_of("modify_user_address"));
+        let (s_gold, s_wrong) = (
+            seq_of("exchange_delivered_order_items"),
+            seq_of("modify_user_address"),
+        );
         let keys = format!("orders/%23W7181492,users/{USER},users/nobody");
 
-        let (st, v) = fx.get(&format!("/api/branches/{b}/rows?seq={}&keys={keys}", s_gold - 1)).await;
+        let (st, v) = fx
+            .get(&format!(
+                "/api/branches/{b}/rows?seq={}&keys={keys}",
+                s_gold - 1
+            ))
+            .await;
         assert_eq!(st, 200, "{v}");
         assert_eq!(v["seq"], s_gold - 1);
         assert_eq!(v["rows"][format!("orders/{ORDER}")]["status"], "delivered");
         assert!(v["rows"]["users/nobody"].is_null());
         let addr_before = v["rows"][format!("users/{USER}")]["address"]["address1"].clone();
 
-        let (_, v) = fx.get(&format!("/api/branches/{b}/rows?seq={s_gold}&keys={keys}")).await;
-        assert_eq!(v["rows"][format!("orders/{ORDER}")]["status"], "exchange requested");
-        assert_eq!(v["rows"][format!("users/{USER}")]["address"]["address1"], addr_before);
+        let (_, v) = fx
+            .get(&format!("/api/branches/{b}/rows?seq={s_gold}&keys={keys}"))
+            .await;
+        assert_eq!(
+            v["rows"][format!("orders/{ORDER}")]["status"],
+            "exchange requested"
+        );
+        assert_eq!(
+            v["rows"][format!("users/{USER}")]["address"]["address1"],
+            addr_before
+        );
 
-        let (_, v) = fx.get(&format!("/api/branches/{b}/rows?seq={s_wrong}&keys={keys}")).await;
-        assert_eq!(v["rows"][format!("users/{USER}")]["address"]["address1"], "1 Wrong St");
-        assert_eq!(v["rows"][format!("orders/{ORDER}")]["status"], "exchange requested");
+        let (_, v) = fx
+            .get(&format!("/api/branches/{b}/rows?seq={s_wrong}&keys={keys}"))
+            .await;
+        assert_eq!(
+            v["rows"][format!("users/{USER}")]["address"]["address1"],
+            "1 Wrong St"
+        );
+        assert_eq!(
+            v["rows"][format!("orders/{ORDER}")]["status"],
+            "exchange requested"
+        );
 
         // Bad requests; none leaves a temp database behind.
-        assert_eq!(fx.get(&format!("/api/branches/{b}/rows?seq={s_gold}&keys=sessions/x")).await.0, 400);
-        assert_eq!(fx.get(&format!("/api/branches/{b}/rows?seq=9999&keys=users/x")).await.0, 400);
-        assert_eq!(fx.get("/api/branches/nope/rows?seq=1&keys=users/x").await.0, 404);
+        assert_eq!(
+            fx.get(&format!(
+                "/api/branches/{b}/rows?seq={s_gold}&keys=sessions/x"
+            ))
+            .await
+            .0,
+            400
+        );
+        assert_eq!(
+            fx.get(&format!("/api/branches/{b}/rows?seq=9999&keys=users/x"))
+                .await
+                .0,
+            400
+        );
+        assert_eq!(
+            fx.get("/api/branches/nope/rows?seq=1&keys=users/x").await.0,
+            404
+        );
         let n = fx
             .state
             .worlds
             .admin()
             .with_db("postgres", async |c| {
-                let r = c.query_one("SELECT count(*) FROM pg_database WHERE datname LIKE $1", &[&format!("branch_rows_{b}%")]).await?;
+                let r = c
+                    .query_one(
+                        "SELECT count(*) FROM pg_database WHERE datname LIKE $1",
+                        &[&format!("branch_rows_{b}%")],
+                    )
+                    .await?;
                 Ok(r.get::<_, i64>(0))
             })
             .await
@@ -371,14 +536,32 @@ fn fork_over_http_maps_errors_and_starts_a_branch() {
         let evs = fx.state.store.events(&b).await.unwrap();
         let at = evs
             .iter()
-            .find(|e| e.kind == EventKind::ModelCall && e.payload["response"]["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "exchange_delivered_order_items")
+            .find(|e| {
+                e.kind == EventKind::ModelCall
+                    && e.payload["response"]["choices"][0]["message"]["tool_calls"][0]["function"]
+                        ["name"]
+                        == "exchange_delivered_order_items"
+            })
             .unwrap()
             .seq;
         let url = format!("/api/branches/{b}/fork");
         assert_eq!(fx.post(&url, json!({"at_seq": 9999})).await.0, 400);
-        assert_eq!(fx.post(&url, json!({"at_seq": at, "changes": {"ghost": {"prompt": "x"}}})).await.0, 400);
+        assert_eq!(
+            fx.post(
+                &url,
+                json!({"at_seq": at, "changes": {"ghost": {"prompt": "x"}}})
+            )
+            .await
+            .0,
+            400
+        );
         assert_eq!(fx.post(&url, json!({"nope": 1})).await.0, 400);
-        assert_eq!(fx.post("/api/branches/nope/fork", json!({"at_seq": 1})).await.0, 404);
+        assert_eq!(
+            fx.post("/api/branches/nope/fork", json!({"at_seq": 1}))
+                .await
+                .0,
+            404
+        );
         let (st, v) = fx.post(&url, json!({"at_seq": at})).await;
         assert_eq!(st, 200, "{v}");
         let child = v["branch_id"].as_str().unwrap().to_string();
@@ -401,11 +584,27 @@ fn open_mode_is_rejected_without_a_key() {
         .await;
         let (_, h) = fx.get("/api/health").await;
         assert_eq!(h["open_available"], false);
-        let (st, v) = fx.post("/api/runs", json!({"task_id": "27", "team": team()})).await;
-        assert_eq!((st, v["error"].as_str()), (400, Some("open mode needs OPENROUTER_API_KEY")));
-        let (st, v) = fx.post("/api/branches/whatever/fork", json!({"at_seq": 1, "changes": {"resolver": {"kind": "open"}}})).await;
-        assert_eq!((st, v["error"].as_str()), (400, Some("open mode needs OPENROUTER_API_KEY")));
-        assert!(fx.state.store.runs().await.unwrap().is_empty(), "no run was created");
+        let (st, v) = fx
+            .post("/api/runs", json!({"task_id": "27", "team": team()}))
+            .await;
+        assert_eq!(
+            (st, v["error"].as_str()),
+            (400, Some("open mode needs OPENROUTER_API_KEY"))
+        );
+        let (st, v) = fx
+            .post(
+                "/api/branches/whatever/fork",
+                json!({"at_seq": 1, "changes": {"resolver": {"kind": "open"}}}),
+            )
+            .await;
+        assert_eq!(
+            (st, v["error"].as_str()),
+            (400, Some("open mode needs OPENROUTER_API_KEY"))
+        );
+        assert!(
+            fx.state.store.runs().await.unwrap().is_empty(),
+            "no run was created"
+        );
         drop(fx.state);
     })
 }
@@ -418,11 +617,24 @@ fn stream_ends_when_shutdown_fires() {
         let fx = setup("shutdown", &up).await;
         let t = team();
         let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let b = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
-        let mut resp = fx.http.get(format!("{}/api/branches/{b}/stream", fx.base)).send().await.unwrap();
+        let b = fx
+            .state
+            .store
+            .create_branch(&run_id, None, &t, &json!([]), None)
+            .await
+            .unwrap();
+        let mut resp = fx
+            .http
+            .get(format!("{}/api/branches/{b}/stream", fx.base))
+            .send()
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(600)).await;
         fx.state.shutdown.send(true).unwrap();
-        let ended = tokio::time::timeout(Duration::from_secs(5), async { while resp.chunk().await.unwrap().is_some() {} }).await;
+        let ended = tokio::time::timeout(Duration::from_secs(5), async {
+            while resp.chunk().await.unwrap().is_some() {}
+        })
+        .await;
         assert!(ended.is_ok(), "stream did not end on shutdown");
         drop(fx.state);
     })
@@ -435,8 +647,21 @@ fn compare_of_branch_without_database_is_409() {
         let fx = setup("nodb", &up).await;
         let t = team();
         let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let ghost = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
-        fx.state.store.set_status(&ghost, BranchStatus::InfraError, Some("setup failed".into())).await.unwrap();
+        let ghost = fx
+            .state
+            .store
+            .create_branch(&run_id, None, &t, &json!([]), None)
+            .await
+            .unwrap();
+        fx.state
+            .store
+            .set_status(
+                &ghost,
+                BranchStatus::InfraError,
+                Some("setup failed".into()),
+            )
+            .await
+            .unwrap();
         let (st, v) = fx.get(&format!("/api/compare?a={ghost}&b={ghost}")).await;
         assert_eq!(st, 409, "{v}");
         assert_eq!(v["error"], "this branch has no database (its setup failed)");
@@ -459,7 +684,13 @@ fn api_rejects_foreign_host_headers() {
             (&format!("localhost:{port}"), 200),
             (&format!("[::1]:{port}"), 200),
         ] {
-            let r = fx.http.get(format!("{}/api/health", fx.base)).header("Host", host).send().await.unwrap();
+            let r = fx
+                .http
+                .get(format!("{}/api/health", fx.base))
+                .header("Host", host)
+                .send()
+                .await
+                .unwrap();
             assert_eq!(r.status().as_u16(), want, "host {host}");
         }
         drop(fx.state);

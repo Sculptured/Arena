@@ -30,6 +30,9 @@ pub fn default_team() -> Team {
     Team {
         id: "triage-resolver".into(),
         name: "Triage and resolver".into(),
-        agents: vec![agent("triage", "Triage", TRIAGE_PROMPT), agent("resolver", "Resolver", RESOLVER_PROMPT)],
+        agents: vec![
+            agent("triage", "Triage", TRIAGE_PROMPT),
+            agent("resolver", "Resolver", RESOLVER_PROMPT),
+        ],
     }
 }

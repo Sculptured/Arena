@@ -27,7 +27,8 @@ use world::{
     testing::{self, Cleanup},
 };
 
-static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+static RT: LazyLock<tokio::runtime::Runtime> =
+    LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
@@ -51,18 +52,36 @@ async fn worlds() -> Arc<Worlds> {
 }
 
 fn agent(id: &str) -> AgentSpec {
-    AgentSpec { id: id.into(), name: id.into(), kind: AgentKind::Open, model: Some("fake/model".into()), prompt: format!("You are {id}.") }
+    AgentSpec {
+        id: id.into(),
+        name: id.into(),
+        kind: AgentKind::Open,
+        model: Some("fake/model".into()),
+        prompt: format!("You are {id}."),
+    }
 }
 
 fn team() -> Team {
-    Team { id: "t".into(), name: "T".into(), agents: vec![agent("triage"), agent("resolver")] }
+    Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![agent("triage"), agent("resolver")],
+    }
 }
 
 struct Fail;
 impl Driver for Fail {
     fn run<'a>(&'a self, _: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async {
-            AgentResult { ok: false, error: Some("boom".into()), tokens: json!({}), cost_usd: None, cost_source: None, seconds: 0.0, failure: None }
+            AgentResult {
+                ok: false,
+                error: Some("boom".into()),
+                tokens: json!({}),
+                cost_usd: None,
+                cost_source: None,
+                seconds: 0.0,
+                failure: None,
+            }
         })
     }
 }
@@ -74,7 +93,11 @@ struct Fx {
 
 async fn setup(tag: &str, upstream: Option<&FakeUpstream>, failing: bool) -> Fx {
     let worlds = worlds().await;
-    let meta = format!("arena_test_runner_{}_{}", tag, &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let meta = format!(
+        "arena_test_runner_{}_{}",
+        tag,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
     let clean = Cleanup::new();
     clean.meta(&meta);
     let store = Arc::new(Store::open_named(worlds.admin(), &meta).await.unwrap());
@@ -87,11 +110,18 @@ async fn setup(tag: &str, upstream: Option<&FakeUpstream>, failing: bool) -> Fx 
     config.openrouter_key = Some("sk-secret".into());
     config.self_base = format!("http://127.0.0.1:{port}");
     let state = Arc::new(AppState::new(store, worlds, config));
-    let d: Arc<dyn Driver> = if failing { Arc::new(Fail) } else { Arc::new(OpenDriver::new(state.clone())) };
+    let d: Arc<dyn Driver> = if failing {
+        Arc::new(Fail)
+    } else {
+        Arc::new(OpenDriver::new(state.clone()))
+    };
     assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
     let app = app::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Fx { state, _clean: clean }
+    Fx {
+        state,
+        _clean: clean,
+    }
 }
 
 async fn teardown(fx: Fx, branches: &[&str]) {
@@ -127,17 +157,38 @@ fn text_msg(t: &str) -> Value {
 
 fn triage_script() -> Vec<Value> {
     vec![
-        tool_msg(vec![("t1", "find_user_id_by_name_zip", json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}))]),
-        tool_msg(vec![("t2", "get_order_details", json!({"order_id": "#W7181492"}))]),
-        tool_msg(vec![("t3", "handoff", json!({"note": "Isabella wants to exchange an item in #W7181492."}))]),
+        tool_msg(vec![(
+            "t1",
+            "find_user_id_by_name_zip",
+            json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}),
+        )]),
+        tool_msg(vec![(
+            "t2",
+            "get_order_details",
+            json!({"order_id": "#W7181492"}),
+        )]),
+        tool_msg(vec![(
+            "t3",
+            "handoff",
+            json!({"note": "Isabella wants to exchange an item in #W7181492."}),
+        )]),
     ]
 }
 
 fn gold_write() -> Value {
     let tasks = Tasks::load(&data_dir()).unwrap();
     let t = tasks.get("27").unwrap();
-    let a = t["evaluation_criteria"]["actions"].as_array().unwrap().iter().find(|a| a["name"] == "exchange_delivered_order_items").unwrap();
-    tool_msg(vec![("r1", "exchange_delivered_order_items", a["arguments"].clone())])
+    let a = t["evaluation_criteria"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "exchange_delivered_order_items")
+        .unwrap();
+    tool_msg(vec![(
+        "r1",
+        "exchange_delivered_order_items",
+        a["arguments"].clone(),
+    )])
 }
 
 fn wrong_write() -> Value {
@@ -149,7 +200,10 @@ fn wrong_write() -> Value {
 }
 
 fn kinds(evs: &[Event]) -> Vec<EventKind> {
-    evs.iter().map(|e| e.kind).filter(|k| !matches!(k, EventKind::ModelCall | EventKind::ToolCall)).collect()
+    evs.iter()
+        .map(|e| e.kind)
+        .filter(|k| !matches!(k, EventKind::ModelCall | EventKind::ToolCall))
+        .collect()
 }
 
 #[test]
@@ -176,7 +230,8 @@ fn scripted_team_passes_task_27() {
             ]
         );
         assert_eq!(evs[1].agent.as_deref(), Some("triage"));
-        let check: CheckPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
+        let check: CheckPayload =
+            serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
         assert!(check.passed);
         assert_eq!(check.differing_rows, Some(vec![]));
         assert_eq!(check.gold_db.as_deref(), Some("gold_27"));
@@ -184,7 +239,10 @@ fn scripted_team_passes_task_27() {
         let req = &up.requests()[3]["messages"][1]["content"];
         let input = req.as_str().unwrap();
         assert!(input.contains("# Customer ticket") && input.contains("# Store policy"));
-        assert!(input.contains("# Handoff note from triage") && input.contains("exchange an item in #W7181492"));
+        assert!(
+            input.contains("# Handoff note from triage")
+                && input.contains("exchange an item in #W7181492")
+        );
         assert!(fx.state.live.read().unwrap().is_empty());
         teardown(fx, &[&branch]).await;
     })
@@ -202,10 +260,14 @@ fn wrong_write_fails_with_differing_rows() {
         assert_eq!(b.status, BranchStatus::Failed);
         assert_eq!(b.error, None);
         let evs = fx.state.store.events(&branch).await.unwrap();
-        let check: CheckPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
+        let check: CheckPayload =
+            serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
         assert!(!check.passed);
         let rows = check.differing_rows.unwrap();
-        assert!(rows.contains(&"users/isabella_johansson_2152".to_string()), "{rows:?}");
+        assert!(
+            rows.contains(&"users/isabella_johansson_2152".to_string()),
+            "{rows:?}"
+        );
         assert!(rows.contains(&"orders/#W7181492".to_string()), "{rows:?}");
         let mut sorted = rows.clone();
         sorted.sort();
@@ -223,8 +285,16 @@ fn driver_error_is_infra_error_not_failed() {
         assert_eq!(b.status, BranchStatus::InfraError);
         assert_eq!(b.error.as_deref(), Some("boom"));
         let evs = fx.state.store.events(&branch).await.unwrap();
-        assert_eq!(kinds(&evs), vec![EventKind::RunStart, EventKind::AgentStart, EventKind::AgentEnd]);
-        let end: AgentEndPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
+        assert_eq!(
+            kinds(&evs),
+            vec![
+                EventKind::RunStart,
+                EventKind::AgentStart,
+                EventKind::AgentEnd
+            ]
+        );
+        let end: AgentEndPayload =
+            serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
         assert!(!end.ok);
         teardown(fx, &[&branch]).await;
     })
@@ -233,7 +303,10 @@ fn driver_error_is_infra_error_not_failed() {
 #[test]
 fn model_cutoff_is_failed_not_infra_error() {
     run(async {
-        let up = FakeUpstream::start(vec![json!({"role": "assistant", "content": "partial", "_finish_reason": "length"})]).await;
+        let up = FakeUpstream::start(vec![
+            json!({"role": "assistant", "content": "partial", "_finish_reason": "length"}),
+        ])
+        .await;
         let fx = setup("cutoff", Some(&up), false).await;
         let (_run, branch) = runner::start_run(&fx.state, "27", team()).await.unwrap();
         let b = finished(&fx, &branch).await;
@@ -255,7 +328,14 @@ fn missing_handoff_fails() {
         assert_eq!(b.status, BranchStatus::Failed);
         assert_eq!(b.error.as_deref(), Some("no handoff"));
         let evs = fx.state.store.events(&branch).await.unwrap();
-        assert_eq!(kinds(&evs), vec![EventKind::RunStart, EventKind::AgentStart, EventKind::AgentEnd]);
+        assert_eq!(
+            kinds(&evs),
+            vec![
+                EventKind::RunStart,
+                EventKind::AgentStart,
+                EventKind::AgentEnd
+            ]
+        );
         teardown(fx, &[&branch]).await;
     })
 }
@@ -267,16 +347,36 @@ fn run_branch_can_start_mid_chain_from_recorded_notes() {
         let fx = setup("mid", Some(&up), false).await;
         let t = team();
         let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let branch = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
-        let db = fx.state.worlds.new_branch(&branch, Source::Base).await.unwrap();
+        let branch = fx
+            .state
+            .store
+            .create_branch(&run_id, None, &t, &json!([]), None)
+            .await
+            .unwrap();
+        let db = fx
+            .state
+            .worlds
+            .new_branch(&branch, Source::Base)
+            .await
+            .unwrap();
         let ctx = Arc::new(BranchCtx::new(branch.clone(), db, t, "27".into()));
-        let from = StartPoint { agent_index: 1, resume: None, notes: vec!["Carried note.".into()] };
+        let from = StartPoint {
+            agent_index: 1,
+            resume: None,
+            notes: vec!["Carried note.".into()],
+        };
         runner::run_branch(fx.state.clone(), ctx, from).await;
         let b = fx.state.store.branch(&branch).await.unwrap();
         assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
         let evs = fx.state.store.events(&branch).await.unwrap();
-        assert_eq!(kinds(&evs), vec![EventKind::AgentStart, EventKind::AgentEnd, EventKind::Check]);
-        assert!(up.requests()[0]["messages"][1]["content"].as_str().unwrap().contains("Carried note."));
+        assert_eq!(
+            kinds(&evs),
+            vec![EventKind::AgentStart, EventKind::AgentEnd, EventKind::Check]
+        );
+        assert!(up.requests()[0]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Carried note."));
         teardown(fx, &[&branch]).await;
     })
 }

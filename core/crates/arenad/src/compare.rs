@@ -11,8 +11,13 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
     let mut tokens = 0i64;
     let mut cost = Some(0.0f64);
     let mut sources: Vec<String> = vec![];
-    for e in events.iter().filter(|e| e.seq >= from && e.kind == EventKind::AgentEnd) {
-        let Ok(end) = serde_json::from_value::<AgentEndPayload>(e.payload.clone()) else { continue };
+    for e in events
+        .iter()
+        .filter(|e| e.seq >= from && e.kind == EventKind::AgentEnd)
+    {
+        let Ok(end) = serde_json::from_value::<AgentEndPayload>(e.payload.clone()) else {
+            continue;
+        };
         tokens += end.tokens.unwrap_or(0);
         cost = match (cost, end.cost_usd) {
             (Some(a), Some(b)) => Some(a + b),
@@ -29,7 +34,9 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
         1 => json!(sources[0]),
         _ => json!("mixed"),
     };
-    let seconds = branch.ended_at.map(|t| (t - branch.created_at).num_milliseconds() as f64 / 1000.0);
+    let seconds = branch
+        .ended_at
+        .map(|t| (t - branch.created_at).num_milliseconds() as f64 / 1000.0);
     json!({
         "status": branch.status,
         "seconds": seconds,
@@ -40,7 +47,12 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
 }
 
 fn signature(e: &Event) -> (Option<&str>, EventKind, &Value, &Value) {
-    (e.agent.as_deref(), e.kind, &e.payload["name"], &e.payload["args"])
+    (
+        e.agent.as_deref(),
+        e.kind,
+        &e.payload["name"],
+        &e.payload["args"],
+    )
 }
 
 /// The first position at which the event lists differ in `(agent, kind, name, args)`; its seq
@@ -74,11 +86,23 @@ mod tests {
     use super::*;
 
     fn ev(seq: i64, agent: &str, kind: EventKind, payload: Value) -> Event {
-        Event { branch_id: "b".into(), seq, at: chrono::Utc::now(), agent: Some(agent.into()), kind, payload }
+        Event {
+            branch_id: "b".into(),
+            seq,
+            at: chrono::Utc::now(),
+            agent: Some(agent.into()),
+            kind,
+            payload,
+        }
     }
 
     fn call(seq: i64, name: &str, args: Value) -> Event {
-        ev(seq, "r", EventKind::ToolCall, json!({"name": name, "args": args}))
+        ev(
+            seq,
+            "r",
+            EventKind::ToolCall,
+            json!({"name": name, "args": args}),
+        )
     }
 
     #[test]
@@ -106,7 +130,11 @@ mod tests {
             run_id: "r".into(),
             parent_id: None,
             start_seq: None,
-            team: Team { id: "t".into(), name: "T".into(), agents: vec![] },
+            team: Team {
+                id: "t".into(),
+                name: "T".into(),
+                agents: vec![],
+            },
             changes: json!([]),
             fork_note: None,
             status: BranchStatus::Passed,
@@ -117,24 +145,38 @@ mod tests {
     }
 
     fn end(seq: i64, agent: &str, tokens: i64, cost: Option<f64>, source: Option<&str>) -> Event {
-        ev(seq, agent, EventKind::AgentEnd, json!({"ok": true, "tokens": tokens, "cost_usd": cost, "cost_source": source}))
+        ev(
+            seq,
+            agent,
+            EventKind::AgentEnd,
+            json!({"ok": true, "tokens": tokens, "cost_usd": cost, "cost_source": source}),
+        )
     }
 
     #[test]
     fn summary_shows_dollars_only_when_every_agent_has_them() {
         // One agent with a dollar figure, one without (Codex): tokens summed, no dollars.
-        let mixed = [end(1, "a", 100, Some(0.5), Some("api_equivalent_estimate")), end(2, "b", 50, None, None)];
+        let mixed = [
+            end(1, "a", 100, Some(0.5), Some("api_equivalent_estimate")),
+            end(2, "b", 50, None, None),
+        ];
         let s = summary(&branch(), &mixed);
         assert_eq!(s["tokens"], 150);
         assert!(s["cost_usd"].is_null());
         assert_eq!(s["cost_source"], "api_equivalent_estimate");
         // Two sources, both with dollars: summed, labelled mixed.
-        let two = [end(1, "a", 1, Some(0.5), Some("openrouter")), end(2, "b", 2, Some(0.25), Some("api_equivalent_estimate"))];
+        let two = [
+            end(1, "a", 1, Some(0.5), Some("openrouter")),
+            end(2, "b", 2, Some(0.25), Some("api_equivalent_estimate")),
+        ];
         let s = summary(&branch(), &two);
         assert_eq!(s["cost_usd"], 0.75);
         assert_eq!(s["cost_source"], "mixed");
         // The null does not depend on order.
-        let rev = [end(1, "b", 50, None, None), end(2, "a", 100, Some(0.5), Some("openrouter"))];
+        let rev = [
+            end(1, "b", 50, None, None),
+            end(2, "a", 100, Some(0.5), Some("openrouter")),
+        ];
         assert!(summary(&branch(), &rev)["cost_usd"].is_null());
     }
 }

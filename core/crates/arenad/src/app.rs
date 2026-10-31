@@ -36,7 +36,8 @@ pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 
 /// True only for `https` URLs whose host is exactly `openrouter.ai`.
 pub fn is_openrouter_url(base: &str) -> bool {
-    reqwest::Url::parse(base).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("openrouter.ai"))
+    reqwest::Url::parse(base)
+        .is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("openrouter.ai"))
 }
 
 impl std::fmt::Debug for Config {
@@ -44,7 +45,10 @@ impl std::fmt::Debug for Config {
         f.debug_struct("Config")
             .field("data_dir", &self.data_dir)
             .field("upstream_base", &self.upstream_base)
-            .field("openrouter_key", &self.openrouter_key.as_ref().map(|_| "<redacted>"))
+            .field(
+                "openrouter_key",
+                &self.openrouter_key.as_ref().map(|_| "<redacted>"),
+            )
             .field("self_base", &self.self_base)
             .field("max_db_bytes", &self.max_db_bytes)
             .finish()
@@ -57,7 +61,9 @@ impl Config {
         Config {
             data_dir,
             upstream_base: OPENROUTER_BASE.to_string(),
-            openrouter_key: std::env::var("OPENROUTER_API_KEY").ok().filter(|k| !k.is_empty()),
+            openrouter_key: std::env::var("OPENROUTER_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty()),
             self_base: String::new(),
             max_db_bytes: std::env::var("ARENA_MAX_DB_BYTES")
                 .ok()
@@ -100,7 +106,17 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("http client");
-        AppState { store, worlds, live: RwLock::new(HashMap::new()), config, http, drivers: OnceLock::new(), tasks: OnceLock::new(), shutdown: tokio::sync::watch::channel(false).0, dumps: Default::default() }
+        AppState {
+            store,
+            worlds,
+            live: RwLock::new(HashMap::new()),
+            config,
+            http,
+            drivers: OnceLock::new(),
+            tasks: OnceLock::new(),
+            shutdown: tokio::sync::watch::channel(false).0,
+            dumps: Default::default(),
+        }
     }
 }
 
@@ -125,7 +141,10 @@ pub fn install_default_drivers(state: &Arc<AppState>) -> bool {
     let base = state.config.self_base.clone();
     let mut m: Drivers = HashMap::new();
     m.insert(AgentKind::Open, Arc::new(OpenDriver::new(state.clone())));
-    m.insert(AgentKind::ClaudeCode, Arc::new(ClaudeDriver::new(base.clone())));
+    m.insert(
+        AgentKind::ClaudeCode,
+        Arc::new(ClaudeDriver::new(base.clone())),
+    );
     m.insert(AgentKind::Codex, Arc::new(CodexDriver::new(base)));
     state.install_drivers(m)
 }
@@ -146,10 +165,25 @@ mod tests {
     #[test]
     fn loopback_hosts() {
         use super::is_loopback_host as ok;
-        for h in ["127.0.0.1", "127.0.0.1:4510", "localhost", "LOCALHOST:80", "[::1]", "[::1]:4510"] {
+        for h in [
+            "127.0.0.1",
+            "127.0.0.1:4510",
+            "localhost",
+            "LOCALHOST:80",
+            "[::1]",
+            "[::1]:4510",
+        ] {
             assert!(ok(h), "{h}");
         }
-        for h in ["evil.example", "127.0.0.1.evil.example", "localhost.evil.com:80", "127.0.0.1:abc", "[::2]", "", "::1"] {
+        for h in [
+            "evil.example",
+            "127.0.0.1.evil.example",
+            "localhost.evil.com:80",
+            "127.0.0.1:abc",
+            "[::2]",
+            "",
+            "::1",
+        ] {
             assert!(!ok(h), "{h}");
         }
     }
@@ -161,7 +195,12 @@ fn is_loopback_host(host: &str) -> bool {
     let name = match host.strip_prefix('[') {
         Some(rest) => match rest.split_once(']') {
             Some((ip, "")) => return ip == "::1",
-            Some((ip, port)) => return ip == "::1" && port.strip_prefix(':').is_some_and(|p| p.parse::<u16>().is_ok()),
+            Some((ip, port)) => {
+                return ip == "::1"
+                    && port
+                        .strip_prefix(':')
+                        .is_some_and(|p| p.parse::<u16>().is_ok())
+            }
             None => return false,
         },
         None => match host.split_once(':') {
@@ -175,16 +214,30 @@ fn is_loopback_host(host: &str) -> bool {
 
 /// DNS-rebinding guard: a web page on another origin can resolve its own name to 127.0.0.1, so the
 /// browser would send that name in `Host`. Only loopback names reach the API.
-async fn loopback_host_only(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+async fn loopback_host_only(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let ok = req.headers().get(axum::http::header::HOST).and_then(|h| h.to_str().ok()).is_some_and(is_loopback_host);
+    let ok = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(is_loopback_host);
     if !ok {
-        return (axum::http::StatusCode::FORBIDDEN, axum::Json(serde_json::json!({"error": "forbidden host"}))).into_response();
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({"error": "forbidden host"})),
+        )
+            .into_response();
     }
     next.run(req).await
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
     let api = crate::api::router().layer(axum::middleware::from_fn(loopback_host_only));
-    crate::mcp::router().merge(crate::gateway::router()).merge(api).with_state(state)
+    crate::mcp::router()
+        .merge(crate::gateway::router())
+        .merge(api)
+        .with_state(state)
 }
