@@ -204,6 +204,10 @@ pub struct CheckPayload {
     /// `{part: save}` of every part's final state, saved before its instance stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_saves: Option<std::collections::BTreeMap<String, String>>,
+    /// Parts that keep no gold save (parts with replay), so they could not be compared with
+    /// the task's expected result.
+    #[serde(default)]
+    pub unchecked: Vec<String>,
 }
 
 /// How a part of a rerun's world was restored.

@@ -15,13 +15,13 @@ use parts::{
 };
 use serde_json::{json, Value};
 
-use crate::{restore::keeps_saves, saves::save_exists};
+use crate::{restore::in_shared_saves, saves::save_exists};
 
 use super::{
     call, from_shared,
     ids::{base_names, gold_names, temp_branch_id},
     plan::{plan, Plan},
-    Saves, World,
+    Saves, StartSaves, World,
 };
 
 /// One lock per name for this process: a save is made once even when two runs start together.
@@ -56,7 +56,7 @@ async fn saves_exist(hub: &Hub, planned: &Plan, names: &Saves) -> Result<bool> {
 fn kept_names(planned: &Plan, mut names: Saves) -> Saves {
     names.retain(|part, _| {
         let p = planned.parts.iter().find(|p| &p.part.part == part);
-        p.is_some_and(|p| keeps_saves(&p.describe.restore))
+        p.is_some_and(|p| in_shared_saves(&p.describe.restore))
     });
     names
 }
@@ -78,22 +78,37 @@ async fn ensure_saves(
         return Ok(names);
     }
     let from = from.map(|f| from_shared(&f, &planned.parts));
-    let world = World::start_parts(
+    build_saves(hub, bench, planned, from, &names, build).await?;
+    Ok(names)
+}
+
+/// A short-lived world started from `from` (empty when None), `build` on it, then its parts
+/// saved under `names`; the world is stopped either way.
+async fn build_saves(
+    hub: &Arc<Hub>,
+    bench: &BenchDescribe,
+    planned: Plan,
+    from: Option<StartSaves>,
+    names: &Saves,
+    build: impl AsyncFnOnce(&World) -> Result<()>,
+) -> Result<()> {
+    let branch = temp_branch_id();
+    let start = World::start_parts(
         hub.clone(),
         bench,
         planned,
-        &temp_branch_id(),
+        &branch,
         SHARED_SEED,
         from.as_ref(),
-    )
-    .await?;
+    );
+    let world = start.await?;
     let built = async {
         build(&world).await?;
-        world.save_all_as(&names).await.map_err(anyhow::Error::from)
+        world.save_all_as(names).await.map_err(anyhow::Error::from)
     }
     .await;
     world.stop().await;
-    built.map(|()| names)
+    built
 }
 
 /// The base save of each part, made once (empty instances, the benchmark's `seed`, save).

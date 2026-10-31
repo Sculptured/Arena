@@ -271,6 +271,29 @@ fn approximate_marks_branch() {
     })
 }
 
+/// The branch's `Check` payload.
+fn check_of(evs: &[Event]) -> &Value {
+    let check = evs.iter().rev().find(|e| e.kind == EventKind::Check);
+    &check.expect("a check").payload
+}
+
+/// A world of replay-only parts can't be checked: the branch fails saying so, and its part is
+/// listed as unchecked (and as not compared).
+async fn assert_nothing_checked(fx: &Fx, parent: &str, child: &str) {
+    let b = fx.state.store.branch(child).await.unwrap();
+    assert_eq!(b.status, BranchStatus::Failed);
+    assert_eq!(b.error.as_deref(), Some(arenad::runner::NOTHING_CHECKED));
+    let evs = fx.state.store.events(child).await.unwrap();
+    assert_eq!(check_of(&evs)["unchecked"], json!(["c"]));
+    assert_eq!(check_of(&evs)["passed"], false);
+    let (st, v) = fx.get(&format!("/api/compare?a={parent}&b={child}")).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        (&v["not_compared"], &v["differing_rows"]),
+        (&json!(["c"]), &json!([]))
+    );
+}
+
 #[test]
 fn replay_only_restores_exactly() {
     run(async {
@@ -285,7 +308,72 @@ fn replay_only_restores_exactly() {
             .all(|e| e.payload["saves"].is_null()));
         let child = fork_and_finish(&fx, &parent, model_call(&evs, 2), None).await;
         assert_restored(&fx, &child, "exact", "replay").await;
+        assert_nothing_checked(&fx, &parent, &child).await;
     })
+}
+
+/// The `value` results of the branch's `get` calls at or after `from`.
+fn gets(evs: &[Event], from: i64) -> Vec<i64> {
+    tool_calls(evs)
+        .into_iter()
+        .filter(|e| e.seq >= from && e.payload["name"] == "get")
+        .filter_map(|e| e.payload["result"]["value"].as_i64())
+        .collect()
+}
+
+/// A part with replay and approximate saves starts fresh with the run's seed in the run's first
+/// branch too, so an exact replay starts from the same state (the counter starts at
+/// `seed % 1000`) and doesn't diverge.
+#[test]
+fn exact_replay_starts_like_the_original() {
+    run(async {
+        let root = counter_world("seeded", "approx_and_replay", &["--seeded"]);
+        let script = vec![add(1000), get(), add(7), done(), get(), done()];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("seeded", root, &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        let fresh = (evs[0].payload["seed"].as_u64().unwrap() % 1000) as i64;
+        let first = tool_calls(&evs)[0].payload["result"]["value"]
+            .as_i64()
+            .unwrap();
+        assert!(
+            (fresh + 1000..fresh + 1003).contains(&first),
+            "{fresh} {first}"
+        );
+        let at = model_call(&evs, 2);
+        let (st, v) = fx.fork(&parent, at, None).await;
+        assert_eq!(st, 200, "{v}");
+        let child = v["branch_id"].as_str().unwrap().to_string();
+        fx.finished(&child).await;
+        let before = gets(&evs, 0)[0];
+        let after = gets(&fx.state.store.events(&child).await.unwrap(), at)[0];
+        assert!((before..before + 3).contains(&after), "{before} -> {after}");
+        assert_restored(&fx, &child, "exact", "replay").await;
+    })
+}
+
+/// The fork of `parent`: its only child.
+async fn only_child(fx: &Fx, parent: &str) -> Branch {
+    let runs = fx.state.store.runs().await.unwrap();
+    let children: Vec<Branch> = runs[0]
+        .branches
+        .iter()
+        .filter(|b| b.parent_id.as_deref() == Some(parent))
+        .cloned()
+        .collect();
+    assert_eq!(children.len(), 1);
+    children[0].clone()
+}
+
+/// The counter program no longer has the instance of part `c` of `branch`.
+async fn assert_stopped(fx: &Fx, branch: &str) {
+    let instance = arenad::world::instance_id(branch, "c");
+    let c = fx.state.hub.client("counter").await.unwrap();
+    let params = json!({"target": {"instance": instance}, "keys": []});
+    match c.call::<Value>("inspect", params).await {
+        Err(parts::CallError::Part { code: -32002, .. }) => {}
+        other => panic!("the replay instance still runs: {other:?}"),
+    }
 }
 
 #[test]
@@ -301,6 +389,11 @@ fn replay_divergence_fails() {
         let want =
             format!("replay of c diverged at step {first_add}, so it can't be restored exactly");
         assert_eq!(v["error"], want.as_str());
+        // The new branch ended infra_error with that message, its instance stopped.
+        let child = only_child(&fx, &parent).await;
+        assert_eq!(child.status, BranchStatus::InfraError);
+        assert_eq!(child.error.as_deref(), Some(want.as_str()));
+        assert_stopped(&fx, &child.id).await;
     })
 }
 
@@ -471,5 +564,131 @@ fn restore_plan_endpoint() {
         assert_eq!(st, 200, "{v}");
         assert_approximate_plan(&v);
         assert_plan_bad_requests(&fx, &branch, at).await;
+    })
+}
+
+/// A part refusing to start with a fingerprint mismatch (-32003) is the same 409, and the new
+/// branch ends infra_error.
+#[test]
+fn start_fingerprint_refusal_is_409() {
+    run(async {
+        let marks = ToyRoot(packages::toy_dir("movedmark"));
+        std::fs::create_dir_all(&marks.0).unwrap();
+        let moved = marks.0.join("moved");
+        let moved_s = moved.to_string_lossy().into_owned();
+        let part = ["part", "--refuse-start-if", &moved_s];
+        let root = package_root(
+            "moved",
+            &[
+                toy("toy-mv", "integration", &part),
+                bench(&["box=toy-mv"], "poke", "{}"),
+            ],
+        );
+        let poke = call("poke", json!({}));
+        let up = FakeUpstream::start(vec![poke.clone(), poke, done()]).await;
+        let fx = setup("moved", root, &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        std::fs::write(&moved, "").unwrap();
+        let (st, v) = fx.fork(&parent, model_call(&evs, 1), None).await;
+        assert_eq!(st, 409, "{v}");
+        let want =
+            "the box integration is running on a different machine or version than the original";
+        assert_eq!(v["error"], want);
+        assert_eq!(
+            only_child(&fx, &parent).await.status,
+            BranchStatus::InfraError
+        );
+    })
+}
+
+/// A fork's clock starts at the fork point's clock (the last one recorded before it), not 0.
+#[test]
+fn fork_clock_starts_at_fork_point() {
+    run(async {
+        let root = counter_world("forkclock", "exact", &[]);
+        let mut slow = add(2);
+        slow["_delay_ms"] = json!(1500);
+        let script = vec![add(1), slow, add(3), done(), get(), done()];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("forkclock", root, &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        let clock = |e: &Event| e.payload["clock_ms"].as_i64().unwrap();
+        let fork_clock = clock(tool_calls(&evs)[1]);
+        assert!(fork_clock >= 1400, "{fork_clock}");
+        let at = model_call(&evs, 2);
+        let (st, v) = fx.fork(&parent, at, None).await;
+        assert_eq!(st, 200, "{v}");
+        let child = v["branch_id"].as_str().unwrap().to_string();
+        fx.finished(&child).await;
+        let cevs = fx.state.store.events(&child).await.unwrap();
+        let first = tool_calls(&cevs).into_iter().find(|e| e.seq >= at).unwrap();
+        assert!(
+            clock(first) >= fork_clock,
+            "{} < {fork_clock}",
+            clock(first)
+        );
+    })
+}
+
+/// The value the counter keeps in `save`.
+async fn counter_in(fx: &Fx, save: &str) -> i64 {
+    let c = fx.state.hub.client("counter").await.unwrap();
+    let params = json!({"target": {"save": save}, "keys": ["counter/value"]});
+    let r: Value = c.call("inspect", params).await.unwrap();
+    r["docs"]["counter/value"].as_i64().unwrap()
+}
+
+/// A world of a counter `c` (exact saves) and a toy clock part whose saves take 1.5 s and that
+/// reports an event on every advance.
+fn freeze_world() -> ToyRoot {
+    let slow = [
+        "part",
+        "--uses-clock",
+        "--event-every",
+        "--save-sleep",
+        "1500",
+    ];
+    package_root(
+        "freeze",
+        &[
+            counter("counter", &["--flavour", "exact"]),
+            toy("toy-slow", "integration", &slow),
+            bench(&["c=counter", "box=toy-slow"], "add", r#"{"n": 1}"#),
+        ],
+    )
+}
+
+/// The world events recorded after the last agent's end.
+fn late_world_events(evs: &[Event]) -> Vec<i64> {
+    let end = evs
+        .iter()
+        .rev()
+        .find(|e| e.kind == EventKind::AgentEnd)
+        .unwrap()
+        .seq;
+    evs.iter()
+        .filter(|e| e.kind == EventKind::WorldEvent && e.seq > end)
+        .map(|e| e.seq)
+        .collect()
+}
+
+/// Once the last agent ends the world stands still: no world event after it, and the counter's
+/// final save is what the agent last read, however long the gold save takes to build.
+#[test]
+fn scoring_freezes_the_world() {
+    run(async {
+        let up = FakeUpstream::start(vec![add(1), get(), done()]).await;
+        let fx = setup("freeze", freeze_world(), &up).await;
+        let (_branch, evs) = fx.run_to_end().await;
+        let late = late_world_events(&evs);
+        assert!(
+            late.is_empty(),
+            "world events after the last agent: {late:?}"
+        );
+        let final_c = check_of(&evs)["final_saves"]["c"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(counter_in(&fx, &final_c).await, gets(&evs, 0)[0]);
     })
 }

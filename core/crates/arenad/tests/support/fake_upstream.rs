@@ -2,7 +2,8 @@
 //! messages in order (repeating the last one when exhausted) with fixed usage, and
 //! records every request body it received. A script entry of the form
 //! `{"_status": 500}` makes that call fail with that HTTP status; a message with
-//! `_finish_reason` is served with that finish_reason (the key is removed).
+//! `_finish_reason` is served with that finish_reason (the key is removed); one with `_delay_ms`
+//! is served after that many milliseconds (the key is removed).
 #![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
@@ -81,11 +82,17 @@ async fn handle(
         )
             .into_response();
     }
-    let mut msg = msg.clone();
-    let finish = msg
-        .as_object_mut()
-        .and_then(|m| m.remove("_finish_reason"))
-        .unwrap_or_else(|| json!("stop"));
+    reply(n, msg.clone()).await
+}
+
+/// The completion for script entry `msg` (the `n`-th request), after its `_delay_ms`.
+async fn reply(n: usize, mut msg: Value) -> axum::response::Response {
+    let mut take = |key: &str| msg.as_object_mut().and_then(|m| m.remove(key));
+    let (delay, finish) = (take("_delay_ms"), take("_finish_reason"));
+    if let Some(ms) = delay.and_then(|d| d.as_u64()) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    let finish = finish.unwrap_or_else(|| json!("stop"));
     Json(json!({
         "id": format!("gen-{n}"),
         "model": "fake/model",

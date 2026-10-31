@@ -426,18 +426,19 @@ pub async fn fork_with(
 ) -> Result<ForkResponse, ForkError> {
     let parent = finished_branch(state, branch_id).await?;
     let events = state.store.events(branch_id).await?;
-    let rerun = prepare(state, &events, &parent.team, &req).await?;
+    let mut rerun = prepare(state, &events, &parent.team, &req).await?;
     let task_id = task_of(state, &events, &parent).await?;
     let team = apply_changes(&parent.team, &req.changes);
     let new_id = create_child(state, &parent, &rerun, &team, &req).await?;
-    let world = start_child_world(state, &events, &parent.id, &new_id, &rerun).await?;
+    let world = start_child_world(state, &events, &parent.id, &new_id, &mut rerun).await?;
     let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id)
         .with_clock(BranchClock::from_env(rerun.clock_ms));
     Ok(spawn_child(state, ctx, rerun.plan))
 }
 
-/// How each part of a fork of `branch_id` at `at_seq` would be restored in `mode`.
-pub async fn restore_plan(
+/// How each part of a fork of `branch_id` at `at_seq` would be restored in `mode` (what the
+/// rerun panel shows before forking).
+pub async fn restore_preview(
     state: &AppState,
     branch_id: &str,
     at_seq: i64,
@@ -542,7 +543,7 @@ async fn start_child_world(
     events: &[Event],
     parent: &str,
     new_id: &str,
-    rerun: &Rerun,
+    rerun: &mut Rerun,
 ) -> Result<crate::world::World, ForkError> {
     let started = async {
         let start = rerun.plan.start_seq;
@@ -551,14 +552,11 @@ async fn start_child_world(
     }
     .await;
     if let Err(e) = &started {
-        let error = Some(match e {
+        let error = match e {
             ForkError::Internal(e) => format!("{e:#}"),
             e => e.to_string(),
-        });
-        let _ = state
-            .store
-            .set_status(new_id, BranchStatus::InfraError, error)
-            .await;
+        };
+        runner::setup_failed(state, new_id, error).await;
     }
     started
 }

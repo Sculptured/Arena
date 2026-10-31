@@ -1,6 +1,7 @@
 //! Saving a world's parts: after a step (the part written to and the clock parts that changed),
 //! all of them for a final state or under fixed names, and comparing them with saves. Parts that
-//! keep no saves (only replay) are never saved, nor compared.
+//! keep no saves (only replay) are never saved; parts with replay are not in the shared saves,
+//! so they are not compared with them.
 
 use parts::proto::Differing;
 use serde_json::{json, Value};
@@ -96,23 +97,23 @@ impl World {
         Ok(out)
     }
 
-    /// Saves every part that keeps saves under the name `names` gives it.
+    /// Saves every part `names` names under that name.
     pub(super) async fn save_all_as(&self, names: &Saves) -> Result<(), WorldError> {
-        for p in self.parts.iter().filter(|p| p.keeps_saves()) {
-            let save = names.get(&p.name).ok_or_else(|| {
-                WorldError::other(format!("there is no save name for the part {}", p.name))
-            })?;
-            self.save_as(p, save).await?;
+        for p in &self.parts {
+            if let Some(save) = names.get(&p.name) {
+                self.save_as(p, save).await?;
+            }
         }
         Ok(())
     }
 
-    /// Keys that differ between each part's live instance and `other[part]`, sorted; prefixed
-    /// `part:` only when the world has more than one part. Parts that keep no saves are skipped.
+    /// Keys that differ between each part's live instance and `other[part]` (shared saves: base
+    /// or gold), sorted; prefixed `part:` only when the world has more than one part. Parts not
+    /// in the shared saves are skipped (see `unchecked_parts`).
     pub async fn diff_with(&self, other: &Saves) -> Result<Vec<String>, WorldError> {
         let many = self.parts.len() > 1;
         let mut out = vec![];
-        for p in self.parts.iter().filter(|p| p.keeps_saves()) {
+        for p in self.parts.iter().filter(|p| p.in_shared_saves()) {
             let save = other.get(&p.name).ok_or_else(|| {
                 WorldError::other(format!(
                     "there is no save of the part {} to compare with",

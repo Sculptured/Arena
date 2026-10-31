@@ -24,7 +24,7 @@ use parts::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Map, Value};
 
-use crate::restore::keeps_saves;
+use crate::restore::{in_shared_saves, keeps_saves};
 
 pub use clocked::PartEvent;
 pub use ids::{instance_id, new_save_id};
@@ -140,6 +140,11 @@ impl Part {
     /// True when the part keeps saves (a part with only replay is never saved).
     fn keeps_saves(&self) -> bool {
         keeps_saves(&self.describe.restore)
+    }
+
+    /// True when the part is in the shared base and gold saves (so it can be checked).
+    fn in_shared_saves(&self) -> bool {
+        in_shared_saves(&self.describe.restore)
     }
 
     /// `call_tool` on the part's instance.
@@ -283,12 +288,11 @@ impl World {
     ) -> Result<()> {
         let instance = instance_id(branch_id, &p.part.part);
         let (params, save) = start_params(&p, &instance, seed, from)?;
-        let client = self.hub.client(&p.part.integration).await?;
         let part = Part {
+            client: self.hub.client(&p.part.integration).await?,
             name: p.part.part,
             integration: p.part.integration,
             instance,
-            client,
             describe: p.describe,
         };
         let _: Value = call(&part.client, &part.label(), "start", params)
@@ -303,7 +307,12 @@ impl World {
         }
         // Pushed first: a part that started is stopped with the world even if connecting fails.
         self.parts.push(part);
-        let part = &self.parts[self.parts.len() - 1];
+        self.connect_last().await
+    }
+
+    /// Connects the part added last, when a benchmark may reach it.
+    async fn connect_last(&mut self) -> Result<()> {
+        let part = self.parts.last().expect("a part was just added");
         if let Some(info) = connect(part).await? {
             self.connections.insert(part.name.clone(), info);
         }
@@ -350,11 +359,13 @@ impl World {
         self.parts.iter().any(|p| p.describe.uses_clock)
     }
 
-    /// The tool names `part` itself lists (empty for an unknown part).
-    pub fn part_tools(&self, part: &str) -> Vec<String> {
-        self.part(part)
-            .map(|p| p.describe.tools.iter().map(|t| t.name.clone()).collect())
-            .unwrap_or_default()
+    /// The parts that can't be checked against the task's gold saves (they are not in them).
+    pub fn unchecked_parts(&self) -> Vec<String> {
+        self.parts
+            .iter()
+            .filter(|p| !p.in_shared_saves())
+            .map(|p| p.name.clone())
+            .collect()
     }
 
     /// Each part's integration `fingerprint`.
@@ -487,8 +498,8 @@ impl World {
     }
 }
 
-/// How `p` starts given `from` (None: every part empty). A part that keeps no saves and isn't
-/// named starts fresh; any other part must be named.
+/// How `p` starts given `from` (None: every part empty). A part that is not in the shared saves
+/// and isn't named starts fresh; any other part must be named.
 fn part_start<'a>(p: &PlannedPart, from: Option<&'a StartSaves>) -> Result<Option<&'a FromSave>> {
     let Some(from) = from else {
         return Ok(None);
@@ -497,7 +508,7 @@ fn part_start<'a>(p: &PlannedPart, from: Option<&'a StartSaves>) -> Result<Optio
     match from.get(name) {
         Some(PartStart::Save(f)) => Ok(Some(f)),
         Some(PartStart::Fresh) => Ok(None),
-        None if !keeps_saves(&p.describe.restore) => Ok(None),
+        None if !in_shared_saves(&p.describe.restore) => Ok(None),
         None => Err(anyhow!("there is no save to start the part {name} from")),
     }
 }

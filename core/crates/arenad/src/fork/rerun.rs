@@ -33,19 +33,26 @@ pub struct PartRestore {
     pub tools: Vec<String>,
 }
 
-/// Everything a rerun needs before it starts: the run, its benchmark as it is now, the fork
-/// plan, each part's restore (in world order) and the clock to start at.
+/// Everything a rerun needs before it starts: the run, its benchmark and world as they are now,
+/// the fork plan, each part's restore (in world order) and the clock to start at.
 pub struct Rerun {
     pub run: RunInfo,
     pub bench: BenchDescribe,
+    /// The world's plan, until the world is started from it.
+    world: Option<Plan>,
     pub plan: ForkPlan,
     pub parts: Vec<PartRestore>,
     pub clock_ms: i64,
 }
 
+/// The parts restored by replay.
+fn replayed(parts: &[PartRestore]) -> impl Iterator<Item = &PartRestore> {
+    parts.iter().filter(|p| p.how == How::Replay)
+}
+
 impl Rerun {
     fn replayed(&self) -> impl Iterator<Item = &PartRestore> {
-        self.parts.iter().filter(|p| p.how == How::Replay)
+        replayed(&self.parts)
     }
 
     /// Each part and how it is restored, by part name.
@@ -86,17 +93,14 @@ pub async fn prepare(
     let bench = state.hub.bench_describe(&run.benchmark).await?;
     let world = world::plan(&state.hub, &bench).await?;
     let parts = part_restores(&world, req.restore)?;
-    let replayed: BTreeSet<String> = parts
-        .iter()
-        .filter(|p| p.how == How::Replay)
-        .map(|p| p.part.clone())
-        .collect();
+    let replayed: BTreeSet<String> = replayed(&parts).map(|p| p.part.clone()).collect();
     let plan = plan_fork_with(events, team, req.at_seq, &req.changes, &replayed)?;
     check_fingerprints(&run, &world, &replayed)?;
     let clock_ms = clock_at(events, plan.start_seq);
     Ok(Rerun {
         run,
         bench,
+        world: Some(world),
         plan,
         parts,
         clock_ms,
@@ -176,26 +180,33 @@ pub async fn start_world(
     state: &AppState,
     events: &[Event],
     new_id: &str,
-    rerun: &Rerun,
+    rerun: &mut Rerun,
 ) -> Result<World, ForkError> {
     let from = WorldFrom::Saves(start_saves(rerun)?);
-    let world = World::start(
-        state.hub.clone(),
-        &rerun.bench,
-        new_id,
-        rerun.run.seed,
-        from,
-    )
-    .await
-    .map_err(start_error)?;
-    for p in rerun.replayed() {
-        let inputs = replay::inputs(events, &p.part, &p.tools, rerun.plan.start_seq);
-        if let Err(e) = replay::replay(&world, &p.part, &inputs, rerun.clock_ms).await {
-            world.stop().await;
-            return Err(replay_error(&p.part, e));
-        }
+    let (hub, seed) = (state.hub.clone(), rerun.run.seed);
+    let planned = match rerun.world.take() {
+        Some(p) => p,
+        None => world::plan(&hub, &rerun.bench).await?,
+    };
+    let world = World::start_planned(hub, &rerun.bench, planned, new_id, seed, from)
+        .await
+        .map_err(start_error)?;
+    if let Err(e) = replay_parts(&world, events, rerun).await {
+        world.stop().await;
+        return Err(e);
     }
     Ok(world)
+}
+
+/// Replays every replayed part of a started world up to the fork point.
+async fn replay_parts(world: &World, events: &[Event], rerun: &Rerun) -> Result<(), ForkError> {
+    for p in rerun.replayed() {
+        let inputs = replay::inputs(events, &p.part, &p.tools, rerun.plan.start_seq);
+        replay::replay(world, &p.part, &inputs, rerun.clock_ms)
+            .await
+            .map_err(|e| replay_error(&p.part, e))?;
+    }
+    Ok(())
 }
 
 /// One part of a restore plan, as the rerun panel shows it.

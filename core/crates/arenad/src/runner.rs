@@ -72,13 +72,19 @@ pub async fn start_run(
 /// A new branch's setup result; a failed setup ends the branch `infra_error` with its message.
 pub async fn setup_or_infra_error<T>(state: &AppState, branch_id: &str, r: Result<T>) -> Result<T> {
     if let Err(e) = &r {
-        let error = Some(format!("{e:#}"));
-        let _ = state
-            .store
-            .set_status(branch_id, BranchStatus::InfraError, error)
-            .await;
+        setup_failed(state, branch_id, format!("{e:#}")).await;
     }
     r
+}
+
+/// Ends a branch whose setup failed `infra_error` with `error`; a store failure is logged.
+pub async fn setup_failed(state: &AppState, branch_id: &str, error: String) {
+    let set = state
+        .store
+        .set_status(branch_id, BranchStatus::InfraError, Some(error));
+    if let Err(e) = set.await {
+        eprintln!("branch {branch_id}: could not record its failed setup: {e:#}");
+    }
 }
 
 /// Starts the first branch's world from the base save and records `RunStart`:
@@ -243,12 +249,33 @@ async fn run_agent(
         resume,
     };
     let result = driver.run(run).await;
-    let end = serde_json::to_value(agent_end(&result))?;
+    record_end(state, ctx, &spec.id, &result).await?;
+    Ok(agent_ending(ctx, &spec.id, result))
+}
+
+/// Records an agent's AgentEnd; after the last agent the world is frozen first, so nothing
+/// happens in it after its end.
+async fn record_end(
+    state: &AppState,
+    ctx: &BranchCtx,
+    agent: &str,
+    result: &AgentResult,
+) -> Result<()> {
+    if ctx.is_last(agent) {
+        freeze(ctx).await;
+    }
+    let end = serde_json::to_value(agent_end(result))?;
     state
         .store
-        .append(&ctx.branch_id, id, EventKind::AgentEnd, end)
+        .append(&ctx.branch_id, Some(agent), EventKind::AgentEnd, end)
         .await?;
-    Ok(agent_ending(ctx, &spec.id, result))
+    Ok(())
+}
+
+/// Once the last agent is done the world stands still: no tick and no clock while it is scored.
+async fn freeze(ctx: &BranchCtx) {
+    ctx.stop_ticker().await;
+    ctx.clock.pause();
 }
 
 fn driver_for(state: &AppState, kind: AgentKind) -> Result<Arc<dyn Driver>> {
@@ -301,11 +328,7 @@ fn agent_ending(ctx: &BranchCtx, agent: &str, result: AgentResult) -> Option<End
 /// Scores the world and records the Check.
 async fn check(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<Ending> {
     let check = score(state, ctx).await?;
-    let status = if check.passed {
-        BranchStatus::Passed
-    } else {
-        BranchStatus::Failed
-    };
+    let ending = verdict(&check, &ctx.world.part_names());
     state
         .store
         .append(
@@ -315,30 +338,78 @@ async fn check(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<Ending> {
             serde_json::to_value(&check)?,
         )
         .await?;
-    Ok((status, None))
+    Ok(ending)
 }
 
-/// Saves every part's final state and compares the world with the task's gold saves.
+pub const NOTHING_CHECKED: &str =
+    "no part of this world can be checked against the task's expected result";
+
+/// How a scored branch ends: passed when some part was checked and every checked part matches;
+/// failed with `NOTHING_CHECKED` when no part could be checked.
+fn verdict(check: &CheckPayload, parts: &[String]) -> Ending {
+    if check.unchecked.len() >= parts.len() {
+        return (BranchStatus::Failed, Some(NOTHING_CHECKED.to_string()));
+    }
+    match check.passed {
+        true => (BranchStatus::Passed, None),
+        false => (BranchStatus::Failed, None),
+    }
+}
+
+/// Saves every part's final state and compares the world with the task's gold saves; parts not
+/// in them are listed as unchecked.
 async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
     let bench = state.hub.bench_describe(ctx.world.bench()).await?;
     let gold = world::ensure_gold(&state.hub, &bench, &ctx.task_id).await?;
     // Behind the gate: no late tool call lands between the final save and the diff.
     let _gate = ctx.gate().await;
-    let final_saves = {
-        let _paused = ctx.clock.paused();
-        ctx.world.save_all().await?
-    };
+    let final_saves = ctx.world.save_all().await?;
     let differing = ctx.world.diff_with(&gold).await?;
+    let unchecked = ctx.world.unchecked_parts();
     let gold_db = ctx
         .world
         .part_names()
-        .first()
-        .and_then(|p| gold.get(p))
+        .iter()
+        .find_map(|p| gold.get(p))
         .cloned();
     Ok(CheckPayload {
-        passed: differing.is_empty(),
+        passed: differing.is_empty() && unchecked.len() < ctx.world.part_names().len(),
         gold_db,
         differing_rows: Some(differing),
         final_saves: Some(final_saves),
+        unchecked,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(passed: bool, unchecked: &[&str]) -> CheckPayload {
+        CheckPayload {
+            passed,
+            gold_db: None,
+            differing_rows: Some(vec![]),
+            final_saves: None,
+            unchecked: unchecked.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_branch_passes_only_when_some_part_was_checked() {
+        let parts = ["db".to_string(), "sim".to_string()];
+        assert_eq!(
+            verdict(&check(true, &["sim"]), &parts),
+            (BranchStatus::Passed, None)
+        );
+        assert_eq!(
+            verdict(&check(false, &[]), &parts),
+            (BranchStatus::Failed, None)
+        );
+        let none = verdict(&check(false, &["db", "sim"]), &parts);
+        assert_eq!(
+            none,
+            (BranchStatus::Failed, Some(NOTHING_CHECKED.to_string()))
+        );
+    }
 }

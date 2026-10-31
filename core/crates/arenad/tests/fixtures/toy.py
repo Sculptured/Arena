@@ -1,7 +1,8 @@
 """Toy arena-part/1 packages for arenad tests.
 
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
-              [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock] [--save-sleep MS]
+              [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
+              [--save-sleep MS] [--refuse-start-if FILE]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -11,7 +12,9 @@
       exact save): a part without exact saves or approximate ones can't `save` (-32001), and a
       start from a save in a mode the part lacks is refused (-32001). With --uses-clock, `advance`
       reports a change whenever the clock moved, and an `alarm` event on an instance's first
-      advance. --save-sleep makes every `save` take MS milliseconds.
+      advance (on every advance with --event-every). --save-sleep makes every `save` take MS
+      milliseconds. With --refuse-start-if, `start` answers -32003 (fingerprint mismatch) while
+      FILE exists.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--clash] [--bench-tool [--tool-part PART]]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
@@ -73,6 +76,9 @@ class Part:
         return table[key]
 
     def start(self, p):
+        refuse = opt("--refuse-start-if", None)
+        if refuse and os.path.exists(refuse):
+            raise RpcError(-32003, "the toy moved to another machine")
         src = p.get("from") or {}
         mode_ok = EXACT == "save" or (src.get("mode") == "approximate" and APPROXIMATE)
         if src and not mode_ok:
@@ -86,7 +92,8 @@ class Part:
         first = i not in self.clocks
         changed = t > self.clocks.get(i, 0)
         self.clocks[i] = max(t, self.clocks.get(i, 0))
-        events = [{"kind": "alarm", "text": "the toy woke up", "data": {"at": t}}] if first else []
+        wake = first or "--event-every" in ARGS
+        events = [{"kind": "alarm", "text": "the toy woke up", "data": {"at": t}}] if wake else []
         return {"changed": changed, "events": events}
 
     def call_tool(self, p):

@@ -55,6 +55,13 @@ pub fn keeps_saves(r: &Restore) -> bool {
     r.exact == ExactKind::Save || r.approximate
 }
 
+/// True when the part is in the shared base and gold saves: it keeps saves and is not replayed
+/// on an exact rerun. A part with replay starts fresh with the run's seed instead, in a run's
+/// first branch as in a replay, so both start from the same state.
+pub fn in_shared_saves(r: &Restore) -> bool {
+    r.exact != ExactKind::Replay && keeps_saves(r)
+}
+
 /// How `part` (declaring `r`) is restored in `mode`.
 pub fn how(part: &str, r: &Restore, mode: Mode) -> Result<How, Refused> {
     match (r.exact, r.approximate, mode) {
@@ -165,5 +172,13 @@ mod tests {
         assert!(keeps_saves(&r(ExactKind::None, true)));
         assert!(!keeps_saves(&r(ExactKind::Replay, false)));
         assert!(!keeps_saves(&r(ExactKind::None, false)));
+    }
+
+    #[test]
+    fn replay_parts_are_not_in_shared_saves() {
+        assert!(in_shared_saves(&r(ExactKind::Save, false)));
+        assert!(in_shared_saves(&r(ExactKind::None, true)));
+        assert!(!in_shared_saves(&r(ExactKind::Replay, true)));
+        assert!(!in_shared_saves(&r(ExactKind::Replay, false)));
     }
 }

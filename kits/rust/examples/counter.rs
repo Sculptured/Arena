@@ -9,6 +9,7 @@
 //! - "nondeterministic": replay, but `add` adds a random 0..1000 from the OS (a bug on purpose).
 //!
 //! `--fingerprint <s>` adds `"machine": s` to the fingerprint, as if it ran on another machine.
+//! `--seeded` starts a fresh counter at `seed % 1000` instead of 0.
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -57,6 +58,8 @@ struct Inst {
 pub struct Counter {
     flavour: Flavour,
     fingerprint: Value,
+    /// A fresh counter starts at `seed % 1000`.
+    seeded: bool,
     instances: Mutex<HashMap<String, Inst>>,
 }
 
@@ -105,8 +108,15 @@ impl Counter {
         Counter {
             flavour,
             fingerprint: json!({"example": "counter"}),
+            seeded: false,
             instances: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The same counter, its fresh value taken from the seed.
+    pub fn seeded(mut self) -> Counter {
+        self.seeded = true;
+        self
     }
 
     /// The same counter reporting `machine` in its fingerprint.
@@ -201,8 +211,9 @@ impl Part for Counter {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
+        let fresh = if self.seeded { (p.seed % 1000) as i64 } else { 0 };
         let mut state = State {
-            value: 0,
+            value: fresh,
             secs: p.clock_ms / 1000,
         };
         if let Some(from) = p.from {
@@ -323,6 +334,9 @@ async fn main() -> anyhow::Result<()> {
         None => Flavour::Exact,
     };
     let mut counter = Counter::new(flavour);
+    if args.iter().any(|a| a == "--seeded") {
+        counter = counter.seeded();
+    }
     if let Some(machine) = arg(&args, "--fingerprint") {
         counter = counter.on_machine(machine);
     }

@@ -6,6 +6,7 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     model::*,
+    restore::keeps_saves,
     saves::{self, part_code},
     world::Saves,
 };
@@ -88,21 +89,40 @@ impl FinalState {
     }
 }
 
-/// A part of `a`'s world that one of the two final states has no save of.
-pub fn missing_part<'a>(a: &'a FinalState, b: &FinalState) -> Option<&'a str> {
+/// The parts of `a`'s world that neither final state has a save of because their integration
+/// keeps no saves (only replay): they can't be compared.
+pub async fn not_compared(hub: &Hub, a: &FinalState, b: &FinalState) -> Result<Vec<String>> {
+    let unsaved = |p: &&WorldPart| !a.saves.contains_key(&p.part) && !b.saves.contains_key(&p.part);
+    let mut out = vec![];
+    for p in a.world.iter().filter(unsaved) {
+        if !keeps_saves(&hub.describe(&p.integration).await?.restore) {
+            out.push(p.part.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// A part of `a`'s world (not in `skip`) that one of the two final states has no save of.
+pub fn missing_part<'a>(a: &'a FinalState, b: &FinalState, skip: &[String]) -> Option<&'a str> {
     a.world
         .iter()
         .map(|p| p.part.as_str())
+        .filter(|p| !skip.iter().any(|s| s == p))
         .find(|p| !a.saves.contains_key(*p) || !b.saves.contains_key(*p))
 }
 
 /// `[{key, a, b}]` for every key that differs between two final states, sorted: per part of
-/// `a`'s world, the `diff` of both final saves with each side's docs. Keys are prefixed `part:`
-/// only when the world has more than one part.
-pub async fn differing_rows(hub: &Hub, a: &FinalState, b: &FinalState) -> Result<Vec<Value>> {
+/// `a`'s world but `skip`, the `diff` of both final saves with each side's docs. Keys are
+/// prefixed `part:` only when the world has more than one part.
+pub async fn differing_rows(
+    hub: &Hub,
+    a: &FinalState,
+    b: &FinalState,
+    skip: &[String],
+) -> Result<Vec<Value>> {
     let many = a.world.len() > 1;
     let mut out = vec![];
-    for p in &a.world {
+    for p in a.world.iter().filter(|p| !skip.contains(&p.part)) {
         let rows = part_rows(hub, p, [a.save(&p.part)?, b.save(&p.part)?]).await?;
         out.extend(rows.into_iter().map(|mut r| {
             if many {

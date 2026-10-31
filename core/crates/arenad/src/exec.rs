@@ -253,14 +253,12 @@ impl ToolExec {
     }
 
     /// Advances the world's clock parts to the branch clock behind the gate (a clock tick).
-    pub async fn tick(&self, branch: &BranchCtx) {
+    pub async fn tick(&self, branch: &BranchCtx) -> Result<(), String> {
         let _gate = branch.gate().await;
         if branch.fatal().is_some() {
-            return;
+            return Ok(());
         }
-        if let Err(e) = self.advance(branch, branch.clock.now_ms()).await {
-            eprintln!("branch {}: clock tick failed: {e}", branch.branch_id);
-        }
+        self.advance(branch, branch.clock.now_ms()).await
     }
 
     /// Advances the clock parts to `clock_ms` and records the events they report.

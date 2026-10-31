@@ -73,10 +73,27 @@ async fn tick_until(
     let mut every = tokio::time::interval(TICK);
     every.set_missed_tick_behavior(MissedTickBehavior::Delay);
     every.tick().await; // the first tick is immediate
+    let mut last_error = None;
     loop {
         tokio::select! {
+            biased; // a stop wins over a tick that is due
             _ = &mut stopped => return,
-            _ = every.tick() => exec.tick(&ctx).await,
+            _ = every.tick() => {
+                let failed = exec.tick(&ctx).await.err();
+                log_new_error(&ctx.branch_id, &mut last_error, failed);
+            }
         }
     }
+}
+
+/// Logs a tick failure unless it repeats the last one (a failing part would otherwise log every
+/// tick); a tick that works forgets the last failure.
+fn log_new_error(branch: &str, last: &mut Option<String>, failed: Option<String>) {
+    if failed.is_some() && failed != *last {
+        eprintln!(
+            "branch {branch}: clock tick failed: {}",
+            failed.as_deref().unwrap_or("")
+        );
+    }
+    *last = failed;
 }

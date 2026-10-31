@@ -141,14 +141,15 @@ pub fn saves_at_except(
         .collect()
 }
 
-/// Per part, the save holding the branch's final state: its check's `final_saves`, else for a
-/// run recorded before integrations its database `branch_<id>`. None while it has neither.
+/// Per part, the save holding the branch's final state: its check's `final_saves` (empty when
+/// no part keeps saves), else for a run recorded before integrations its database
+/// `branch_<id>`. None while it has neither.
 pub fn final_saves(branch: &str, events: &[Event]) -> Option<Saves> {
     let checked = events
         .iter()
         .rev()
         .find(|e| e.kind == EventKind::Check)
-        .and_then(|e| saves_in(&e.payload["final_saves"]));
+        .and_then(|e| serde_json::from_value::<Saves>(e.payload["final_saves"].clone()).ok());
     checked.or_else(|| {
         run_info(events)
             .legacy

@@ -49,7 +49,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/branches/{id}/stream", get(stream))
         .route("/api/branches/{id}/rows", get(rows))
         .route("/api/branches/{id}/fork", post(fork_branch))
-        .route("/api/branches/{id}/restore-plan", get(restore_plan))
+        .route("/api/branches/{id}/restore-plan", get(get_restore_plan))
         .route("/api/compare", get(compare_branches))
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
@@ -351,18 +351,16 @@ async fn fork_branch(
 
 /// `restore=exact|approximate` (default exact).
 fn parse_restore(q: &HashMap<String, String>) -> Result<Mode, ApiError> {
-    match q.get("restore").map(String::as_str) {
-        None | Some("") | Some("exact") => Ok(Mode::Exact),
-        Some("approximate") => Ok(Mode::Approximate),
-        Some(o) => Err(ApiError::bad(format!(
-            "restore must be exact or approximate, not {o:?}"
-        ))),
+    match q.get("restore").filter(|r| !r.is_empty()) {
+        None => Ok(exact()),
+        Some(r) => serde_json::from_value(json!(r))
+            .map_err(|_| ApiError::bad(format!("restore must be exact or approximate, not {r:?}"))),
     }
 }
 
 /// `{parts: [{part, how, estimate_seconds?}]}`: how each part of a fork at `at_seq` would be
 /// restored, or the refusal (409).
-async fn restore_plan(
+async fn get_restore_plan(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<HashMap<String, String>>,
@@ -373,7 +371,8 @@ async fn restore_plan(
         .ok_or_else(|| ApiError::bad("at_seq must be an integer"))?;
     let mode = parse_restore(&q)?;
     let parts =
-        detached(async move { Ok(fork::restore_plan(&state, &id, at_seq, mode).await?) }).await?;
+        detached(async move { Ok(fork::restore_preview(&state, &id, at_seq, mode).await?) })
+            .await?;
     Ok(Json(json!({"parts": parts})))
 }
 
@@ -667,22 +666,35 @@ async fn compare_branches(
         _ => return Err(ApiError::bad("a and b are required")),
     };
     let [a, b] = sides(&state, [a, b]).await?;
-    if let Some(part) = compare::missing_part(&a.end, &b.end) {
-        return Err(ApiError::conflict(format!(
-            "a branch has no final state of the part {part}"
-        )));
-    }
-    let rows = match compare::differing_rows(&state.hub, &a.end, &b.end).await {
-        // A save that is gone: a branch recorded before integrations whose database is missing.
-        Err(e) if part_code(&e) == Some(-32002) => return Err(ApiError::conflict(NO_FINAL_STATE)),
-        r => r?,
-    };
+    let skipped = compare::not_compared(&state.hub, &a.end, &b.end).await?;
+    let rows = compared_rows(&state, &a.end, &b.end, &skipped).await?;
     Ok(Json(json!({
         "a": compare::summary(&a.branch, &a.events),
         "b": compare::summary(&b.branch, &b.events),
         "first_divergent_seq": compare::first_divergent_seq(&a.events, &b.events),
         "differing_rows": rows,
+        "not_compared": skipped,
     })))
+}
+
+/// The differing rows of two final states, but the parts in `skip`: 409 when a branch lacks a
+/// final save of a compared part, or a save is gone.
+async fn compared_rows(
+    state: &AppState,
+    a: &FinalState,
+    b: &FinalState,
+    skip: &[String],
+) -> Result<Vec<Value>, ApiError> {
+    if let Some(part) = compare::missing_part(a, b, skip) {
+        return Err(ApiError::conflict(format!(
+            "a branch has no final state of the part {part}"
+        )));
+    }
+    match compare::differing_rows(&state.hub, a, b, skip).await {
+        // A save that is gone: a branch recorded before integrations whose database is missing.
+        Err(e) if part_code(&e) == Some(-32002) => Err(ApiError::conflict(NO_FINAL_STATE)),
+        r => Ok(r?),
+    }
 }
 
 // ---------------------------------------------------------------- static UI

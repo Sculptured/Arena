@@ -160,7 +160,7 @@ impl Store {
                 "UPDATE branches SET restore_mode = $2, restored = $3 WHERE id = $1",
                 &[
                     &branch_id,
-                    &mode_name(mode),
+                    &serde_json::to_value(mode)?.as_str(),
                     &serde_json::to_value(restored)?,
                 ],
             )
@@ -371,21 +371,6 @@ fn event_from(r: &Row) -> Result<Event> {
     })
 }
 
-fn mode_name(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Exact => "exact",
-        Mode::Approximate => "approximate",
-    }
-}
-
-fn parse_mode(s: &str) -> Result<Mode> {
-    match s {
-        "exact" => Ok(Mode::Exact),
-        "approximate" => Ok(Mode::Approximate),
-        o => Err(anyhow!("unknown restore mode {o}")),
-    }
-}
-
 fn branch_from(r: &Row) -> Result<Branch> {
     let status: String = r.get("status");
     let team: Value = r.get("team");
@@ -403,7 +388,9 @@ fn branch_from(r: &Row) -> Result<Branch> {
         error: r.get("error"),
         created_at: r.get("created_at"),
         ended_at: r.get("ended_at"),
-        restore_mode: mode.map(|m| parse_mode(&m)).transpose()?,
+        restore_mode: mode
+            .map(|m| serde_json::from_value::<Mode>(Value::String(m)))
+            .transpose()?,
         restored: serde_json::from_value(restored)?,
     })
 }
