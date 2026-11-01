@@ -164,7 +164,6 @@ fn index_of(team: &Team, id: &str) -> Option<usize> {
 }
 
 impl Planner<'_> {
-
     /// An agent's real start: its first AgentStart (a resumed agent has a second one).
     fn first_start(&self, i: usize) -> Result<i64, ForkError> {
         let id = self.team.agents[i].id.as_str();
