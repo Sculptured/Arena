@@ -4,7 +4,7 @@ from arena_part import errors, saves
 from . import source, state, views
 from .base import DocsPart
 from .config import parse_config
-from .plant import Plant
+from .plant import Plant, physics_hz
 from .tools import TOOLS, run_tool
 
 NAME = "isaac-sim"
@@ -29,16 +29,15 @@ class IsaacSim(DocsPart):
             "tools": [t.schema() for t in TOOLS.values()],
         }
 
-    def _restore_point(self, from_):
-        """The snapshot to start from, or None. Exact restores are by replay only."""
+    def _check_from(self, from_) -> None:
+        """A start `from` a save must name one and be approximate: exact restores are by replay only."""
         if from_ is None:
-            return None
+            return
         if not isinstance(from_, dict) or "save" not in from_ or from_.get("mode") not in ("exact", "approximate"):
             raise errors.invalid("invalid params: from needs a save and a mode")
         if from_["mode"] == "exact":
             raise errors.cant_restore("isaac-sim restores exactly only by replay (physics state on the GPU can't "
                                       "be saved exactly); restore approximately instead")
-        return state.read(saves.root(NAME) / from_["save"])
 
     def _check_room(self, instance):
         live = [i for i in self.instances if i != instance]
@@ -49,15 +48,26 @@ class IsaacSim(DocsPart):
 
     def start(self, instance, config, seed, clock_ms, from_=None):
         cfg = parse_config(config)
-        snap = self._restore_point(from_)
+        self._check_from(from_)
         self._check_room(instance)
         source.check(cfg, self.backend)
-        plant = Plant(source.load(cfg), self.backend, cfg, clock_ms)
+        mods = source.load(cfg)
+        self.backend.load(cfg)  # the factory's and the backend's modules come before any unpickling
+        snap = None
+        if from_ is not None:
+            snap = state.read(saves.root(NAME) / from_["save"])
+            state.check_made_with(snap, state.made_with(self.backend, physics_hz(cfg, mods), cfg))
+        plant = Plant(mods, self.backend, cfg, clock_ms)
         if snap is None:
             plant.begin(seed, cfg.scenario)
         else:
             state.restore(plant, snap)
         self.instances[instance] = plant
+
+    def stop(self, instance):
+        plant = self.instances.pop(instance, None)
+        if plant is not None:
+            plant.stop()
 
     def call_tool(self, instance, name, args, clock_ms):
         plant = self._instance(instance)

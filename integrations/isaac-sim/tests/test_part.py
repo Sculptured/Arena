@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +22,7 @@ from isaac_part.state import FACTORY_EXCLUDED, FACTORY_SAVED
 PACKAGE = Path(__file__).resolve().parents[1]
 ARENA = PACKAGE.parents[1]
 SEED = 7  # the factory's own default seed: check_physics.py's numbers are for it
+SAVE_BYTES_MAX = 100_000  # measured 39 kB at 20 s; after the trip its frozen 60 s window adds about 180 kB
 ALL_KEYS = []  # inspect with no keys returns every key
 
 
@@ -59,14 +61,16 @@ def test_scenario_alarm_on_arena_clock():
     assert [e["kind"] for e in first["events"][:2]] == ["plant", "scenario"] and first["changed"]
     assert not kinds(first["events"], "warning")
     zone_c = kinds(part.advance("i1", 36_000)["events"], "warning")
-    assert [w["data"]["zone"] for w in zone_c] == ["C"]
+    assert [w["data"]["detail"]["zone"] for w in zone_c] == ["C"]
     w = zone_c[0]
-    assert w["data"]["machine"] == "PR-A1" and w["data"]["source"] == "PR-A1" and w["data"]["vibration_mm_s"] >= 4.5
-    assert w["data"]["t"].startswith("2026-03-10T06:00:3") and "wall" not in w and "wall" not in w["data"]
+    detail = w["data"]["detail"]
+    assert detail["machine"] == "PR-A1" and w["data"]["source"] == "PR-A1" and detail["vibration_mm_s"] >= 4.5
+    assert w["data"]["t"].startswith("2026-03-10T06:00:3")
+    assert "wall" not in w and "wall" not in w["data"] and "wall" not in detail
     later = part.advance("i1", 66_000)["events"]
-    assert [x["data"]["zone"] for x in kinds(later, "warning")] == ["D"]
+    assert [x["data"]["detail"]["zone"] for x in kinds(later, "warning")] == ["D"]
     alarm = kinds(later, "alarm")[0]
-    assert alarm["data"]["machine"] == "PR-A1" and alarm["data"]["vibration_mm_s"] > 11.2
+    assert alarm["data"]["detail"]["machine"] == "PR-A1" and alarm["data"]["detail"]["vibration_mm_s"] > 11.2
     assert alarm["data"]["seq"] > w["data"]["seq"]
     trip_s = part.instances["i1"].factory.presses["PR-A1"].tripped_at
     assert 55.0 <= trip_s <= 66.0
@@ -110,13 +114,13 @@ def test_approximate_restore_continues(saves_root):
     a = started()
     a.advance("i1", 20_000)
     saved = a.save("i1", "s1", save_dir(saves_root, "s1"))
-    assert saved["exact"] is False and saved["bytes"] > 0
+    assert saved["exact"] is False and 0 < saved["bytes"] < SAVE_BYTES_MAX
     b = standin()
-    b.start("b", {}, SEED, 20_000, {"save": "s1", "mode": "approximate"})  # a fresh process reads the save
+    b.start("b", {}, SEED, 20_000, {"save": "s1", "mode": "approximate"})  # a second Part in this process
     a.start("b", {}, SEED, 20_000, {"save": "s1", "mode": "approximate"})
     assert docs(b, "b") == docs(a, "b") == a.inspect({"save": "s1"}, ALL_KEYS)["docs"] == docs(a)
     a_events, b_events = a.advance("i1", 36_000)["events"], a.advance("b", 36_000)["events"]
-    assert [w["data"]["zone"] for w in kinds(b_events, "warning")] == ["C"]
+    assert [w["data"]["detail"]["zone"] for w in kinds(b_events, "warning")] == ["C"]
     assert b_events == a_events == b.advance("b", 36_000)["events"]  # the stand-in continues exactly
     assert a.diff({"instance": "i1"}, {"instance": "b"}) == {"differing": []}
     assert "plant/clock" in a.diff({"save": "s1"}, {"instance": "b"})["differing"]
@@ -126,6 +130,55 @@ def test_approximate_restore_continues(saves_root):
     with pytest.raises(PartError) as e:
         standin().start("c", {}, SEED, 0, {"save": "nope", "mode": "approximate"})
     assert e.value.code == -32002
+
+
+def over_stdio(requests, saves_root):
+    """The part's replies to `requests`, from a fresh process speaking arena-part/1 over stdio."""
+    lines = "".join(json.dumps({"jsonrpc": "2.0", "id": i, "method": m, "params": p}) + "\n"
+                    for i, (m, p) in enumerate(requests, 1))
+    r = subprocess.run([sys.executable, "-m", "isaac_part", "--backend", "standin"], input=lines, cwd=PACKAGE,
+                       capture_output=True, text=True, env={**os.environ, "ARENA_SAVES": str(saves_root)}, timeout=120)
+    replies = [json.loads(line) for line in r.stdout.splitlines()]
+    assert len(replies) == len(requests), r.stderr[-2000:]
+    return replies
+
+
+def test_approximate_restore_in_a_fresh_process(saves_root):
+    a = started()
+    a.advance("i1", 20_000)
+    a.save("i1", "s1", save_dir(saves_root, "s1"))
+    original = a.advance("i1", 36_000)["events"]
+    replies = over_stdio([
+        ("start", {"instance": "b", "config": {}, "seed": SEED, "clock_ms": 20_000,
+                   "from": {"save": "s1", "mode": "approximate"}}),
+        ("diff", {"a": {"instance": "b"}, "b": {"save": "s1"}}),
+        ("advance", {"instance": "b", "clock_ms": 36_000}),
+    ], saves_root)
+    assert [r.get("error") for r in replies] == [None, None, None]
+    assert replies[1]["result"] == {"differing": []}
+    assert replies[2]["result"]["events"] == original
+    assert [w["data"]["detail"]["zone"] for w in kinds(original, "warning")] == ["C"]
+
+
+def test_unreadable_or_mismatched_save_is_cant_restore(saves_root, tmp_path):
+    a = started()
+    a.advance("i1", 1_000)
+    a.save("i1", "s1", save_dir(saves_root, "s1"))
+    copy = tmp_path / "ridgeline.json"  # the same content elsewhere: the fingerprint accepts it, the save doesn't
+    shutil.copy(DEFAULT_ISAAC.parent / "data" / "ridgeline.json", copy)
+    for config, text in [({"plant_start": "2026-04-01T06:00:00"}, "plant_start"), ({"physics_hz": 720}, "physics_hz"),
+                         ({"data_path": str(copy)}, "data_path")]:
+        with pytest.raises(PartError) as e:
+            standin().start("b", config, SEED, 1_000, {"save": "s1", "mode": "approximate"})
+        assert e.value.code == -32001 and text in e.value.message
+    other = IsaacSim(dataclasses.replace(BACKENDS["standin"], name="other"))
+    with pytest.raises(PartError) as e:
+        other.start("b", {}, SEED, 1_000, {"save": "s1", "mode": "approximate"})
+    assert e.value.code == -32001 and "backend" in e.value.message
+    (saves_root / "isaac-sim" / "s1" / "plant.pkl.gz").write_bytes(b"not a save")
+    with pytest.raises(PartError) as e:
+        standin().start("b", {}, SEED, 1_000, {"save": "s1", "mode": "approximate"})
+    assert e.value.code == -32001 and "s1" in e.value.message
 
 
 def test_state_whitelist_covers_factory_attributes():
@@ -187,6 +240,18 @@ def test_isaac_backend_missing_is_clear():
                                "the DGX Spark (see README)")
 
 
+REFUSALS = [  # (tool, args, text in the error): each changes nothing
+    ("machine_telemetry", {"machine": "PR-Z9"}, "unknown machine PR-Z9"),
+    ("dispatch_technician", {"proposal_id": "P", "technician": "T-1", "machine": "PR-A1"}, "busy"),
+    ("dispatch_technician", {"proposal_id": "P", "technician": "T-2", "machine": "PR-A1", "task": "diagnose"},
+     "task is 'inspect' or 'repair'"),
+    ("set_line_status", {"line": "LINE-A", "status": "sideways"}, "status is running, stopped or down"),
+    ("set_line_status", {"line": "LINE-Q", "status": "stopped"}, "unknown line LINE-Q"),
+    ("predict_move", {"order": "A-1", "to_line": "LINE-F"}, "without ERPNext in the arena"),
+    ("vibration_spectrum", {"machine": "PR-A1", "seconds": "lots"}, "seconds"),
+]
+
+
 def test_tools_keys_and_refusals():
     part = started()
     names = {t["name"] for t in part.describe()["tools"]}
@@ -197,21 +262,13 @@ def test_tools_keys_and_refusals():
     assert sent["result"]["status"] == "walking" and sent["writes"] == ["technician/T-1", "machine/PR-A1"]
     state = part.call_tool("i1", "plant_state", {}, 2_000)
     assert "machine/PR-A1" in state["reads"] and state["writes"] == []
-    assert state["result"]["machines"][0]["id"] == "PR-A1" and state["result"]["clock"].startswith("2026-03-10T06:00:02")
+    assert state["result"]["machines"][0]["id"] == "PR-A1"
+    assert state["result"]["clock"].startswith("2026-03-10T06:00:02")
     wait = part.call_tool("i1", "wait_for_event", {"kinds": "technician", "timeout_s": 600}, 2_000)
     assert wait["result"]["events"][0]["kind"] == "technician"
     assert wait["result"]["timed_out"] is False
     before = docs(part)
-    for name, args, text in [
-        ("machine_telemetry", {"machine": "PR-Z9"}, "unknown machine PR-Z9"),
-        ("dispatch_technician", {"proposal_id": "P", "technician": "T-1", "machine": "PR-A1"}, "busy"),
-        ("dispatch_technician", {"proposal_id": "P", "technician": "T-2", "machine": "PR-A1", "task": "diagnose"},
-         "task is 'inspect' or 'repair'"),
-        ("set_line_status", {"line": "LINE-A", "status": "sideways"}, "status is running, stopped or down"),
-        ("set_line_status", {"line": "LINE-Q", "status": "stopped"}, "unknown line LINE-Q"),
-        ("predict_move", {"order": "A-1", "to_line": "LINE-F"}, "without ERPNext in the arena"),
-        ("vibration_spectrum", {"machine": "PR-A1", "seconds": "lots"}, "seconds"),
-    ]:
+    for name, args, text in REFUSALS:
         out = part.call_tool("i1", name, args, 2_000)
         assert text in out["error"] and out["reads"] == [] and out["writes"] == [] and "result" not in out, out
     assert docs(part) == before
@@ -230,7 +287,9 @@ class StubPlant(BaseHTTPRequestHandler):
         plant = self.server.plant
         plant["requests"].append(("GET", self.path))
         since = int(re.search(r"since=(\d+)", self.path).group(1)) if "since=" in self.path else 0
-        body = plant["state"] if self.path == "/state" else [e for e in plant["events"] if e["seq"] > since]
+        events = plant["events"]
+        body = plant["state"] if self.path == "/state" else (
+            [e for e in events if e["seq"] > since] if isinstance(events, list) else events)
         data = json.dumps(body).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(data)))
@@ -271,7 +330,8 @@ def test_mirror_mode_has_no_tools_and_relays_events(stub_plant, saves_root):
     stub_plant.plant["events"].append(plant_event(2, "warning", "PR-A1 vibration above zone C"))
     out = m.advance("m1", 2_000)
     assert out["changed"] and [e["text"] for e in out["events"]] == ["PR-A1 vibration above zone C"]
-    assert out["events"][0]["data"] == {"machine": "PR-A1", "source": "PR-A1", "seq": 2, "t": "2026-03-10T06:00:00"}
+    assert out["events"][0]["data"] == {"source": "PR-A1", "seq": 2, "t": "2026-03-10T06:00:00",
+                                     "detail": {"machine": "PR-A1"}}
     assert m.advance("m1", 3_000)["events"] == []
     assert m.inspect({"instance": "m1"}, ["machine/PR-A1", "robot/AMR-9"])["docs"] == {
         "machine/PR-A1": {"id": "PR-A1", "status": "running"}, "robot/AMR-9": None}
@@ -285,6 +345,10 @@ def test_mirror_mode_has_no_tools_and_relays_events(stub_plant, saves_root):
     assert e.value.code == -32001
     assert {method for method, _ in stub_plant.plant["requests"]} == {"GET"}
     assert ("GET", "/events?since=1&limit=500") in stub_plant.plant["requests"]
+    stub_plant.plant["events"] = {"error": "factory restarting"}
+    with pytest.raises(PartError) as e:
+        m.advance("m1", 4_000)
+    assert e.value.code == -32603 and "factory restarting" in e.value.message
 
 
 def checker():
@@ -314,3 +378,39 @@ def test_conformance(tmp_path):
     restore = next(s for s in report["steps"] if s["name"] == "restore")["detail"]
     assert "approximate restore matches" in restore
     assert next(s for s in report["steps"] if s["name"] == "replay")["ok"]
+
+
+def test_gpu_fingerprint_reads_proc_not_nvidia_smi(tmp_path, monkeypatch):
+    from isaac_part import gpu
+
+    def no_smi():
+        raise AssertionError("nvidia-smi must not run when /proc has the answer")
+    proc = tmp_path / "nvidia"
+    (proc / "gpus" / "0000:01:00.0").mkdir(parents=True)
+    (proc / "version").write_text("NVRM version: NVIDIA UNIX Open Kernel Module for aarch64  580.159.03  "
+                                  "Release Build  (dvs-builder@U16)  Thu Sep 4 2025\nGCC version:  gcc 13.3.0\n")
+    (proc / "gpus" / "0000:01:00.0" / "information").write_text("Model: \t\t NVIDIA GB10\nIRQ:   \t\t 196\n")
+    assert gpu.gpu_host(proc, no_smi) == {"gpu": "NVIDIA GB10", "driver": "580.159.03"}
+    (proc / "version").write_text("NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 2026\n")
+    assert gpu.gpu_host(proc, no_smi)["driver"] == "595.99.02"
+    monkeypatch.setattr(gpu.shutil, "which", lambda _name: None)
+    assert gpu.gpu_host(tmp_path / "no-driver", no_smi) == {"gpu": None, "driver": None}
+    with pytest.raises(PartError) as e:  # a driver without /proc answers asks nvidia-smi; a timeout is an error
+        gpu.gpu_host(proc / "gpus", lambda: gpu.from_smi(["sleep", "5"], timeout=0.1))
+    assert e.value.code == -32603 and "did not answer" in e.value.message
+
+
+def test_isaac_stop_detaches_the_physics_callback():
+    from isaac_part import isaac_backend
+    isaac_backend._APP["step"] = lambda dt: pytest.fail("a stopped plant was stepped")
+    isaac_backend.stop(None)  # no SimulationApp in this process, so no timeline to stop
+    isaac_backend._APP["step"](1 / 360)
+    assert "app" not in isaac_backend._APP
+
+
+def test_diff_tolerance_is_only_for_physics_readings():
+    from isaac_part.views import same
+    assert same({"sensors": {"vibration_mm_s": 4.51}, "pose": {"x": 1.0}}, {"sensors": {"vibration_mm_s": 4.53},
+                                                                          "pose": {"x": 1.02}})
+    assert not same({"boost": 1.2}, {"boost": 1.21}) and not same({"t": 20.0}, {"t": 20.01})
+    assert not same({"sensors": {"zone": "B"}}, {"sensors": {"zone": "C"}})

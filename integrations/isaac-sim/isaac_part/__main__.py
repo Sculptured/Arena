@@ -31,4 +31,5 @@ def main(argv=None):
     serve(part, stdout=protocol_stdout())
 
 
-main()
+if __name__ == "__main__":
+    main()

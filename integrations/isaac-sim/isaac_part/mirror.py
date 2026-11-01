@@ -58,6 +58,10 @@ class Mirror(DocsPart):
     def advance(self, instance, clock_ms):
         link = self._instance(instance)
         found = _get(link.url, "/events", {"since": link.last_seq, "limit": PAGE})
+        if not isinstance(found, list) or not all(isinstance(e, dict) and "seq" in e for e in found):
+            error = found.get("error") if isinstance(found, dict) else None
+            raise errors.internal(f"the plant at {link.url} answered GET /events with "
+                                  f"{error or 'something other than a list of events'}")
         if found:
             link.last_seq = found[-1]["seq"]
         events = [views.arena_event(e) for e in found]

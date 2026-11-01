@@ -1,31 +1,36 @@
 """What the Factory's PlantIO is: the factory's offline double (`standin`) or Isaac Sim (`isaac`), and how each
-steps, saves and restores. The backend is a process argument because `describe` has no config and the backend
-changes the fingerprint."""
-import functools
-import subprocess
+loads, steps, saves, restores and stops. The backend is a process argument because `describe` has no config and
+the backend changes the fingerprint."""
 from dataclasses import dataclass
 from typing import Callable
 
 from arena_part import sources
 
 from . import isaac_backend
+from .gpu import gpu_host
 
 
 @dataclass(frozen=True)
 class Backend:
     name: str
     files: tuple  # factory files its behaviour depends on, beyond source.COMMON
+    load: Callable  # cfg -> None: imports what its PlantIO and saves need (before unpickling a save)
     make: Callable  # (cfg, data, physics_hz) -> PlantIO
     run: Callable  # (io, steps, dt, physics_step): `steps` physics steps, each followed by physics_step(dt)
     get_state: Callable  # io -> what an approximate save keeps of the simulation
     set_state: Callable  # (io, state, factory) -> None
+    stop: Callable  # io -> None: the instance is stopped
     host: Callable  # () -> what the fingerprint records of the machine
     max_live: int | None = None  # live instances one process can hold (None: any number)
 
 
+def _standin_load(cfg):
+    """fake_sim (it imports press_dynamics, whose PressDynamics a save holds)."""
+    return sources.import_read_only(cfg.isaac_path / "tests", "fake_sim", "isaac_path")
+
+
 def _standin_make(cfg, data, _physics_hz):
-    fake_sim = sources.import_read_only(cfg.isaac_path / "tests", "fake_sim", "isaac_path")
-    return fake_sim.FakeIO(data)
+    return _standin_load(cfg).FakeIO(data)
 
 
 def _standin_run(io, steps, dt, physics_step):
@@ -43,21 +48,13 @@ def _standin_set(io, state, _factory) -> None:
     io.presses, io.robot, io.people = state["presses"], state["robot"], state["people"]
 
 
-@functools.cache
-def gpu_host() -> dict:
-    """{gpu, driver} from nvidia-smi, null when there is none. Asked once per process."""
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-                             capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return {"gpu": None, "driver": None}
-    first = out.stdout.strip().splitlines()[0] if out.returncode == 0 and out.stdout.strip() else ""
-    name, _, driver = first.partition(",")
-    return {"gpu": name.strip() or None, "driver": driver.strip() or None}
+def _nothing(*_args):
+    return {}
 
 
-STANDIN = Backend("standin", ("tests/fake_sim.py", "tests/press_dynamics.py"), _standin_make, _standin_run,
-                  _standin_get, _standin_set, dict)
-ISAAC = Backend("isaac", ("sim_io.py", "ridgeline_scene.py"), isaac_backend.make, isaac_backend.run,
-                isaac_backend.get_state, isaac_backend.set_state, gpu_host, max_live=1)
+STANDIN = Backend("standin", ("tests/fake_sim.py", "tests/press_dynamics.py"), _standin_load, _standin_make,
+                  _standin_run, _standin_get, _standin_set, _nothing, _nothing)
+ISAAC = Backend("isaac", ("sim_io.py", "ridgeline_scene.py"), isaac_backend.load, isaac_backend.make,
+                isaac_backend.run, isaac_backend.get_state, isaac_backend.set_state, isaac_backend.stop,
+                gpu_host, max_live=1)
 BACKENDS = {b.name: b for b in (STANDIN, ISAAC)}

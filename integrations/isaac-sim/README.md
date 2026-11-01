@@ -22,8 +22,12 @@ changes the fingerprint.
 - If `isaacsim` can't be imported, `describe` still answers and `start` fails with -32603: "Isaac Sim is not
   importable here: run this integration with Isaac Sim's Python on the DGX Spark (see README)".
 - Isaac Sim has one stage per process, so the `isaac` backend holds one live plant per process. A second `start`
-  is refused until the first instance stops. `arena-part-check` needs three live instances, so it can't pass on
+  is refused with -32603 until the first instance stops. So two branches running at once on one isaac-sim
+  program fail clearly at the second start. `arena-part-check` needs three live instances, so it can't pass on
   `isaac` as written.
+- Stopping an `isaac` instance points the physics callback at a no-op and stops the timeline. A new plant starts
+  the same way, then builds a new stage, so a later plant never steps an old one. arenad's usual base, then
+  branch sequence is one plant after another, which this allows.
 
 ## Config
 
@@ -50,7 +54,11 @@ changes the fingerprint.
   `paths.py`, `schedule.py`, `layout.py` and `ridgeline.json`, plus `tests/fake_sim.py` and
   `tests/press_dynamics.py` for `standin`, or `sim_io.py` and `ridgeline_scene.py` for `isaac`;
 - `backend`, `adapter` and the default `physics_hz`;
-- for `isaac`, `{gpu, driver}` from `nvidia-smi --query-gpu=name,driver_version` (null without one).
+- for `isaac`, `{gpu, driver}`. These are read from `/proc/driver/nvidia/version` and
+  `/proc/driver/nvidia/gpus/*/information`, which don't query the GPU. Only when those files are absent does it
+  run `nvidia-smi --query-gpu=name,driver_version`. If that fails or takes over 10 s, `describe` fails with
+  -32603 rather than recording a null that would break replay later. Null means there is no NVIDIA driver at
+  all.
 
 `start` refuses with -32003 a configured file whose hash differs, and names the file. The protocol's `start`
 result is `{}`, so the Isaac Sim version that ran is in `inspect`, as `plant/sim.isaac_version`. It comes from
@@ -67,8 +75,9 @@ result is `{}`, so the Isaac Sim version that ran is in `inspect`, as `plant/sim
   methods directly, under its lock, and then `drain()`s its inbox.
 - `uses_clock: true`. `advance(clock_ms)` runs fixed steps of `1/physics_hz` s up to `clock_ms`, counted from
   arena time 0. How the advances are split doesn't matter.
-- `advance` returns the factory events since the last `advance` as `{kind, text, data}`. `data` gets `source`,
-  `seq` and the plant time `t` added, and `wall` is dropped.
+- `advance` returns the factory events since the last `advance` as `{kind, text, data}`. `data` is
+  `{source, seq, t, detail}`: `t` is the plant time, `detail` is the factory event's own data, and `wall` is
+  dropped. The factory's keys and these never overwrite each other.
 - `call_tool` first steps to its `clock_ms`, then acts. Its events stay queued for the next `advance`.
 - `start` calls `start_scenario(seed)` with the arena seed. That resets with the seed, so the floor noise
   follows it. With `scenario: false`, `start` calls `reset(seed)` instead.
@@ -104,38 +113,54 @@ The names and arguments are those of the factory's `mcp/src/ridgeline_mcp/floor.
   in the arena".
 - Records the factory would file in ERPNext (lockouts, statements, inspection notes) come out as events saying
   they were not filed ("no ERPNext link"). That is the factory's `--no-erp` behaviour.
-- Refusals come back as a tool-level `error` and change nothing. These are an unknown machine, technician or
-  line; a `task` other than `inspect` or `repair`; a bad argument type; and the Factory's own `ValueError`s,
-  such as a busy technician or an unknown line status. An unknown tool name is -32602.
+- Refusals come back as a tool-level `error` and change nothing. They cover:
+  - an unknown machine, technician, line or order, checked before the Factory is called;
+  - a `task` other than `inspect` or `repair`;
+  - a bad argument type;
+  - the Factory's own `ValueError`s, such as a busy technician or an unknown line status.
+
+  An unknown tool name is -32602.
 
 ## Keys, inspect and diff
 
 - Keys come from `state()`: `machine/<id>`, `line/<id>`, `order/<id>`, `technician/<id>`, `operator/<id>`,
   `shipment/<id>`, `robot/<id>` and `incident/<id>`. There are also `plant/clock` (`t`, `clock`, `speed`,
   `scenario`, `log_seq`) and `plant/sim`.
-- `diff` compares documents exactly, except for floats. Two floats count as the same when they differ by at most
-  0.05 plus 1 % of the larger one, because physics readings drift after an approximate restore. The protocol has
-  no "not compared" mark.
+- `diff` compares documents exactly, except for floats inside the physics readings (`sensors` and `pose`
+  subtrees). Those count as the same when they differ by at most 0.05 plus 1 % of the larger one, because they
+  drift after an approximate restore. The protocol has no "not compared" mark.
 
 ## Restore: `{exact: "replay", approximate: true}`
 
 - **Exact by replay.** Physics state on the GPU can't be saved exactly, and replay from the seed is exact
   (verified on the stand-in: same seed and inputs give equal tool results, events and `inspect`). A start
   `from` a save in `exact` mode is refused with -32001.
-- **Approximate saves.** A save is a pickle (protocol 5), `plant.pkl`, with `docs.json` beside it for `inspect`
-  and `diff`. The pickle holds:
+- **Approximate saves.** A save is a gzipped pickle (protocol 5), `plant.pkl.gz`, with `docs.json` beside it for
+  `inspect` and `diff`. The pickle holds:
   - every `Factory` attribute except `io`, `lock`, `cond`, `inbox`, `erp`, `triggers` and `log`. The list is
     in `state.py`, and a test fails if `Factory` gains an attribute that isn't classified;
   - the backend's state: FakeIO's presses, robot and people for `standin`. For `isaac`, it holds articulation
     joint positions and velocities, the robots' poses and joints, the people's poses and the last IMU readings,
     all read through `IsaacIO`.
+- Restoring works in a fresh process. It first loads the factory's modules and the backend's (`fake_sim` and
+  `press_dynamics` for the stand-in), then unpickles. A save that can't be read is -32001. So is one made with
+  another backend, `physics_hz`, `plant_start` or `data_path`, which is checked before anything is built.
 - Restoring rebuilds the `Factory` and sets that state back. On `isaac` this is approximate: PhysX's solver warm
   start and contact caches are lost, and the restore calls (`set_dof_positions`, `set_world_poses`, ...) are
   unverified on 6.2.
-- On the stand-in all simulation state is in the save, so a restored plant continues exactly as the original.
+- Each press's 120 s spectrum history (`signals.Ring`, about 0.5 MB a press) is saved empty, because no tick
+  reads it. After a restore, `vibration_spectrum` therefore sees only the seconds since the restore. The
+  pre-trip window that `before_trip` uses (`VibrationChannel.frozen`, 60 s) is kept.
+- On the stand-in all the other simulation state is in the save, so a restored plant continues exactly as the
+  original (events, documents, and later readings). Only spectra of the time before the restore differ.
 - The pickle is acceptable because only this integration reads it, from its own save folder, and the
-  fingerprint guards the code that reads it. A save is about 2.4 MB, mostly the 120 s vibration history of
-  each press.
+  fingerprint guards the code that reads it.
+- **Disk cost per save (measured):**
+  - 39 kB before the trip;
+  - 221 kB after it, mostly the frozen pre-trip window;
+  - 250 kB at 10 min, because the 1 Hz telemetry grows up to its 2 h cap.
+
+  arenad saves at every step, so a run of a few hundred steps after the trip costs tens of MB.
 
 ## Mirror mode: package `isaac-sim-mirror`
 
@@ -144,7 +169,8 @@ factory (config `plant_url`, default `http://127.0.0.1:8090`) and only ever GETs
 
 - No tools.
 - `start` reads `GET /state` and follows from its `log_seq`. Events from before the start are not this world's.
-- `advance` returns `GET /events?since=<last seq>` as world events.
+- `advance` returns `GET /events?since=<last seq>` as world events. A reply that isn't a list of events, such as
+  `{"error"}`, is -32603.
 - `inspect` returns pieces of `GET /state`, under the same keys as above. `save` stores the current `/state`
   for display (`exact: false`).
 - Restore is `{exact: "none", approximate: false}`. A live plant can't be rewound, so a start `from` a save is
@@ -182,4 +208,5 @@ uv run --with pytest pytest -q
 
 All tests run on `standin`. The conformance test runs `arena-part-check` on a copy of the manifest that uses
 `--backend standin`; it is skipped when the binary is not built (`cargo build -p parts --bin
-arena-part-check`). The suite takes about 3 s.
+arena-part-check`). A restore in a fresh process is tested by running the part over stdio. The suite takes
+about 3 s.

@@ -113,7 +113,8 @@ TOOLS = {t.name: t for t in [
          "and the orders it would displace there. Orders are ERPNext Work Orders.", "read",
          (Param("order", "string"), Param("to_line", "string")),
          lambda f, a: f.whatif_move(a["order"], a["to_line"]),
-         _reads(_key("order", "order"), _key("line", "to_line")), (_needs_erp,)),
+         _reads(_key("order", "order"), _key("line", "to_line")),
+         (_needs_erp, _known("order", "orders", "order"), _known("to_line", "lines_meta", "line"))),
     Tool("dispatch_technician", "Send a technician to a machine. task is 'inspect' (walk there, lock the machine "
          "out, open the guard and inspect) or 'repair' (install the delivered part, brake test, run-in). "
          "proposal_id is accepted and not verified here.", "write",
@@ -135,21 +136,17 @@ def _act(tool, f, args):
     return views.plain(tool.act(f, args))
 
 
-def _message(e: Exception) -> str:
-    return f"unknown id {e}" if isinstance(e, KeyError) else str(e)
-
-
 def run_tool(plant, name: str, args) -> dict:
-    """Runs one tool on a plant: a call_tool result. A refusal (bad argument, unknown id, or the Factory's own
-    ValueError/KeyError, as api.py answers 409/404) is a tool-level `error` with no keys; an unknown tool name is
-    a protocol-level `invalid`."""
+    """Runs one tool on a plant: a call_tool result. A refusal (a bad argument, an unknown id, both checked first,
+    or the Factory's own ValueError, which api.py answers with 409) is a tool-level `error` with no keys; an
+    unknown tool name is a protocol-level `invalid`."""
     tool = TOOLS.get(name)
     if tool is None:
         raise errors.invalid(f"unknown tool {name}")
     try:
         args = normalize(tool.name, tool.params, args)
         result = plant.act(lambda f: _act(tool, f, args))
-    except (Refusal, ValueError, KeyError) as e:
-        return refused(_message(e))
+    except (Refusal, ValueError) as e:
+        return refused(str(e))
     reads, writes = tool.keys(args, result)
     return {"result": result, "reads": reads, "writes": writes}

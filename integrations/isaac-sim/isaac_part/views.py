@@ -10,10 +10,11 @@ DOCS_FILE = "docs.json"
 COLLECTIONS = {"machine": "machines", "line": "lines", "order": "orders", "technician": "technicians",
                "operator": "operators", "shipment": "shipments", "robot": "robots", "incident": "incidents"}
 CLOCK_FIELDS = ("t", "clock", "speed", "scenario", "log_seq")
-# Floats compare equal within ABS_TOL + REL_TOL * the larger: physics readings after an approximate restore
-# (the protocol has no "not compared" mark).
+# Inside these subtrees (sensor readings, poses), floats compare equal within ABS_TOL + REL_TOL * the larger:
+# physics readings drift after an approximate restore, and the protocol has no "not compared" mark. Everything
+# else compares exactly.
+PHYSICS = ("sensors", "pose")
 ABS_TOL, REL_TOL = 0.05, 0.01
-
 
 def plain(value):
     """A JSON-safe copy (datetimes and other objects as strings, as the factory API sends them)."""
@@ -34,8 +35,9 @@ def pick(docs: dict, keys) -> dict:
 
 
 def arena_event(ev: dict) -> dict:
-    """A factory event as a world event: {kind, text, data}, with source, seq and the plant time t in data."""
-    data = {**(ev.get("data") or {}), "source": ev["source"], "seq": ev["seq"], "t": ev["t"]}
+    """A factory event as a world event: {kind, text, data}. data has the event's source, seq and plant time t,
+    and the factory's own data under `detail`, so neither can overwrite the other."""
+    data = {"source": ev["source"], "seq": ev["seq"], "t": ev["t"], "detail": ev.get("data") or {}}
     return plain({"kind": ev["kind"], "text": ev["text"], "data": data})
 
 
@@ -43,13 +45,14 @@ def _number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def same(a, b) -> bool:
-    if isinstance(a, float) or isinstance(b, float):
-        return _number(a) and _number(b) and abs(a - b) <= ABS_TOL + REL_TOL * max(abs(a), abs(b))
+def same(a, b, physics: bool = False) -> bool:
+    """Equal documents; within a PHYSICS subtree, floats only need to be close."""
+    if physics and (isinstance(a, float) or isinstance(b, float)) and _number(a) and _number(b):
+        return abs(a - b) <= ABS_TOL + REL_TOL * max(abs(a), abs(b))
     if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+        return a.keys() == b.keys() and all(same(a[k], b[k], physics or k in PHYSICS) for k in a)
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(map(same, a, b))
+        return len(a) == len(b) and all(same(x, y, physics) for x, y in zip(a, b))
     return a == b
 
 

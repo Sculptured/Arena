@@ -6,17 +6,18 @@ so one live plant per process (Backend.max_live)."""
 import importlib
 import importlib.util
 import math
-import sys
 
 from arena_part import errors, sources
 
+from .log import log
+
 MISSING = ("Isaac Sim is not importable here: run this integration with Isaac Sim's Python on the DGX Spark "
            "(see README)")
-_APP = {}  # the process's SimulationApp and the physics callback's target
+_APP = {}  # the process's SimulationApp, its one physics callback, and where that callback forwards each step
 
 
-def _log(*args):
-    print(*args, file=sys.stderr)
+def _idle(_dt):
+    """The callback's target while no plant is being run: steps never reach a stopped plant."""
 
 
 def _app():
@@ -28,12 +29,18 @@ def _app():
     return _APP["app"]
 
 
+def _stop_timeline():
+    import omni.timeline
+    omni.timeline.get_timeline_interface().stop()  # unverified on 6.2
+
+
 def _stage(app, cfg, data):
-    """A new stage with the factory's scene, as run.py builds it."""
+    """A new stage with the factory's scene, as run.py builds it. The previous plant's timeline is stopped first."""
     import omni.usd
     from isaacsim.storage.native import get_assets_root_path
     scene = sources.import_read_only(cfg.isaac_path, "ridgeline_scene", "isaac_path")
     ctx = omni.usd.get_context()
+    _stop_timeline()
     ctx.new_stage()
     app.update()
     root = get_assets_root_path()
@@ -43,16 +50,23 @@ def _stage(app, cfg, data):
     return ctx.get_stage()
 
 
-def make(cfg, data, physics_hz):
+def load(_cfg):
+    """Isaac Sim must be importable. A save holds plain values and numpy arrays only, so nothing is imported yet:
+    sim_io needs the SimulationApp running first."""
     if importlib.util.find_spec("isaacsim") is None:
         raise errors.internal(MISSING)
+
+
+def make(cfg, data, physics_hz):
+    load(cfg)
+    _APP["step"] = _idle
     app = _app()
     import isaacsim.core.experimental.utils.app as app_utils
     sim_io = sources.import_read_only(cfg.isaac_path, "sim_io", "isaac_path")
     layout = importlib.import_module("layout")
     stage = _stage(app, cfg, data)
     people = layout.TECHNICIANS + list(layout.OPERATOR_IDS.values())
-    io = sim_io.IsaacIO(stage, list(layout.MACHINES), layout.ROBOTS, people, data, "glide", log=_log)
+    io = sim_io.IsaacIO(stage, list(layout.MACHINES), layout.ROBOTS, people, data, "glide", log=log)
     sim_io.setup_physics(physics_hz, "cuda:0")
     app_utils.play()
     app_utils.update_app(steps=2)
@@ -60,6 +74,12 @@ def make(cfg, data, physics_hz):
     if "callback" not in _APP:  # unverified on 6.2: the callback outlives ctx.new_stage()
         _APP["callback"] = sim_io.on_physics_step(lambda dt: _APP["step"](dt))
     return io
+
+
+def stop(_io):
+    _APP["step"] = _idle
+    if "app" in _APP:
+        _stop_timeline()
 
 
 def run(io, steps, dt, physics_step):
@@ -86,12 +106,13 @@ def _person(io, person) -> tuple:
 
 
 def get_state(io) -> dict:
-    """Joint positions and velocities, the shaft unwrap, the last IMU readings, robots and people. Approximate:
-    PhysX's solver warm start and contact caches are not saved."""
+    """Joint positions and velocities, IsaacIO's step count (kinematic robots integrate from it), the shaft unwrap,
+    the last IMU readings, robots and people. Approximate: PhysX's solver warm start and contact caches are not
+    saved."""
     return {"q": io.presses.get_dof_positions().numpy(), "v": io.presses.get_dof_velocities().numpy(),
-            "unwrapped": io.unwrapped.copy(), "last_raw": None if io.last_raw is None else io.last_raw.copy(),
-            "last_accel": dict(io.last_accel), "robots": {r: _robot(io, r) for r in io.robots},
-            "people": {p: _person(io, p) for p in io.people}}
+            "steps": io.steps, "unwrapped": io.unwrapped.copy(),
+            "last_raw": None if io.last_raw is None else io.last_raw.copy(), "last_accel": dict(io.last_accel),
+            "robots": {r: _robot(io, r) for r in io.robots}, "people": {p: _person(io, p) for p in io.people}}
 
 
 def _set_robot(io, r, s) -> None:
@@ -107,7 +128,7 @@ def _set_robot(io, r, s) -> None:
 def set_state(io, s, factory) -> None:
     io.presses.set_dof_positions(s["q"])  # unverified on 6.2
     io.presses.set_dof_velocities(s["v"])  # unverified on 6.2
-    io.unwrapped, io.last_raw, io.last_accel = s["unwrapped"], s["last_raw"], s["last_accel"]
+    io.steps, io.unwrapped, io.last_raw, io.last_accel = s["steps"], s["unwrapped"], s["last_raw"], s["last_accel"]
     io.max_efforts = io.vel_targets = None  # the next command writes every drive again
     for r, robot in s["robots"].items():
         _set_robot(io, r, robot)
