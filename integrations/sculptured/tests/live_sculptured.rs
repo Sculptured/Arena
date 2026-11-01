@@ -1,17 +1,16 @@
 //! Runs real `sculptured serve` instances: `cargo test -p arena-sculptured -- --ignored live_`.
-//! Needs the sculptured program (default `~/MLSys/Sculptured/sculptured/target/release/sculptured`,
-//! or env `ARENA_SCULPTURED_BINARY`); without it the test says so and passes. Every server and
-//! folder the test makes is removed afterwards, even on failure.
-use arena_part::helpers::process_group::{kill_matching, matching};
+//! Needs the sculptured program (`arena_sculptured::default_binary()`, or env
+//! `ARENA_SCULPTURED_BINARY`); without it the test says so and passes. Every server and folder
+//! the test makes is removed afterwards, even on failure (the drop runs the integration's `gc`).
 use arena_part::proto::*;
 use arena_part::Part;
 use arena_sculptured::Sculptured;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::Command;
 
-/// The test's folder; dropping it kills every process started under it and removes it.
+/// The test's folder; dropping it stops every instance recorded under it and removes it.
 struct World {
     dir: PathBuf,
 }
@@ -33,34 +32,34 @@ impl World {
         Sculptured::new(self.saves())
     }
 
-    fn running(&self) -> Vec<u32> {
-        matching(&self.dir.to_string_lossy())
+    /// The processes with the test folder on their command line (`pgrep -f`; only to check).
+    fn running(&self) -> String {
+        let out = Command::new("pgrep")
+            .arg("-af")
+            .arg(&self.dir)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 }
 
 impl Drop for World {
     fn drop(&mut self) {
-        let _ = kill_matching(&self.dir.to_string_lossy(), Duration::from_secs(10));
+        // a fresh value started nothing, so its gc stops every instance recorded here
+        let part = self.part();
+        let gc = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(part.gc(GcParams { keep: vec![] }))
+        });
+        let _ = gc.join();
         let _ = fs::remove_dir_all(&self.dir);
-        // the servers' scratch folders (`arena-sc-<pid>-<n>`, outside the test's folder)
-        let mine = format!("arena-sc-{}-", std::process::id());
-        let tmp = fs::read_dir(std::env::temp_dir())
-            .into_iter()
-            .flatten()
-            .flatten();
-        for e in tmp.filter(|e| e.file_name().to_string_lossy().starts_with(&mine)) {
-            let _ = fs::remove_dir_all(e.path());
-        }
     }
 }
 
 fn binary() -> Option<PathBuf> {
     let b = std::env::var_os("ARENA_SCULPTURED_BINARY")
         .map(PathBuf::from)
-        .or_else(|| {
-            let home = PathBuf::from(std::env::var_os("HOME")?);
-            Some(home.join("MLSys/Sculptured/sculptured/target/release/sculptured"))
-        })?;
+        .or_else(arena_sculptured::default_binary)?;
     b.is_file().then_some(b)
 }
 
@@ -87,6 +86,16 @@ async fn tool(p: &Sculptured, instance: &str, name: &str, args: Value) -> ToolOu
     p.call_tool(params).await.unwrap()
 }
 
+/// `decide_change` with `args` on `inst`.
+async fn decide(p: &Sculptured, inst: &str, args: Value) -> ToolOutput {
+    tool(p, inst, "decide_change", args).await
+}
+
+async fn changes(p: &Sculptured, inst: &str) -> Value {
+    let out = tool(p, inst, "list_changes", json!({})).await;
+    out.result.unwrap()["changes"].clone()
+}
+
 fn instance(i: &str) -> Target {
     Target::Instance { instance: i.into() }
 }
@@ -97,6 +106,16 @@ fn save(s: &str) -> Target {
 
 async fn differing(p: &Sculptured, a: Target, b: Target) -> Vec<String> {
     p.diff(DiffParams { a, b }).await.unwrap().differing
+}
+
+async fn save_as(w: &World, inst: &str, id: &str) {
+    let params = SaveParams {
+        instance: inst.into(),
+        save: id.into(),
+        dir: w.saves().join(id).to_string_lossy().into(),
+    };
+    let saved = w.part().save(params).await.unwrap();
+    assert!(saved.exact && saved.bytes > 0, "{saved:?}");
 }
 
 fn order() -> Value {
@@ -115,11 +134,7 @@ async fn propose(p: &Sculptured, inst: &str) -> String {
     assert_eq!(change["decision"], Value::Null, "{change}");
     let id = change["id"].as_str().unwrap().to_string();
     assert_eq!(out.writes, [format!("change/{id}")]);
-    let listed = tool(p, inst, "list_changes", json!({}))
-        .await
-        .result
-        .unwrap();
-    assert_eq!(listed["changes"][0], change);
+    assert_eq!(changes(p, inst).await[0], change);
     id
 }
 
@@ -130,30 +145,32 @@ fn refused(out: &ToolOutput, words: &str) {
     assert!(out.result.is_none() && out.reads.is_empty() && out.writes.is_empty());
 }
 
-/// `decide_change` with `args` on `inst`.
-async fn decide(p: &Sculptured, inst: &str, args: Value) -> ToolOutput {
-    tool(p, inst, "decide_change", args).await
+/// Decides change `id` on `inst` (refused with `note`, or approved) and checks the outcome.
+async fn decided(p: &Sculptured, inst: &str, id: &str, note: Option<&str>) {
+    let args = match note {
+        Some(n) => json!({"id": id, "approved": false, "note": n}),
+        None => json!({"id": id, "approved": true}),
+    };
+    let out = decide(p, inst, args).await;
+    let change = out.result.expect("decide_change gives the change");
+    assert_eq!(change["id"], id, "shown under the id it was proposed with");
+    assert_eq!(change["decision"]["approved"], note.is_none(), "{change}");
+    assert_eq!(change["decision"]["by"], "person");
+    assert_eq!(change["decision"]["note"], json!(note));
+    assert_eq!(out.writes, [format!("change/{id}")]);
 }
 
-async fn decide_and_refusals(p: &Sculptured, inst: &str, id: &str) {
-    let out = decide(p, inst, json!({"id": id, "approved": true})).await;
-    let change = out.result.expect("decide_change gives the change");
-    assert_eq!(change["decision"]["approved"], true, "{change}");
-    assert_eq!(change["decision"]["by"], "person");
-    assert_eq!(out.writes, [format!("change/{id}")]);
+async fn refusals(p: &Sculptured, inst: &str, id: &str) {
     let again = decide(p, inst, json!({"id": id, "approved": false})).await;
     refused(&again, "already decided: approved by person");
     let nope = decide(p, inst, json!({"id": "chg-nope", "approved": true})).await;
     refused(&nope, "no change chg-nope");
     refused(&decide(p, inst, json!({"id": id})).await, "approved");
-    let bad = tool(
-        p,
-        inst,
-        "propose_change",
-        json!({"action": "x", "summary": "s"}),
-    )
-    .await;
-    refused(&bad, "payload must be an object");
+    let bad = json!({"action": "x", "summary": "s"});
+    refused(
+        &tool(p, inst, "propose_change", bad).await,
+        "payload must be an object",
+    );
     let unknown = CallToolParams {
         instance: inst.into(),
         name: "nope".into(),
@@ -163,36 +180,76 @@ async fn decide_and_refusals(p: &Sculptured, inst: &str, id: &str) {
     assert_eq!(p.call_tool(unknown).await.unwrap_err().code, -32602);
 }
 
-/// `b` started from `s1` has the change undecided again, and is a working instance.
-async fn check_restored(p: &Sculptured, b: &str, id: &str) {
-    let key = format!("change/{id}");
+/// `inst`, started from `s`, shows change `id` waiting again, once, as in the save.
+async fn waits_again(p: &Sculptured, inst: &str, s: &str, id: &str) {
+    let listed = changes(p, inst).await;
+    assert_eq!(
+        listed.as_array().unwrap().len(),
+        1,
+        "no copy shown: {listed}"
+    );
+    assert_eq!(listed[0]["id"], id);
+    assert_eq!(listed[0]["decision"], Value::Null);
+    assert!(differing(p, instance(inst), save(s)).await.is_empty());
+    let keys = vec![format!("change/{id}"), "change/nope".into()];
+    let target = instance(inst);
     let docs = p
-        .inspect(InspectParams {
-            target: instance(b),
-            keys: vec![key.clone(), "change/nope".into()],
-        })
+        .inspect(InspectParams { target, keys })
         .await
         .unwrap()
         .docs;
-    assert_eq!(docs[&key]["decision"], Value::Null, "{docs:?}");
+    assert_eq!(docs[&format!("change/{id}")], listed[0]);
     assert_eq!(docs["change/nope"], Value::Null);
-    assert!(differing(p, instance(b), save("s1")).await.is_empty());
-    // its question went with the server that saved it: Sculptured can't decide it any more
-    let out = decide(p, b, json!({"id": id, "approved": true})).await;
-    refused(&out, "can no longer decide");
-    let fresh = propose(p, b).await;
-    let no = json!({"id": fresh, "approved": false, "note": "too dear"});
-    let decided = decide(p, b, no).await.result.unwrap();
-    assert_eq!(decided["decision"]["approved"], false);
-    assert_eq!(decided["decision"]["note"], "too dear");
 }
 
-async fn stop_all(w: &World, p: &Sculptured, ids: [&str; 2]) {
+/// Two restores of `s1` decide `id` differently; a restore of a save of a restore decides it too.
+async fn restores_decide(w: &World, p: &Sculptured, binary: &PathBuf, id: &str) {
+    p.start(start("t14_b", binary, Some("s1"))).await.unwrap();
+    waits_again(p, "t14_b", "s1", id).await;
+    decided(p, "t14_b", id, Some("too dear")).await;
+    p.start(start("t14_c", binary, Some("s1"))).await.unwrap();
+    waits_again(p, "t14_c", "s1", id).await;
+    save_as(w, "t14_c", "s2").await;
+    decided(p, "t14_c", id, None).await;
+    let key = format!("change/{id}");
+    assert_eq!(
+        differing(p, instance("t14_b"), instance("t14_c")).await,
+        [key.as_str()]
+    );
+    p.start(start("t14_d", binary, Some("s2"))).await.unwrap();
+    waits_again(p, "t14_d", "s2", id).await;
+    decided(p, "t14_d", id, None).await;
+    assert!(differing(p, instance("t14_c"), instance("t14_d"))
+        .await
+        .is_empty());
+    let fresh = propose(p, "t14_d").await;
+    decided(p, "t14_d", &fresh, Some("no")).await;
+}
+
+async fn stop_all(w: &World, p: &Sculptured, ids: &[&str]) {
+    // gc leaves the instances this value started alone
+    p.gc(GcParams {
+        keep: vec!["s*".into()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(changes(p, ids[0]).await.as_array().unwrap().len(), 1);
     for i in ids {
-        p.stop(IdParams { instance: i.into() }).await.unwrap();
+        p.stop(IdParams {
+            instance: (*i).into(),
+        })
+        .await
+        .unwrap();
     }
-    assert!(w.running().is_empty(), "servers left: {:?}", w.running());
-    p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
+    p.stop(IdParams {
+        instance: "t14_a".into(),
+    })
+    .await
+    .unwrap(); // stopped already: a no-op
+    assert!(w.running().is_empty(), "servers left: {}", w.running());
+    for s in ["s1", "s2"] {
+        p.drop_save(SaveId { save: s.into() }).await.unwrap();
+    }
     let left: Vec<_> = fs::read_dir(w.saves()).unwrap().flatten().collect();
     assert!(left.iter().all(|e| e.file_name() == ".live"), "{left:?}");
 }
@@ -204,24 +261,18 @@ async fn live_sculptured_roundtrip() {
         eprintln!("no sculptured program: live_sculptured_roundtrip skipped");
         return;
     };
-    let (a, b) = ("t14_a", "t14_b");
     let w = World::new();
     let p = w.part();
-    p.start(start(a, &binary, None)).await.unwrap();
-    let id = propose(&p, a).await;
-    let params = SaveParams {
-        instance: a.into(),
-        save: "s1".into(),
-        dir: w.saves().join("s1").to_string_lossy().into(),
-    };
-    let saved = w.part().save(params).await.unwrap();
-    assert!(saved.exact && saved.bytes > 0, "{saved:?}");
-    decide_and_refusals(&p, a, &id).await;
+    p.start(start("t14_a", &binary, None)).await.unwrap();
+    let id = propose(&p, "t14_a").await;
+    save_as(&w, "t14_a", "s1").await;
+    decided(&p, "t14_a", &id, None).await;
+    refusals(&p, "t14_a", &id).await;
+    let key = format!("change/{id}");
     assert_eq!(
-        differing(&p, instance(a), save("s1")).await,
-        [format!("change/{id}")]
+        differing(&p, instance("t14_a"), save("s1")).await,
+        [key.as_str()]
     );
-    p.start(start(b, &binary, Some("s1"))).await.unwrap();
-    check_restored(&p, b, &id).await;
-    stop_all(&w, &w.part(), [a, b]).await;
+    restores_decide(&w, &p, &binary, &id).await;
+    stop_all(&w, &p, &["t14_a", "t14_b", "t14_c", "t14_d"]).await;
 }

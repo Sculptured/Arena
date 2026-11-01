@@ -1,54 +1,69 @@
-//! Programs a part started that live on in process groups of their own (servers that detach
-//! their helpers, for one): found by their command line, killed group and all.
-use std::io;
-use std::time::{Duration, Instant};
+//! Killing programs a part started that live on in process groups of their own (servers that
+//! detach their helpers, for one), by the identity the part recorded: a process is killed only
+//! when it still runs the recorded program and one of its arguments names a folder the part owns.
+//! Linux only (it reads `/proc`); elsewhere every call is an "unsupported" error.
+use std::path::Path;
+#[cfg(not(target_os = "linux"))]
+use std::{io, time::Duration};
 
-/// The processes (but this one) whose command line holds `needle`. Zombies have none.
-pub fn matching(needle: &str) -> Vec<u32> {
-    let me = std::process::id();
-    let Ok(rd) = std::fs::read_dir("/proc") else {
-        return vec![];
-    };
-    rd.filter_map(Result::ok)
-        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|&pid| pid != me && cmdline(pid).is_some_and(|c| c.contains(needle)))
-        .collect()
+/// Who a process must be to be killed: the program it runs and a folder of the part's that one
+/// of its arguments is, or is under.
+#[derive(Debug, Clone, Copy)]
+pub struct Identity<'a> {
+    pub exe: &'a Path,
+    pub folder: &'a Path,
 }
 
-/// The command line of `pid`, its arguments joined by spaces.
-fn cmdline(pid: u32) -> Option<String> {
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    Some(String::from_utf8_lossy(&raw).replace('\0', " "))
+/// True when one whole argument is `folder` or a path under it (`/tmp/x_12` is not under
+/// `/tmp/x_1`).
+pub fn names_folder<S: AsRef<str>>(args: &[S], folder: &Path) -> bool {
+    args.iter()
+        .any(|a| Path::new(a.as_ref()).starts_with(folder))
 }
 
-/// Kills (SIGKILL) the process group of every process whose command line holds `needle`, and
-/// waits up to `wait` until none is left. A process in this program's own group is killed alone.
-pub fn kill_matching(needle: &str, wait: Duration) -> io::Result<()> {
-    let deadline = Instant::now() + wait;
-    loop {
-        let found = matching(needle);
-        if found.is_empty() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(io::Error::other(format!(
-                "processes {found:?} ({needle}) are still running"
-            )));
-        }
-        found.into_iter().for_each(kill_group_of);
-        std::thread::sleep(Duration::from_millis(50));
-    }
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::{is, kill};
+
+/// Whether `pid` runs `id.exe` with an argument naming `id.folder` (false when it is gone).
+#[cfg(not(target_os = "linux"))]
+pub fn is(_pid: u32, _id: &Identity) -> io::Result<bool> {
+    Err(unsupported())
 }
 
-fn kill_group_of(pid: u32) {
-    let pid = pid as libc::pid_t;
-    // SAFETY: getpgid, killpg and kill only read their integer arguments.
-    unsafe {
-        let group = libc::getpgid(pid);
-        if group > 0 && group != libc::getpgid(0) {
-            libc::killpg(group, libc::SIGKILL);
-        } else {
-            libc::kill(pid, libc::SIGKILL);
-        }
+/// Kills `pid` when it is `id`: its whole group when it leads group `pgid` (not this program's),
+/// else it alone; then waits up to `wait` until it is gone. False when it was not `id` (or gone).
+#[cfg(not(target_os = "linux"))]
+pub fn kill(_pid: u32, _pgid: Option<u32>, _id: &Identity, _wait: Duration) -> io::Result<bool> {
+    Err(unsupported())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "killing recorded processes is only supported on Linux",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whole_arguments_only() {
+        let folder = Path::new("/tmp/x_12");
+        assert!(names_folder(&["serve", "/tmp/x_12"], folder));
+        assert!(names_folder(
+            &["--data-dir", "/tmp/x_12/data/host-local"],
+            folder
+        ));
+        assert!(!names_folder(&["/tmp/x_123/data"], folder));
+        assert!(!names_folder(&["/tmp/x_1"], folder));
+        assert!(!names_folder(&["--data-dir=/tmp/x_12/data"], folder));
+        assert!(!names_folder(&["sh -c /tmp/x_12"], folder));
+        assert!(!names_folder::<&str>(&[], folder));
     }
 }

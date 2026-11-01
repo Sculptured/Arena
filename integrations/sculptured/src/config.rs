@@ -35,7 +35,10 @@ impl Config {
             v => serde_json::from_value(v.clone())
                 .map_err(|e| PartError::invalid(format!("config: {e}")))?,
         };
-        let binary = raw.binary.map_or_else(default_binary, Ok)?;
+        let binary = raw
+            .binary
+            .or_else(default_binary)
+            .ok_or_else(|| PartError::invalid("config: binary is required (HOME is not set)"))?;
         if !binary.is_file() {
             return Err(PartError::invalid(format!(
                 "binary {binary:?} is not a file"
@@ -51,10 +54,10 @@ impl Config {
     }
 }
 
-fn default_binary() -> Result<PathBuf, PartError> {
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(DEFAULT_BINARY))
-        .ok_or_else(|| PartError::invalid("config: binary is required (HOME is not set)"))
+/// The sculptured program a config without `binary` runs: `~/` + `DEFAULT_BINARY` (None when
+/// HOME is not set).
+pub fn default_binary() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(DEFAULT_BINARY))
 }
 
 /// A name that Sculptured keeps as the team's id: lowercase letters, digits and `-`.

@@ -1,12 +1,11 @@
 //! `decide_change`: answers the question Sculptured asked about a change, as the person in Needs
 //! you would (`POST /api/questions/{id}/answer`); Sculptured then records the decision. A change
-//! whose question is gone (a restored server withdraws the questions its predecessor asked) can
-//! no longer be decided.
+//! proposed again after a restore (see `aliases`) is decided through its latest copy's question.
 use anyhow::Result;
 use reqwest::Method;
 use serde_json::{json, Value};
 
-use super::{wrote, Outcome};
+use super::{wrote, Outcome, Team};
 use crate::api::{Api, Reply};
 use crate::changes;
 use crate::poll;
@@ -45,29 +44,38 @@ impl Decision {
     }
 }
 
-pub async fn decide(api: &Api, team: &str, args: &Value) -> Result<Outcome> {
+pub async fn decide(t: &Team<'_>, args: &Value) -> Result<Outcome> {
     let d = match Decision::parse(args) {
         Ok(d) => d,
         Err(e) => return Ok(Err(e)),
     };
-    let all = changes::fetch(api, team).await?;
+    let all = t.changes().await?;
     let Some(change) = changes::find(&all, &d.id) else {
-        return Ok(Err(format!("no change {} on team {team}", d.id)));
+        return Ok(Err(format!("no change {} on team {}", d.id, t.name)));
     };
     if let Some(was) = said(&change["decision"]) {
         return Ok(Err(format!("{} is already decided: {was}", d.id)));
     }
-    let question = match question(api, team, &d.id).await? {
+    let question = match question(t.api, t.name, t.aliases.current(&d.id)).await? {
         Ok(q) => q,
-        Err(e) => return Ok(Err(e)),
+        Err(why) => {
+            let gone = format!("Sculptured can no longer decide {} ({why})", d.id);
+            return Ok(Err(gone));
+        }
     };
+    answer(t, &question, &d).await
+}
+
+/// Answers `question` with decision `d` and waits until Sculptured shows it on the change.
+async fn answer(t: &Team<'_>, question: &str, d: &Decision) -> Result<Outcome> {
     let answer = json!({"answer": d.answer()});
-    let segments = ["questions", question.as_str(), "answer"];
-    if let Reply::Refused { message, .. } = api.send(Method::POST, &segments, answer).await? {
+    let segments = ["questions", question, "answer"];
+    let answered = t.api.send(Method::POST, &segments, answer).await?;
+    if let Reply::Refused { message, .. } = answered {
         return Ok(Err(message));
     }
     let decided = poll::until("the decision recorded", || async {
-        let all = changes::fetch(api, team).await?;
+        let all = t.changes().await?;
         let c = changes::find(&all, &d.id).filter(|c| !c["decision"].is_null());
         Ok(c.cloned())
     });
@@ -86,7 +94,8 @@ fn said(decision: &Value) -> Option<String> {
     ))
 }
 
-/// The open question Sculptured asked about change `id`, or why it can no longer be decided.
+/// The open question Sculptured asked about change `id` (its id in Sculptured), or why there is
+/// none.
 async fn question(api: &Api, team: &str, id: &str) -> Result<Result<String, String>> {
     let all = api.get(&["teams", team, "questions"], &[]).await?;
     let all = all.expect("the team's questions")?;
@@ -99,9 +108,7 @@ async fn question(api: &Api, team: &str, id: &str) -> Result<Result<String, Stri
         .first()
         .and_then(|q| q["withdrawn_reason"].as_str().or(q["state"].as_str()))
         .unwrap_or("nobody was asked");
-    Ok(Err(format!(
-        "Sculptured can no longer decide {id} ({why}); propose it again"
-    )))
+    Ok(Err(why.to_string()))
 }
 
 #[cfg(test)]
