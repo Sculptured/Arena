@@ -1,0 +1,24 @@
+[package]
+name = "arena-erpnext"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arena_erpnext"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-erpnext"
+path = "src/main.rs"
+
+[dependencies]
+arena-part = { path = "../../kits/rust", features = ["mariadb", "compose"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true

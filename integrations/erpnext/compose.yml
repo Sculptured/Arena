@@ -1,0 +1,66 @@
+# The ERPNext install the erpnext integration runs (project `arena_erpnext`), adapted from
+# Sculptured-Examples/factory/erp/compose.yml. Differences:
+# - no `db` service: the database is the integration's own MariaDB server (made by the kit's
+#   mariadb helper, with binary logging), connected to this project's network with alias `db`;
+# - no `scheduler` service and no `configurator`: arena sites change only through tool calls, and
+#   the integration writes `common_site_config.json` itself;
+# - `sites` is a folder the integration owns (env ARENA_ERPNEXT_SITES), so a site's files are
+#   copied into saves and back with the folder helper;
+# - images are never pulled; the frontend listens on 127.0.0.1 only.
+x-erpnext: &erpnext
+  image: ${ARENA_ERPNEXT_IMAGE:-frappe/erpnext:v16.53.0}
+  pull_policy: never
+  restart: on-failure
+  volumes:
+    - ${ARENA_ERPNEXT_SITES:?set ARENA_ERPNEXT_SITES}:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+
+services:
+  backend:
+    <<: *erpnext
+
+  queue:
+    <<: *erpnext
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+
+  websocket:
+    <<: *erpnext
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+
+  frontend:
+    <<: *erpnext
+    command: ["nginx-entrypoint.sh"]
+    depends_on: [backend, websocket]
+    environment:
+      BACKEND: backend:8000
+      FRAPPE_SITE_NAME_HEADER: $$host
+      SOCKETIO: websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+    ports:
+      - "127.0.0.1:${ARENA_ERPNEXT_PORT:-8180}:8080"
+
+  redis-queue:
+    image: redis:6.2-alpine
+    pull_policy: never
+    restart: on-failure
+    volumes:
+      - redis-queue-data:/data
+
+  redis-cache:
+    image: redis:6.2-alpine
+    pull_policy: never
+    restart: on-failure
+
+volumes:
+  redis-queue-data:
+  logs:

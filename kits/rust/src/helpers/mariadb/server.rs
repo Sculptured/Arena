@@ -8,6 +8,7 @@ use mysql_async::{Conn, Opts, OptsBuilder};
 
 use super::docker;
 use super::login::Login;
+pub use crate::helpers::docker_name::valid_docker_name;
 
 /// The server image; it is never pulled, so it must be present locally.
 pub const IMAGE: &str = "mariadb:11.8";
@@ -21,6 +22,9 @@ pub struct ServerConfig {
     pub port: u16,
     pub volume: String,
     pub root_password: String,
+    /// Server flags added after the binlog flags when the container is made (an existing
+    /// container keeps the flags it was made with).
+    pub flags: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -30,16 +34,9 @@ impl Default for ServerConfig {
             port: 3307,
             volume: "arena_mariadb_data".into(),
             root_password: "arena".into(),
+            flags: vec![],
         }
     }
-}
-
-/// A container or volume name: `[A-Za-z0-9][A-Za-z0-9_.-]*`, at most 63 characters.
-pub fn valid_docker_name(s: &str) -> bool {
-    s.len() <= 63
-        && s.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
 /// A name of `[a-z0-9_]`, 1 to `max` characters.

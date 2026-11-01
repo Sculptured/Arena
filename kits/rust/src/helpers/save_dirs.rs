@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use super::folder;
 use super::temp_dir::sweep_stale;
+use crate::proto::{kept, valid_id, GcResult};
 
 /// Scratch folders older than this are leftovers of a crashed program.
 const STALE_AFTER: Duration = Duration::from_secs(3600);
@@ -76,5 +78,25 @@ impl SaveDirs {
             Some(d) => std::fs::remove_dir_all(d),
             None => Ok(()),
         }
+    }
+
+    /// Removes the save folders (folders named like a save id) that `keep` does not keep; a
+    /// `keep` entry ending in `*` keeps every id with that prefix. Counts them and their bytes.
+    pub fn remove_not_kept<S: AsRef<str>>(&self, keep: &[S]) -> io::Result<GcResult> {
+        let mut out = GcResult::default();
+        let Ok(rd) = std::fs::read_dir(self.root()) else {
+            return Ok(out);
+        };
+        for e in rd.filter_map(Result::ok) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if valid_id(&name) && !kept(keep, &name) && e.path().is_dir() {
+                out.bytes += folder::size(&e.path());
+                self.remove(&name).map_err(|err| {
+                    io::Error::new(err.kind(), format!("removing save {name}: {err}"))
+                })?;
+                out.dropped += 1;
+            }
+        }
+        Ok(out)
     }
 }

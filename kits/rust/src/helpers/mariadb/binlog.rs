@@ -6,7 +6,7 @@ use mysql_async::Row;
 use super::docker::{self, Replay};
 use super::login::Login;
 use super::manifest::Segment;
-use super::position::{span, BinlogFile, Position};
+use super::position::{purge_target, span, BinlogFile, Position};
 use super::server::{check_db, Server};
 use super::sql::{query_misplaced, valid_binlog_name};
 
@@ -47,6 +47,27 @@ impl Server {
         }
         let sql = format!("PURGE BINARY LOGS TO '{file}'");
         self.with_conn(async |c| Ok(c.query_drop(sql).await?)).await
+    }
+
+    /// Purges the binlog files before the oldest of `needed` (before the current file when
+    /// nothing is needed).
+    pub async fn purge_unneeded<'a>(
+        &self,
+        needed: impl IntoIterator<Item = &'a Position>,
+    ) -> Result<()> {
+        let needed: Vec<Position> = needed.into_iter().cloned().collect();
+        let (files, now) = (self.binlog_files().await?, self.position().await?);
+        match purge_target(&needed, &now, &files) {
+            Some(file) => self.purge_to(file).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Starts a new binlog file, so a purge can remove the current one. Only safe when no
+    /// position in the current file is needed, nor will be by a start running now.
+    pub async fn rotate(&self) -> Result<()> {
+        self.with_conn(async |c| Ok(c.query_drop("FLUSH BINARY LOGS").await?))
+            .await
     }
 
     /// The Query events (DDL) between `from` and `to` that change `db` while another default

@@ -1,4 +1,4 @@
-//! Databases being built or read right now, which `gc` must leave alone.
+//! Names (databases, folders) in use right now, which `gc` must leave alone.
 use std::collections::HashSet;
 use std::sync::Mutex;
 

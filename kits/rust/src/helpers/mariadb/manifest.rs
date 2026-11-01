@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::position::{span_bytes, BinlogFile, Position};
+use crate::proto::valid_id;
 
 /// The file a save's manifest is kept in, in the save's folder.
 pub const MANIFEST: &str = "manifest.json";
@@ -98,4 +99,26 @@ impl Manifest {
         std::fs::rename(&tmp, dir.join(MANIFEST))?;
         Ok(text.len() as u64)
     }
+}
+
+/// Every save under `root`, by id: each folder named like a save id that holds a manifest. A
+/// folder without one is not a save (dot folders neither); a manifest that can't be read is an
+/// error, so nothing is purged or swept on a guess. No `root` means no saves.
+pub fn saves_in(root: &Path) -> io::Result<Vec<(String, Manifest)>> {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return Ok(vec![]);
+    };
+    let mut out = vec![];
+    for name in rd
+        .filter_map(Result::ok)
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| valid_id(n))
+    {
+        match Manifest::read(&root.join(&name)) {
+            Ok(m) => out.push((name, m)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io::Error::new(e.kind(), format!("save {name}: {e}"))),
+        }
+    }
+    Ok(out)
 }

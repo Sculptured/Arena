@@ -67,6 +67,7 @@ impl Env {
             port: self.port,
             volume: self.volume.clone(),
             root_password: "arena".into(),
+            flags: vec![],
         })
         .unwrap()
     }

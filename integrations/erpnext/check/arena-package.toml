@@ -1,0 +1,26 @@
+# The conformance target of the erpnext integration (the same program).
+# Run: arena-part-check integrations/erpnext/check
+# The first start sets up the ERPNext stack and its base site (a few minutes, once).
+kind = "integration"
+name = "erpnext-check"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-erpnext"] }
+needs = { gpu_vram_gb = 0, services = [] }
+
+# The first write example is run twice, so it must be repeatable: a ToDo gets a new name each time.
+[[example]]
+tool = "insert_doc"
+args = { doc = { doctype = "ToDo", description = "written by the conformance check" } }
+
+[[example]]
+tool = "insert_doc"
+args = { doc = { doctype = "Item", item_code = "CHK-1", item_name = "Check item", item_group = "Products", stock_uom = "Nos" } }
+
+[[example]]
+tool = "get_doc"
+args = { doctype = "Item", name = "CHK-1" }
+
+[[example]]
+tool = "list_docs"
+args = { doctype = "Item", filters = { item_code = "CHK-1" }, fields = ["name", "item_name"] }

@@ -6,11 +6,14 @@
 //!   `mariadb-binlog` and `mariadb` inside it (`docker exec`, never through a shell).
 //! - [`Manifest`], [`Position`]: the save chain and binlog arithmetic, with no server needed.
 //! - [`Blobs`]: dumps stored once each by content hash.
+//! - [`Tracked`]: a live database saved as its base plus its own segment
+//!   ([`Server::chain`], [`Server::rebase`]).
 //! - [`Login`]: accounts limited to one database, for instances and for replays, so a statement
 //!   naming another database fails instead of reaching it.
 mod admin;
 mod binlog;
 mod blobs;
+mod checks;
 mod docker;
 mod dumps;
 mod login;
@@ -18,14 +21,17 @@ mod manifest;
 mod position;
 mod server;
 mod sql;
+mod tracked;
 
 pub use blobs::{Blobs, Freed};
+pub use checks::{chain_error, check_same_server, restore_error};
 pub use dumps::Dumped;
 pub use login::{percent_encode, replay_user, Login, DB_GRANTS, REPLAY_GRANTS};
-pub use manifest::{Manifest, Segment, ServerRef, MANIFEST};
+pub use manifest::{saves_in, Manifest, Segment, ServerRef, MANIFEST};
 pub use mysql_async;
 pub use position::{
     dump_position, file_seq, purge_target, span, span_bytes, BinlogFile, Position, Purged,
 };
 pub use server::{valid_docker_name, Server, ServerConfig, IMAGE};
 pub use sql::{names_db, query_misplaced, quote_ident};
+pub use tracked::{Chained, Misplaced, Tracked};

@@ -89,16 +89,31 @@ pub fn ensure_container(cfg: &ServerConfig) -> Result<()> {
     }
 }
 
+/// The arguments of the `docker run` that makes the container (the password goes in by env).
+fn run_args(cfg: &ServerConfig) -> Vec<String> {
+    let mut args: Vec<String> = ["run", "-d", "--pull", "never", "--name", &cfg.container]
+        .map(String::from)
+        .into();
+    args.extend([
+        "--label".into(),
+        format!("{LABEL_KEY}={LABEL_VALUE}"),
+        "-v".into(),
+        format!("{}:{DATADIR}", cfg.volume),
+        "-p".into(),
+        format!("127.0.0.1:{}:3306", cfg.port),
+        "-e".into(),
+        "MARIADB_ROOT_PASSWORD".into(),
+        IMAGE.into(),
+    ]);
+    args.extend(FLAGS.map(String::from));
+    args.extend(cfg.flags.iter().cloned());
+    args
+}
+
 fn run_container(cfg: &ServerConfig) -> Result<()> {
     let mut cmd = docker();
-    cmd.args(["run", "-d", "--pull", "never", "--name", &cfg.container])
-        .args(["--label", &format!("{LABEL_KEY}={LABEL_VALUE}")])
-        .args(["-v", &format!("{}:{DATADIR}", cfg.volume)])
-        .args(["-p", &format!("127.0.0.1:{}:3306", cfg.port)])
-        .args(["-e", "MARIADB_ROOT_PASSWORD"])
-        .env("MARIADB_ROOT_PASSWORD", &cfg.root_password)
-        .arg(IMAGE)
-        .args(FLAGS);
+    cmd.args(run_args(cfg))
+        .env("MARIADB_ROOT_PASSWORD", &cfg.root_password);
     output(cmd, "docker run").map(drop)
 }
 
@@ -217,4 +232,34 @@ pub fn apply_binlog(cfg: &ServerConfig, login: &Login, r: &Replay) -> Result<()>
     let applied = applier.finish();
     reader.finish()?;
     applied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_flags_follow_the_binlog_flags() {
+        let cfg = ServerConfig {
+            flags: vec!["--collation-server=utf8mb4_unicode_ci".into()],
+            root_password: "s3cret-pw".into(),
+            ..ServerConfig::default()
+        };
+        let args = run_args(&cfg);
+        let image = args.iter().position(|a| a == IMAGE).expect("image");
+        assert_eq!(
+            args[image + 1..image + 1 + FLAGS.len()],
+            FLAGS.map(String::from)
+        );
+        assert_eq!(
+            args.last().unwrap(),
+            "--collation-server=utf8mb4_unicode_ci"
+        );
+        assert!(args.contains(&"arena.part=mariadb".to_string()));
+        assert!(
+            !args.iter().any(|a| a.contains(&cfg.root_password)),
+            "password by env only"
+        );
+        assert_eq!(run_args(&ServerConfig::default()).last().unwrap(), FLAGS[5]);
+    }
 }

@@ -76,6 +76,8 @@ database.
   against a server of its own, removed afterwards.
 
 The helper is `arena_part::helpers::mariadb` (feature `mariadb`): `Server` (ensure, identity,
-accounts, position, binlog files, dump, load, apply_log, restore), `Manifest`, `Position`, `Blobs`,
-`Login`. The SQL tool schemas, argument parsing and inspect key lookup are shared with `postgres` in
+accounts, position, binlog files, dump, load, apply_log, restore, chain, rebase, purge_unneeded),
+`Tracked` (an instance's base, start and checked position), `Manifest`, `saves_in`, `Position`,
+`Blobs`, `Login`, and the -32001 checks `check_same_server`, `restore_error`, `chain_error`. The
+`erpnext` integration uses the same helper on a server of its own. The SQL tool schemas, argument parsing and inspect key lookup are shared with `postgres` in
 `arena_part::helpers::sql_tools`.

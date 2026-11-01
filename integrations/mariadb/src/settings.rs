@@ -54,6 +54,7 @@ impl Settings {
             port: number(config, PORT, d.port)?,
             volume: text(config, VOLUME, d.volume),
             root_password: text(config, PASSWORD, d.root_password),
+            flags: d.flags,
         };
         if !valid_docker_name(&server.container) || !valid_docker_name(&server.volume) {
             return Err(PartError::invalid(

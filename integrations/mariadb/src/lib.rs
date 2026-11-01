@@ -1,7 +1,6 @@
 //! The `mariadb` integration: each instance is a database `mi_<instance>` on a dedicated MariaDB
 //! server with row-based binary logging, and each save records how to rebuild it: an optional
 //! dump plus binlog segments (see `arena_part::helpers::mariadb`). Saves restore exactly.
-mod busy;
 mod disk;
 mod instances;
 mod keys;
@@ -16,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use arena_part::helpers::busy::BusySet;
 use arena_part::helpers::mariadb::{percent_encode, Blobs, IMAGE};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
@@ -26,7 +26,6 @@ use serde_json::{json, Value};
 pub use keys::{keys, read_only};
 pub use settings::{Settings, DEFAULT_DUMP_AFTER};
 
-use busy::BusySet;
 use instances::Instance;
 use servers::Servers;
 
@@ -136,6 +135,6 @@ impl Part for Mariadb {
         let i = self.instance(&p.instance)?;
         let (user, pass) = (&i.login.user, percent_encode(&i.login.password));
         let port = i.server.config().port;
-        Ok(json!({"url": format!("mysql://{user}:{pass}@127.0.0.1:{port}/{}", i.db)}))
+        Ok(json!({"url": format!("mysql://{user}:{pass}@127.0.0.1:{port}/{}", i.tracked.db)}))
     }
 }

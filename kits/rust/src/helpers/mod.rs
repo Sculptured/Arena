@@ -1,6 +1,8 @@
 //! Helpers for common kinds of integration. Most sit behind a cargo feature.
+pub mod busy;
 #[cfg(feature = "compose")]
 pub mod compose;
+pub mod docker_name;
 #[cfg(feature = "folder")]
 pub mod folder;
 #[cfg(feature = "mariadb")]

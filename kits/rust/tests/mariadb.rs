@@ -5,8 +5,9 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use arena_part::helpers::mariadb::{
-    dump_position, names_db, percent_encode, purge_target, query_misplaced, span, span_bytes,
-    BinlogFile, Blobs, Manifest, Position, Segment, ServerRef,
+    chain_error, check_same_server, dump_position, names_db, percent_encode, purge_target, query_misplaced,
+    restore_error, saves_in, span, span_bytes, BinlogFile, Blobs, Dumped, Manifest, Position,
+    Misplaced, Purged, Segment, ServerRef, Tracked,
 };
 use arena_part::helpers::temp_dir::TempDir;
 
@@ -240,4 +241,90 @@ fn query_events_under_another_default_db_are_misplaced() {
     ));
     assert!(!query_misplaced("use `mi_b`; CREATE TABLE q (id int)", db));
     assert!(!query_misplaced("BEGIN", db));
+}
+
+#[test]
+fn tracked_saves_are_the_base_and_the_own_segment() {
+    let base = Manifest::empty(server()).then(seg(
+        "mi_old",
+        pos("binlog.000002", 4),
+        pos("binlog.000002", 90),
+    ));
+    let t = Tracked::new("mi_a", base.clone(), pos("binlog.000003", 10));
+    assert_eq!(t.checked, t.start);
+    let m = t.manifest_at(pos("binlog.000003", 50));
+    assert_eq!(
+        m,
+        base.then(seg(
+            "mi_a",
+            pos("binlog.000003", 10),
+            pos("binlog.000003", 50)
+        ))
+    );
+    let needed: Vec<_> = t.needed().cloned().collect();
+    assert_eq!(needed, [pos("binlog.000002", 4), pos("binlog.000003", 10)]);
+    assert_eq!(
+        t.manifest_at(t.start.clone()),
+        base,
+        "no changes, no segment"
+    );
+}
+
+#[test]
+fn tracked_rebased_on_a_dump_starts_at_its_position() {
+    let t = Tracked::new("mi_a", Manifest::empty(server()), pos("binlog.000003", 10));
+    let d = Dumped {
+        blob: "cd".repeat(32),
+        at: pos("binlog.000004", 7),
+    };
+    let r = t.rebased(d.clone());
+    assert_eq!(r.base, Manifest::rooted(server(), d.blob));
+    assert_eq!((r.start.clone(), r.checked.clone()), (d.at.clone(), d.at));
+    assert_eq!(r.db, "mi_a");
+    assert_eq!(r.needed().count(), 1, "a rooted base needs no binlog");
+}
+
+#[test]
+fn saves_in_lists_folders_with_manifests_only() {
+    let dir = scratch();
+    let m = Manifest::empty(server());
+    m.write(&dir.path().join("s1")).unwrap();
+    m.write(&dir.path().join(".base")).unwrap();
+    std::fs::create_dir_all(dir.path().join("no_manifest")).unwrap();
+    let mut got = saves_in(dir.path()).unwrap();
+    got.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(got, [("s1".to_string(), m)]);
+    std::fs::create_dir_all(dir.path().join("s3")).unwrap();
+    std::fs::write(dir.path().join("s3").join("manifest.json"), "{").unwrap();
+    assert!(
+        saves_in(dir.path()).is_err(),
+        "a broken manifest is an error"
+    );
+    assert!(saves_in(&dir.path().join("missing")).unwrap().is_empty());
+}
+
+#[test]
+fn restores_need_the_same_server_and_its_binlog() {
+    let here = server();
+    assert!(check_same_server("s1", &here, &here).is_ok());
+    let other = ServerRef {
+        container: "other".into(),
+        ..server()
+    };
+    let e = check_same_server("s1", &other, &here).unwrap_err();
+    assert_eq!(e.code, -32001);
+    assert!(e.message.contains("other"));
+    let replaced = ServerRef {
+        id: "new".into(),
+        ..server()
+    };
+    let e = check_same_server("s1", &replaced, &here).unwrap_err();
+    assert!(e.message.contains("replaced"), "{}", e.message);
+    let purged = restore_error("s1", Purged("binlog.000001".into()).into());
+    assert_eq!(purged.code, -32001);
+    assert_eq!(restore_error("s1", anyhow::anyhow!("boom")).code, -32603);
+    let e = chain_error("i1", Misplaced("ALTER TABLE mi_i1.t ADD c int".into()).into());
+    assert_eq!(e.code, -32001);
+    assert!(e.message.contains("another database was selected") && e.message.contains("i1"));
+    assert_eq!(chain_error("i1", anyhow::anyhow!("down")).code, -32603);
 }

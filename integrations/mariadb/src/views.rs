@@ -3,11 +3,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arena_part::helpers::mariadb::mysql_async::Conn;
-use arena_part::helpers::mariadb::Server;
+use arena_part::helpers::mariadb::{check_same_server, restore_error, Server};
 use arena_part::proto::{DiffParams, Differing, Docs, InspectParams, Target};
 use arena_part::PartError;
 
-use crate::instances::{check_same_server, restore_error};
 use crate::{rows, Mariadb};
 
 /// Scratch databases for reading saves start with this.
@@ -34,7 +33,7 @@ impl Mariadb {
                 let i = self.instance(instance)?;
                 return Ok(Opened {
                     server: i.server,
-                    db: i.db,
+                    db: i.tracked.db,
                     view: false,
                 });
             }

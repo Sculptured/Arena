@@ -2,7 +2,9 @@
 //!
 //! Each instance has its own account, named like its database, that may use only that database:
 //! its tools (and `connect`) can't turn binlogging off, purge the binlog or reach another database.
-use arena_part::helpers::mariadb::{Login, Manifest, Position, Purged, Server, ServerRef};
+use arena_part::helpers::mariadb::{
+    check_same_server, restore_error, Login, Manifest, Position, Server, ServerRef, Tracked,
+};
 use arena_part::helpers::sql_tools::{sql_args, tool_error, tool_output, which, SqlTool};
 use arena_part::proto::{CallToolParams, StartParams, ToolOutput};
 use arena_part::PartError;
@@ -10,19 +12,14 @@ use arena_part::PartError;
 use crate::settings::Settings;
 use crate::{keys, rows, sql, Mariadb};
 
-/// An instance is the database `mi_<id>`. Its saves are its `base` (what it started from)
-/// followed by its own changes, the binlog from `start` on.
+/// An instance is the database `mi_<id>`. Its saves are its base (what it started from)
+/// followed by its own changes, the binlog from its start on (see [`Tracked`]).
 #[derive(Debug, Clone)]
 pub struct Instance {
     pub server: Server,
     pub server_ref: ServerRef,
-    pub db: String,
     pub login: Login,
-    pub base: Manifest,
-    pub start: Position,
-    /// Up to here the instance's changes are known to be all in its own segment (see
-    /// `Mariadb::check_segment`).
-    pub checked: Position,
+    pub tracked: Tracked,
     pub dump_after: u64,
 }
 
@@ -35,30 +32,6 @@ pub fn instance_db(id: &str) -> Result<String, PartError> {
         ));
     }
     Ok(db)
-}
-
-/// -32001 unless `save` was made on the server `here` (same container and identity).
-pub fn check_same_server(save: &str, saved: &ServerRef, here: &ServerRef) -> Result<(), PartError> {
-    if saved.container != here.container || saved.port != here.port {
-        return Err(PartError::cant_restore(format!(
-            "save {save} was made on {}, this instance is set for {}",
-            saved.container, here.container
-        )));
-    }
-    if saved.id != here.id {
-        return Err(PartError::cant_restore(format!(
-            "can't restore {save}: the MariaDB server was replaced since this save"
-        )));
-    }
-    Ok(())
-}
-
-/// A failed restore: -32001 when the binlog it needs was purged.
-pub fn restore_error(save: &str, e: anyhow::Error) -> PartError {
-    match e.downcast_ref::<Purged>() {
-        Some(p) => PartError::cant_restore(format!("can't restore {save}: {p}")),
-        None => PartError::internal(format!("restoring {save}: {e:#}")),
-    }
 }
 
 /// What a start builds before the instance is live.
@@ -79,11 +52,8 @@ impl Built {
         Instance {
             server,
             server_ref,
-            db,
             login: self.login,
-            base: self.base,
-            checked: self.start.clone(),
-            start: self.start,
+            tracked: Tracked::new(&db, self.base, self.start),
             dump_after,
         }
     }
@@ -149,7 +119,7 @@ impl Mariadb {
         };
         // Both, even when one fails; the first error is the answer.
         let login = i.server.drop_login(&i.login.user).await;
-        let db = i.server.drop_db(&i.db).await;
+        let db = i.server.drop_db(&i.tracked.db).await;
         login.and(db).map_err(PartError::from)
     }
 
@@ -165,7 +135,7 @@ impl Mariadb {
         };
         let (out, touched) = inst
             .server
-            .with_login(&inst.login, Some(&inst.db), async |c| {
+            .with_login(&inst.login, Some(&inst.tracked.db), async |c| {
                 let pks = rows::pk_columns(c).await?;
                 let out = match tool {
                     SqlTool::Query => sql::query(c, text, params).await,

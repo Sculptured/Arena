@@ -9,6 +9,8 @@ use std::process::{Command, Output};
 
 use anyhow::{bail, Context, Result};
 
+use super::docker_name::valid_docker_name;
+
 /// The image whose `tar` moves volume contents (any image with `tar` will do).
 pub const DEFAULT_HELPER: &str = "redis:6.2-alpine";
 
@@ -45,11 +47,17 @@ pub struct Project {
 }
 
 /// Runs `cmd`, failing with its stderr when it exits unsuccessfully.
-fn run(mut cmd: Command, what: &str) -> Result<()> {
+fn run(cmd: Command, what: &str) -> Result<()> {
+    run_out(cmd, what).map(drop)
+}
+
+/// Runs `cmd`; its stdout, or an error with its stderr when it exits unsuccessfully.
+fn run_out(mut cmd: Command, what: &str) -> Result<String> {
     let out = cmd
         .output()
         .with_context(|| format!("{what}: cannot run"))?;
-    check(&out, what)
+    check(&out, what)?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn check(out: &Output, what: &str) -> Result<()> {
@@ -124,6 +132,46 @@ impl Project {
         run(self.compose(&["down", "-v"]), "docker compose down")
     }
 
+    /// Runs `args` in the running container of `service` (no TTY, no stdin); its stdout.
+    pub fn exec(&self, service: &str, args: &[&str]) -> Result<String> {
+        if !name_ok(service, b"-") {
+            bail!("{service:?} is not a service name");
+        }
+        let mut cmd = self.compose(&["exec", "-T", service]);
+        cmd.args(args).stdin(std::process::Stdio::null());
+        run_out(cmd, &format!("{service}: {}", args.first().unwrap_or(&"")))
+    }
+
+    /// The project's default network.
+    pub fn network(&self) -> String {
+        format!("{}_default", self.name)
+    }
+
+    /// Connects `container` (one made outside the project) to the project's default network,
+    /// reachable there as `alias`. Nothing to do when it is connected already.
+    pub fn connect(&self, container: &str, alias: &str) -> Result<()> {
+        if !valid_docker_name(container) || !valid_docker_name(alias) {
+            bail!("{container:?} or {alias:?} is not a container name or alias");
+        }
+        let mut cmd = self.docker();
+        let fmt = "{{range .Containers}}{{.Name}} {{end}}";
+        cmd.args(["network", "inspect", "-f", fmt, &self.network()]);
+        let joined = run_out(cmd, "docker network inspect")?;
+        if joined.split_whitespace().any(|n| n == container) {
+            return Ok(());
+        }
+        let mut cmd = self.docker();
+        cmd.args([
+            "network",
+            "connect",
+            "--alias",
+            alias,
+            &self.network(),
+            container,
+        ]);
+        run(cmd, "docker network connect")
+    }
+
     /// Docker's name for the project's volume `volume`.
     fn volume_name(&self, volume: &str) -> Result<String> {
         if !valid_volume(volume) {
@@ -174,5 +222,10 @@ mod tests {
         let p = |n| Project::new(n, Path::new("c.yml"), &BTreeMap::new());
         assert!(p("arena_t1").is_ok());
         assert!(p("Arena").is_err() && p("a;b").is_err() && p("").is_err());
+        assert_eq!(p("arena_t1").unwrap().network(), "arena_t1_default");
+        assert!(valid_docker_name("arena-erpnext-db") && valid_docker_name("db"));
+        assert!(!valid_docker_name("-x") && !valid_docker_name("a b") && !valid_docker_name(""));
+        let bad = p("arena_t1").unwrap();
+        assert!(bad.connect("a b", "db").is_err() && bad.exec("Web;x", &["ls"]).is_err());
     }
 }

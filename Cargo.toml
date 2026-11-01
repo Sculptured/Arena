@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kits/rust", "integrations/postgres", "integrations/folder", "integrations/service", "integrations/mariadb", "benchmarks/retail"]
+members = ["kits/rust", "integrations/postgres", "integrations/folder", "integrations/service", "integrations/mariadb", "integrations/erpnext", "benchmarks/retail"]
 exclude = ["core"]
 
 [workspace.dependencies]

@@ -1,0 +1,7 @@
+kind = "integration"
+name = "erpnext"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-erpnext"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { db_container = { type = "string", description = "the MariaDB server's container (default arena-erpnext-db); with the next five, read by the first start only" }, db_port = { type = "integer", description = "its port on 127.0.0.1 (default 3308)" }, db_volume = { type = "string", description = "its data volume (default arena_erpnext_db)" }, db_root_password = { type = "string", description = "its root password (default arena)" }, project = { type = "string", description = "the compose project (default arena_erpnext)" }, http_port = { type = "integer", description = "the frontend's port on 127.0.0.1 (default 8180)" }, diff_doctypes = { type = "array", items = { type = "string" }, description = "doctypes that diff compares (default Item, Supplier, Customer, Purchase Order, Sales Order, Work Order, Journal Entry)" }, dump_after_bytes = { type = "integer", description = "binlog bytes a restore may read before a save writes a dump (default 64 MiB)" } } }

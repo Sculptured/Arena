@@ -2,9 +2,8 @@
 //! saves and dumps on disk.
 use std::collections::{HashMap, HashSet};
 
-use arena_part::helpers::folder;
-use arena_part::helpers::mariadb::{purge_target, Manifest, Position, Server, ServerRef};
-use arena_part::proto::{kept, valid_id, GcResult, Usage};
+use arena_part::helpers::mariadb::{Manifest, Position, Server, ServerRef};
+use arena_part::proto::{GcResult, Usage};
 use arena_part::PartError;
 
 use crate::views::VIEW_PREFIX;
@@ -60,7 +59,8 @@ impl Mariadb {
     }
 
     pub(crate) async fn collect(&self, keep: &[String]) -> Result<GcResult, PartError> {
-        let mut out = self.drop_saves_not_kept(keep)?;
+        let dropped = self.dirs.remove_not_kept(keep);
+        let mut out = dropped.map_err(PartError::internal_from)?;
         for s in self.reachable_servers(&self.manifests()?).await {
             let idle = self.drop_idle(&s).await?;
             out.dropped += idle.dropped;
@@ -88,31 +88,7 @@ impl Mariadb {
     /// Purges the binlog files on `s` before the oldest position still needed there.
     async fn purge(&self, s: &Server, saves: &[(String, Manifest)]) -> Result<(), PartError> {
         let here = s.reference().await?;
-        let needed = self.needed(&here, saves);
-        let (files, now) = (s.binlog_files().await?, s.position().await?);
-        if let Some(file) = purge_target(&needed, &now, &files) {
-            s.purge_to(file).await?;
-        }
-        Ok(())
-    }
-
-    fn drop_saves_not_kept(&self, keep: &[String]) -> Result<GcResult, PartError> {
-        let mut out = GcResult::default();
-        let Ok(rd) = std::fs::read_dir(self.dirs.root()) else {
-            return Ok(out);
-        };
-        for e in rd.filter_map(Result::ok) {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if valid_id(&name) && !kept(keep, &name) && e.path().is_dir() {
-                let bytes = folder::size(&e.path());
-                self.dirs
-                    .remove(&name)
-                    .map_err(|err| PartError::internal(format!("removing save {name}: {err}")))?;
-                out.dropped += 1;
-                out.bytes += bytes;
-            }
-        }
-        Ok(out)
+        Ok(s.purge_unneeded(&self.needed(&here, saves)).await?)
     }
 
     /// The databases nobody uses: instances not running, scratch copies nobody reads, and the
@@ -120,7 +96,7 @@ impl Mariadb {
     fn busy_dbs(&self) -> HashSet<String> {
         let mut busy = self.busy.snapshot();
         let live = self.live.lock().expect("instances lock");
-        busy.extend(live.values().map(|i| i.db.clone()));
+        busy.extend(live.values().map(|i| i.tracked.db.clone()));
         busy
     }
 
@@ -157,8 +133,7 @@ impl Mariadb {
             .collect();
         let live = self.live.lock().expect("instances lock");
         for i in live.values().filter(|i| &i.server_ref == here) {
-            out.extend(i.base.oldest().cloned());
-            out.push(i.start.clone());
+            out.extend(i.tracked.needed().cloned());
         }
         out
     }
