@@ -1,0 +1,16 @@
+kind = "integration"
+name = "sculptured"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-sculptured"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { binary = { type = "string", description = "the sculptured program (default ~/MLSys/Sculptured/sculptured/target/release/sculptured)" }, team = { type = "string", description = "the team whose changes the tools propose, list and decide (default arena; letters a-z, digits and -)" } } }
+
+# The first write example is run twice, so it must be repeatable: each proposal is a new change.
+[[example]]
+tool = "propose_change"
+args = { action = "create_purchase_order", system = "ERP", summary = "Order 2 SP-118 bearings from Acme Hydraulics, $4200", payload = { item = "SP-118", qty = 2, supplier = "Acme Hydraulics", amount = 4200 }, reason = "the press is down" }
+
+[[example]]
+tool = "list_changes"
+args = {}

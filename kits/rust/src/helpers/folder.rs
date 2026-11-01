@@ -2,7 +2,7 @@
 //!
 //! A save hard-links each file whose size and modification time match the previous save's copy;
 //! a restore always copies, so the live folder can never change a save. Symlinks are copied as
-//! symlinks and never followed.
+//! symlinks and never followed; sockets and FIFOs are left out.
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -22,12 +22,23 @@ pub struct Digest {
 /// Copies `src` into `dst`. A file whose size and mtime match `prev`'s copy is hard-linked to it
 /// instead of copied. Returns the bytes newly written.
 pub fn copy_save(src: &Path, dst: &Path, prev: Option<&Path>) -> io::Result<u64> {
-    copy_tree(src, dst, prev)
+    copy_save_except(src, dst, prev, &|_| false)
+}
+
+/// Like [`copy_save`], leaving out every entry for which `skip` is true. `skip` gets the entry's
+/// path relative to `src` (with `/`); a skipped folder is left out whole.
+pub fn copy_save_except(
+    src: &Path,
+    dst: &Path,
+    prev: Option<&Path>,
+    skip: &dyn Fn(&str) -> bool,
+) -> io::Result<u64> {
+    Tree { skip }.copy(src, dst, prev, "")
 }
 
 /// Copies the save `save` into the live folder `dst`. Never links.
 pub fn restore(save: &Path, dst: &Path) -> io::Result<()> {
-    copy_tree(save, dst, None).map(|_| ())
+    copy_save_except(save, dst, None, &|_| false).map(|_| ())
 }
 
 /// Removes a folder left half written by a failed save or start (errors are ignored).
@@ -86,25 +97,38 @@ pub fn digest(root: &Path) -> io::Result<Digest> {
     })
 }
 
-fn copy_tree(src: &Path, dst: &Path, prev: Option<&Path>) -> io::Result<u64> {
-    fs::create_dir_all(dst)?;
-    let mut written = 0;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let (s, d) = (entry.path(), dst.join(&name));
-        let p = prev.map(|p| p.join(&name));
-        let kind = entry.file_type()?;
-        written += if kind.is_dir() {
-            copy_tree(&s, &d, p.as_deref())?
-        } else if kind.is_symlink() {
-            copy_link(&s, &d)?
-        } else {
-            copy_file(&s, &d, p.as_deref())?
-        };
+/// A tree copy that leaves out the entries `skip` names.
+struct Tree<'a> {
+    skip: &'a dyn Fn(&str) -> bool,
+}
+
+impl Tree<'_> {
+    fn copy(&self, src: &Path, dst: &Path, prev: Option<&Path>, rel: &str) -> io::Result<u64> {
+        fs::create_dir_all(dst)?;
+        let mut written = 0;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let path = format!("{rel}{}", name.to_string_lossy());
+            if (self.skip)(&path) {
+                continue;
+            }
+            let (s, d) = (entry.path(), dst.join(&name));
+            let p = prev.map(|p| p.join(&name));
+            let kind = entry.file_type()?;
+            written += if kind.is_dir() {
+                self.copy(&s, &d, p.as_deref(), &format!("{path}/"))?
+            } else if kind.is_symlink() {
+                copy_link(&s, &d)?
+            } else if kind.is_file() {
+                copy_file(&s, &d, p.as_deref())?
+            } else {
+                0 // a socket or a FIFO: nothing to keep, and opening a FIFO would block
+            };
+        }
+        fs::set_permissions(dst, fs::metadata(src)?.permissions())?; // last: it may forbid writing
+        Ok(written)
     }
-    fs::set_permissions(dst, fs::metadata(src)?.permissions())?; // last: it may forbid writing
-    Ok(written)
 }
 
 /// Removes whatever is at `path` (a file or a link, not a folder) so it can be replaced.

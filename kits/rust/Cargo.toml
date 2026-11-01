@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+libc = "0.2"
 
 [lints]
 workspace = true

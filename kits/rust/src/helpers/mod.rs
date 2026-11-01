@@ -9,6 +9,7 @@ pub mod folder;
 pub mod mariadb;
 #[cfg(feature = "postgres")]
 pub mod pg;
+pub mod process_group;
 #[cfg(feature = "folder")]
 pub mod save_dirs;
 pub mod sql_tools;

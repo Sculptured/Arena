@@ -1,5 +1,5 @@
 //! The folder helper: hard-linked saves, copying restores.
-use arena_part::helpers::folder::{copy_save, digest, restore, size};
+use arena_part::helpers::folder::{copy_save, copy_save_except, digest, restore, size};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -128,4 +128,33 @@ fn sweep_removes_only_stale_folders() {
     let scratch = TempDir::new_in(&t.0, "x").unwrap();
     assert!(scratch.path().is_dir());
     sweep_stale(&t.0.join("missing"), Duration::ZERO);
+}
+
+#[test]
+fn copy_save_except_leaves_out_skipped_paths() {
+    let t = Tmp::new("except");
+    let (live, s1) = (t.0.join("live"), t.0.join("s1"));
+    put(&live, "keep.txt", "k");
+    put(&live, "db.sqlite-wal", "w");
+    put(&live, "sub/run.pid", "1");
+    put(&live, "sub/data.txt", "dd");
+    put(&live, "cache/x.txt", "x");
+    let skip = |p: &str| p.ends_with("-wal") || p == "sub/run.pid" || p == "cache";
+    assert_eq!(copy_save_except(&live, &s1, None, &skip).unwrap(), 3);
+    assert!(s1.join("keep.txt").is_file() && s1.join("sub/data.txt").is_file());
+    assert!(!s1.join("db.sqlite-wal").exists() && !s1.join("sub/run.pid").exists());
+    assert!(
+        !s1.join("cache").exists(),
+        "a skipped folder is left out whole"
+    );
+}
+
+#[test]
+fn copies_leave_out_sockets() {
+    let t = Tmp::new("socket");
+    let (live, s1) = (t.0.join("live"), t.0.join("s1"));
+    put(&live, "a.txt", "a");
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("tools.sock")).unwrap();
+    assert_eq!(copy_save(&live, &s1, None).unwrap(), 1);
+    assert!(s1.join("a.txt").is_file() && !s1.join("tools.sock").exists());
 }
