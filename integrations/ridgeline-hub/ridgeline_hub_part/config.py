@@ -1,4 +1,5 @@
 """The part's config, and loading the factory hub's `market` module and supplier data."""
+import hashlib
 import importlib
 import json
 import sys
@@ -47,3 +48,19 @@ def load_market(cfg: Config):
         return importlib.import_module("ridgeline_hub.market"), suppliers
     except ImportError as e:
         raise errors.invalid(f"can't import ridgeline_hub.market from {cfg.hub_path}: {e}") from None
+
+
+def source_files(cfg: Config) -> dict:
+    """The files whose content decides the market's behaviour: name -> path."""
+    return {"market.py": cfg.hub_path / "ridgeline_hub" / "market.py", "ridgeline.json": cfg.data_path}
+
+
+def file_hash(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return f"missing: {path}"
+
+
+def source_hashes(cfg: Config) -> dict:
+    return {name: file_hash(p) for name, p in source_files(cfg).items()}

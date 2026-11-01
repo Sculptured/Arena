@@ -14,7 +14,9 @@ customers) as an `arena-part/1` integration, running on the arena clock. It wrap
 | `plant_start` | `2026-03-10T06:00:00` (the plant clock at arena time 0) |
 
 Only `ridgeline_hub.market` is imported (through `hub_path` on `sys.path`). A missing path or module makes
-`start` fail with `-32602` naming the path. The factory folder is read only and never modified.
+`start` fail with `-32602` naming the path. The factory folder is read only and never modified. `hub_path` is process-global (`sys.path` and
+`sys.modules`), so one integration process serves one hub. `describe` fingerprints the sha256 of `market.py`
+and `ridgeline.json` at the default paths; `start` refuses (`-32003`) configured files that differ.
 
 ## Behaviour
 
@@ -27,7 +29,9 @@ Only `ridgeline_hub.market` is imported (through `hub_path` on `sys.path`). A mi
   inside `call_tool` would stall the world, so agents poll while the arena clock runs.
 - `proposal_id` (on `book_freight` and `notify_customer`) is recorded on the stored object and not
   verified. Approval gating is the `sculptured` integration's job.
-- Unknown ids and bad arguments are `-32602` errors naming the id.
+- Unknown ids, an unknown supplier or quote, a `book_freight` carrier or amount that doesn't match the quote,
+  and bad tool arguments come back as a tool-level `error` result and change nothing. An unknown tool name
+  is `-32602`.
 - Keys for `inspect`, `diff` and tool reads/writes: `rfq/<id>`, `freight/<id>`, `claim/<id>`,
   `notice/<id>`, `shipment/<id>`.
 - A booked freight quote creates `shipment/SHP-001`, ... with its arrival on the plant clock. The shipment

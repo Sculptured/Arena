@@ -70,28 +70,41 @@ def test_freight_booking_records_shipment():
     assert d["freight/FRQ-001"]["proposal_id"] == "P1"
 
 
-def test_unknown_ids_and_bad_args_are_invalid():
+def test_refusals_are_tool_errors_that_change_nothing():
     part = started()
-    for name, args in [
-        ("get_quotes", {"rfq": "RFQ-9"}),
-        ("answer_claim", {"claim": "GM-CLM-1", "answers": []}),
-        ("award_order", {"rfq": "RFQ-9", "supplier": HARTWELL, "po": "PO-1"}),
-        ("book_freight", {"proposal_id": "p", "quote_id": "FRQ-009-1", "carrier": "c", "amount": 1}),
-        ("request_quotes", {"qty": 1}),
-        ("request_quotes", {"part": "x", "qty": "many"}),
-    ]:
-        with pytest.raises(PartError) as e:
-            call(part, name, args, 0)
-        assert e.value.code == -32602
-    with pytest.raises(PartError, match="RFQ-9"):
-        call(part, "get_quotes", {"rfq": "RFQ-9"}, 0)
+    call(part, "freight_quotes", {"origin": "Columbus OH", "weight_kg": 50}, 0)
+    before = docs(part)
+    good = {"proposal_id": "p", "quote_id": "FRQ-001-1", "carrier": "Lakeshore Freight", "amount": 420}
+    cases = [
+        ("get_quotes", {"rfq": "RFQ-9"}, "unknown rfq RFQ-9"),
+        ("answer_claim", {"claim": "GM-CLM-1", "answers": []}, "GM-CLM-1"),
+        ("award_order", {"rfq": "RFQ-9", "supplier": HARTWELL, "po": "PO-1"}, "RFQ-9"),
+        ("book_freight", {**good, "quote_id": "FRQ-009-1"}, "FRQ-009"),
+        ("book_freight", {**good, "quote_id": "FRQ-001-0"}, "FRQ-001-0"),
+        ("book_freight", {**good, "carrier": "Buckeye Expedite"}, "carrier"),
+        ("book_freight", {**good, "amount": 421}, "amount"),
+        ("request_quotes", {"qty": 1}, "missing part"),
+        ("request_quotes", {"part": "x", "qty": "many"}, "qty"),
+    ]
+    for name, args, text in cases:
+        out = call(part, name, args, 0)
+        assert text in out["error"] and out["reads"] == [] and out["writes"] == [] and "result" not in out
+    assert docs(part) == before
+    ok = call(part, "book_freight", {**good, "carrier": " lakeshore freight ", "amount": 420.001}, 0)
+    assert ok["result"]["booked"] is True
+
+
+def test_unknown_tool_is_invalid():
+    with pytest.raises(PartError) as e:
+        call(started(), "no_such_tool", {}, 0)
+    assert e.value.code == -32602
 
 
 def test_award_with_unknown_supplier_changes_nothing():
     part = started()
     call(part, "request_quotes", {"part": "SP-SPN-800"}, 0)
-    with pytest.raises(PartError, match="Nobody Ltd"):
-        call(part, "award_order", {"rfq": "RFQ-001", "supplier": "Nobody Ltd", "po": "PO-1"}, 0)
+    out = call(part, "award_order", {"rfq": "RFQ-001", "supplier": "Nobody Ltd", "po": "PO-1"}, 0)
+    assert "Nobody Ltd" in out["error"]
     assert docs(part)["rfq/RFQ-001"]["awarded"] is None
     ok = call(part, "award_order", {"rfq": "RFQ-001", "supplier": HARTWELL, "po": "PO-1"}, 0)
     assert ok["result"]["confirmed"] is True and ok["writes"] == ["rfq/RFQ-001"]
@@ -170,6 +183,56 @@ def test_announced_tuples_roundtrip(saves_root):
     assert any(isinstance(x, tuple) for x in announced) and any(isinstance(x, str) for x in announced)
     b.advance("b", 20_000)
     assert quoted(b.advance("b", 60_000)["events"]) == []  # not announced a second time
+
+
+def test_call_at_earlier_clock_changes_nothing():
+    part = started()
+    call(part, "request_quotes", {"part": "SP-SPN-800"}, 0)
+    call(part, "get_quotes", {"rfq": "RFQ-001"}, 20_000)
+    before = docs(part)
+    out = call(part, "get_quotes", {"rfq": "RFQ-001"}, 5_000)
+    assert [q["supplier"] for q in out["result"]["quotes"]] == [HARTWELL]  # the market stays at 20 s
+    queued = part.instances["i1"].factory.events[:]
+    assert part.advance("i1", 5_000)["events"] == queued
+    assert docs(part) == before and part.instances["i1"].elapsed_ms() == 20_000
+
+
+def test_start_from_without_save_is_invalid():
+    with pytest.raises(PartError) as e:
+        RidgelineHub().start("b", {}, 1, 0, {"mode": "exact"})
+    assert e.value.code == -32602
+
+
+def hub_copy(tmp_path, change=None):
+    """A temp copy of the factory hub and its data, optionally with `change` appended to market.py."""
+    from ridgeline_hub_part.config import DEFAULT_HUB
+    root = tmp_path / "factory"
+    shutil.copytree(DEFAULT_HUB, root / "hub", ignore=shutil.ignore_patterns("__pycache__", ".venv", "tests"))
+    (root / "data").mkdir()
+    shutil.copy(DEFAULT_HUB.parent / "data" / "ridgeline.json", root / "data" / "ridgeline.json")
+    if change:
+        with open(root / "hub" / "ridgeline_hub" / "market.py", "a") as f:
+            f.write(change)
+    return root / "hub"
+
+
+def test_fingerprint_hashes_market_and_data():
+    fp = RidgelineHub().describe()["fingerprint"]
+    assert set(fp["sha256"]) == {"market.py", "ridgeline.json"}
+    assert all(len(h) == 64 for h in fp["sha256"].values())
+    assert fp["adapter"] == 1 and fp["tick_ms"] == 500
+
+
+def test_changed_market_changes_fingerprint_and_is_refused(tmp_path):
+    from ridgeline_hub_part.config import parse_config, source_hashes
+    same_copy = hub_copy(tmp_path / "a")
+    started(hub_path=str(same_copy))  # identical content is accepted
+    changed = hub_copy(tmp_path / "b", "\n# changed\n")
+    hashes = source_hashes(parse_config({"hub_path": str(changed)}))
+    assert hashes["market.py"] != RidgelineHub().describe()["fingerprint"]["sha256"]["market.py"]
+    with pytest.raises(PartError) as e:
+        started(hub_path=str(changed))
+    assert e.value.code == -32003 and "market.py" in e.value.message and str(changed) in e.value.message
 
 
 def test_restore_from_missing_save_is_unknown():
