@@ -7,7 +7,7 @@
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
       error; --bad-diff answers `diff` without `differing`; --log appends "<method> <instance>"
-      per request to FILE. Saves are kept in memory. `inspect` refuses keys `bad/..` (-32602). No
+      per request to FILE. Saves are kept in memory; `drop_save` of an unknown one answers -32002. `inspect` refuses keys `bad/..` (-32602). No
       `connect` (method not found). --exact and --approximate set what `describe` reports (default
       exact save): a part without exact saves or approximate ones can't `save` (-32001), and a
       start from a save in a mode the part lacks is refused (-32001). With --uses-clock, `advance`
@@ -16,9 +16,9 @@
       milliseconds. With --refuse-start-if, `start` answers -32003 (fingerprint mismatch) while
       FILE exists.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
-               [--clash] [--bench-tool [--tool-part PART]]
+               [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
-      --part list. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
+      --part list; each part's config is `{}` or the --config given for it. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
       ran on PART (default `box`). Gold: one TOOL with JSON args (default `poke` with `{}`).
 """
 import json
@@ -142,7 +142,8 @@ class Part:
         return {"differing": [] if self.value(p["a"]) == self.value(p["b"]) else ["box/n"]}
 
     def drop_save(self, p):
-        self.saves.pop(p["save"], None)
+        self.lookup(self.saves, p["save"], "save")
+        del self.saves[p["save"]]
         return {}
 
     def stop(self, p):
@@ -178,7 +179,9 @@ class Bench:
 
 def world():
     parts = [spec.split("=", 1) for spec in opts("--part")] or [["box", opt("--integration", "toy")]]
-    return [{"part": part, "integration": integration, "config": {}} for part, integration in parts]
+    configs = dict(spec.split("=", 1) for spec in opts("--config"))
+    return [{"part": part, "integration": integration, "config": json.loads(configs.get(part, "{}"))}
+            for part, integration in parts]
 
 
 def log(request):

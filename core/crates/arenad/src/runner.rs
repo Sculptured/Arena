@@ -132,14 +132,8 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
             state.live.write().unwrap().remove(&branch_id);
             ctx.stop_ticker().await;
             ctx.world.stop().await;
-            let _ = state
-                .store
-                .set_status(
-                    &branch_id,
-                    BranchStatus::InfraError,
-                    Some(format!("runner crashed: {e}")),
-                )
-                .await;
+            let error = Some(format!("runner crashed: {e}"));
+            record_ending(&state, &branch_id, (BranchStatus::InfraError, error)).await;
         }
     });
 }
@@ -163,11 +157,25 @@ pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPo
         (None, Ok(v)) => v,
         (None, Err(e)) => (BranchStatus::InfraError, Some(format!("{e:#}"))),
     };
-    let _ = state.store.set_status(&ctx.branch_id, status, error).await;
+    record_ending(&state, &ctx.branch_id, (status, error)).await;
 }
 
 /// How a branch ended: its status and error.
 type Ending = (BranchStatus, Option<String>);
+
+/// Records how a branch ended, trying once more when the store fails; a failure is logged (the
+/// branch then stays `running` in the store).
+async fn record_ending(state: &AppState, branch_id: &str, (status, error): Ending) {
+    for attempt in 1..=2 {
+        let set = state.store.set_status(branch_id, status, error.clone());
+        match set.await {
+            Ok(()) => return,
+            Err(e) => eprintln!(
+                "branch {branch_id}: could not record its end ({status:?}), attempt {attempt}: {e:#}"
+            ),
+        }
+    }
+}
 
 /// What every agent's input starts with: the task's ticket and the benchmark's instructions.
 struct Brief {

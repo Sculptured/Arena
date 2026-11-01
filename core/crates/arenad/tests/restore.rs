@@ -69,10 +69,16 @@ fn done() -> Value {
 
 /// The toy benchmark over `parts` (`name=integration`), whose gold is `gold` with `gold_args`.
 fn bench(parts: &[&str], gold: &str, gold_args: &str) -> Package {
+    bench_with(parts, gold, gold_args, &[])
+}
+
+/// `bench` with `extra` benchmark args (e.g. `--config c={..}`).
+fn bench_with(parts: &[&str], gold: &str, gold_args: &str, extra: &[&str]) -> Package {
     let mut args = vec!["bench", "--gold", gold, "--gold-args", gold_args];
     for p in parts {
         args.extend(["--part", p]);
     }
+    args.extend_from_slice(extra);
     toy("toybench", "benchmark", &args)
 }
 
@@ -690,5 +696,132 @@ fn scoring_freezes_the_world() {
             .unwrap()
             .to_string();
         assert_eq!(counter_in(&fx, &final_c).await, gets(&evs, 0)[0]);
+    })
+}
+
+/// The restore plan of a fork of `branch` at `at` with `restore`.
+async fn restore_plan(fx: &Fx, branch: &str, at: i64, restore: &str) -> (u16, Value) {
+    let path = format!("/api/branches/{branch}/restore-plan?at_seq={at}&restore={restore}");
+    fx.get(&path).await
+}
+
+/// A part with replay and approximate saves starts fresh in the run's first branch, so it has no
+/// save before its first one: an approximate fork before it replays the part (exactly), and the
+/// restore plan says so.
+#[test]
+fn approximate_before_the_first_save_replays() {
+    run(async {
+        let root = counter_world("firstsave", "approx_and_replay", &[]);
+        let script = vec![get(), add(1000), done(), get(), done()];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("firstsave", root, &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        let first = tool_calls(&evs)[0];
+        assert!(first.payload["saves"]["c"].is_null(), "{}", first.payload);
+        let at = model_call(&evs, 1);
+        let (st, v) = restore_plan(&fx, &parent, at, "approximate").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["parts"][0]["how"], "replay", "{v}");
+        let (st, v) = fx.fork(&parent, at, Some("approximate")).await;
+        assert_eq!(st, 200, "{v}");
+        let child = v["branch_id"].as_str().unwrap().to_string();
+        let b = fx.finished(&child).await;
+        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
+        assert_restored(&fx, &child, "approximate", "replay").await;
+    })
+}
+
+/// A branch B restored its part approximately: an exact rerun of B past B's start would replay
+/// the part through that approximate state, so it is refused (and the restore plan says so); an
+/// approximate one works.
+#[test]
+fn exact_refused_after_an_approximate_restore() {
+    run(async {
+        let root = counter_world("approxchain", "approx_and_replay", &[]);
+        let script = vec![add(1000), add(7), done(), get(), done(), done()];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("approxchain", root, &up).await;
+        let (a, evs) = fx.run_to_end().await;
+        let b = fork_and_finish(&fx, &a, model_call(&evs, 1), Some("approximate")).await;
+        let b_start = fx.state.store.branch(&b).await.unwrap().start_seq.unwrap();
+        let bevs = fx.state.store.events(&b).await.unwrap();
+        let at = model_call(&bevs, 2);
+        assert!(at > b_start, "{at} <= {b_start}");
+        let want = format!("c was restored approximately at step {b_start} in an earlier rerun, so it can't be restored exactly; choose Approximate");
+        let (st, v) = fx.fork(&b, at, Some("exact")).await;
+        assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
+        let (st, v) = restore_plan(&fx, &b, at, "exact").await;
+        assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
+        let (st, v) = fx.fork(&b, at, Some("approximate")).await;
+        assert_eq!(st, 200, "{v}");
+        let c = fx.finished(v["branch_id"].as_str().unwrap()).await;
+        assert_ne!(c.status, BranchStatus::InfraError, "{:?}", c.error);
+    })
+}
+
+/// A replayed part whose config changed since the run can't be replayed exactly.
+#[test]
+fn exact_refused_when_the_config_changed() {
+    run(async {
+        let root = counter_world("cfga", "replay_only", &[]);
+        let config = ["--config", r#"c={"start": 5}"#];
+        let changed = package_root(
+            "cfgb",
+            &[
+                counter("counter", &["--flavour", "replay_only"]),
+                bench_with(&["c=counter"], "add", r#"{"n": 1}"#, &config),
+            ],
+        );
+        let up = FakeUpstream::start(vec![add(1), add(2), done()]).await;
+        let fx = setup("cfg", root, &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        let hub = fx.hub.sibling(std::slice::from_ref(&changed.0));
+        let (_state, base) = serve_app(fx.state.store.clone(), hub, &up).await;
+        let (st, v) = fork_on(&base, &parent, model_call(&evs, 1), None).await;
+        assert_eq!(st, 409, "{v}");
+        let want = "the part c's config changed since the run, so it can't be restored exactly; choose Approximate";
+        assert_eq!(v["error"], want);
+    })
+}
+
+/// A world of one toy clock part `box` (exact saves) that reports an alarm on an instance's
+/// first advance.
+fn alarm_world() -> ToyRoot {
+    package_root(
+        "alarm",
+        &[
+            toy("toy-alarm", "integration", &["part", "--uses-clock"]),
+            bench(&["box=toy-alarm"], "poke", "{}"),
+        ],
+    )
+}
+
+/// A fork's clock parts restored from a save are moved to the fork point's clock before it
+/// runs, and what they report on the way was recorded already: no world event twice.
+#[test]
+fn fork_reports_no_world_event_twice() {
+    run(async {
+        let (poke, peek) = (call("poke", json!({})), call("peek", json!({})));
+        let up = FakeUpstream::start(vec![poke, peek.clone(), done(), peek, done()]).await;
+        let fx = setup("alarm", alarm_world(), &up).await;
+        let (parent, evs) = fx.run_to_end().await;
+        assert!(evs.iter().any(|e| e.kind == EventKind::WorldEvent));
+        let (st, v) = fx.fork(&parent, model_call(&evs, 1), None).await;
+        assert_eq!(st, 200, "{v}");
+        let child = fx
+            .state
+            .store
+            .branch(v["branch_id"].as_str().unwrap())
+            .await
+            .unwrap();
+        let b = fx.finished(&child.id).await;
+        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
+        let start = child.start_seq.unwrap();
+        let cevs = fx.state.store.events(&child.id).await.unwrap();
+        let again: Vec<&Event> = cevs
+            .iter()
+            .filter(|e| e.seq >= start && e.kind == EventKind::WorldEvent)
+            .collect();
+        assert!(again.is_empty(), "{again:?}");
     })
 }

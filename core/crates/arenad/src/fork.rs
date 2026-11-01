@@ -2,6 +2,7 @@
 //! world restored as it was just before step N: exactly (from saves, or by replay), or
 //! approximately when asked.
 
+mod exact;
 mod rerun;
 
 use std::{
@@ -157,10 +158,12 @@ struct Planner<'a> {
     at: &'a Event,
 }
 
+/// The index of the agent `id` in `team`.
+fn index_of(team: &Team, id: &str) -> Option<usize> {
+    team.agents.iter().position(|a| a.id == id)
+}
+
 impl Planner<'_> {
-    fn index_of(&self, id: &str) -> Option<usize> {
-        self.team.agents.iter().position(|a| a.id == id)
-    }
 
     /// An agent's real start: its first AgentStart (a resumed agent has a second one).
     fn first_start(&self, i: usize) -> Result<i64, ForkError> {
@@ -191,7 +194,7 @@ impl Planner<'_> {
             (EventKind::RunStart, _) | (_, None) => Ok(0),
             (_, Some(s)) => {
                 let id = s.agent.clone().unwrap_or_default();
-                self.index_of(&id).ok_or(ForkError::UnknownAgent(id))
+                index_of(self.team, &id).ok_or(ForkError::UnknownAgent(id))
             }
         }
     }
@@ -307,11 +310,7 @@ impl Planner<'_> {
 fn changed_agents(team: &Team, changes: &HashMap<String, Change>) -> Result<Vec<usize>, ForkError> {
     let mut changed = vec![];
     for (id, c) in changes {
-        let i = team
-            .agents
-            .iter()
-            .position(|a| &a.id == id)
-            .ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
+        let i = index_of(team, id).ok_or_else(|| ForkError::UnknownAgent(id.clone()))?;
         if is_change(c, &team.agents[i]) {
             changed.push(i);
         }
@@ -426,7 +425,7 @@ pub async fn fork_with(
 ) -> Result<ForkResponse, ForkError> {
     let parent = finished_branch(state, branch_id).await?;
     let events = state.store.events(branch_id).await?;
-    let mut rerun = prepare(state, &events, &parent.team, &req).await?;
+    let mut rerun = prepare(state, &parent, &events, &req).await?;
     let task_id = task_of(state, &events, &parent).await?;
     let team = apply_changes(&parent.team, &req.changes);
     let new_id = create_child(state, &parent, &rerun, &team, &req).await?;
@@ -455,7 +454,7 @@ pub async fn restore_preview(
         changes: HashMap::new(),
         restore,
     };
-    let rerun = prepare(state, &events, &branch.team, &req).await?;
+    let rerun = prepare(state, &branch, &events, &req).await?;
     Ok(part_plans(&rerun, &events))
 }
 
