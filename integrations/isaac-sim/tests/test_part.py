@@ -203,6 +203,21 @@ def isaac_copy(tmp_path, change=None):
     return root / "isaac"
 
 
+def test_fingerprint_hashes_the_adapter_too(tmp_path, monkeypatch):
+    import shutil
+    from isaac_part import source
+    fp = standin().describe()["fingerprint"]
+    assert {"part.py", "plant.py", "source.py", "tools.py", "state.py"} <= set(fp["adapter_sha256"])
+    assert fp["adapter"] == 1
+    copy = tmp_path / "isaac_part"
+    shutil.copytree(source.ADAPTER_DIR, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(source, "ADAPTER_DIR", copy)
+    assert source.adapter_hashes() == fp["adapter_sha256"]
+    with open(copy / "tools.py", "a") as f:
+        f.write("\n# changed\n")
+    assert source.adapter_hashes()["tools.py"] != fp["adapter_sha256"]["tools.py"]
+
+
 def test_fingerprint_recorded_and_changed_source_refused(tmp_path):
     fp = standin().describe()["fingerprint"]
     common = {"factory.py", "press_model.py", "signals.py", "paths.py", "schedule.py", "layout.py", "ridgeline.json"}

@@ -46,6 +46,10 @@ def test_hashes_and_check_unchanged(tmp_path):
         sources.check_unchanged(declared, {"a.py": a, "b.json": b})
     assert e.value.code == -32003
     assert e.value.message == f"a.py at {a} differs from the one the fingerprint declares"
+    with pytest.raises(PartError) as e:
+        sources.check_unchanged(declared, {"a.py": tmp_path / "gone.py"}, "check src_path")
+    assert e.value.code == -32602
+    assert e.value.message == f"a.py not found at {tmp_path / 'gone.py'} (check src_path)"
 
 
 def test_params_schema_and_normalize():
@@ -82,3 +86,13 @@ def test_saves_root_drop_and_gc(saves_root):
     assert saves.gc("pkg", ["base_*"]) == {"dropped": 1, "bytes": 5}
     assert (saves_root / "pkg" / "base_1").is_dir() and not (saves_root / "pkg" / "tmp_1").exists()
     assert saves.gc("never-saved", []) == {"dropped": 0, "bytes": 0}
+
+
+def test_saves_gc_skips_folders_that_are_not_saves(saves_root):
+    base = saves_root / "pkg"
+    for name in ("s_1", ".live", ".tmp", "Not-An-Id", "x" * 64):
+        (base / name).mkdir(parents=True)
+    (base / "loose_file").write_text("x")
+    assert saves.gc("pkg", []) == {"dropped": 1, "bytes": 0}
+    left = sorted(p.name for p in base.iterdir())
+    assert left == [".live", ".tmp", "Not-An-Id", "loose_file", "x" * 64]

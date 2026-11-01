@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from arena_part import Part, PartError, FixedStep, kept, serve
+from arena_part import Part, PartError, FixedStep, fingerprint, kept, serve
 import counter
 from conftest import Client
 
@@ -229,3 +229,50 @@ def test_unserializable_result_answers_internal_error():
     assert out[0]["id"] == a and out[0]["error"]["code"] == -32603
     assert out[0]["error"]["message"].startswith("internal error:")
     assert out[1]["id"] == b and out[1]["result"] == {"name": "ok"}
+
+
+class Plain(Part):
+    """A part that only records the calls it gets, keeping the kit's defaults otherwise."""
+
+    def __init__(self):
+        self.calls = []
+
+    def drop_save(self, save):
+        self.calls.append(("drop_save", save))
+
+    def start(self, instance, config, seed, clock_ms, from_=None):
+        if config.get("moved"):
+            raise fingerprint("the plant moved")
+        self.calls.append(("start", instance))
+
+
+def test_gc_default_drops_nothing_and_checks_keep():
+    c = Client(Plain())
+    assert c.call("gc", {"keep": ["base_*"]})["result"] == {"dropped": 0, "bytes": 0}
+    assert c.call("gc", {})["error"]["code"] == -32602
+
+
+def test_connect_default_is_method_not_found():
+    c = Client(Plain())
+    r = c.call("connect", {"instance": "i1"})
+    assert r["error"] == {"code": -32601, "message": "method not found: connect"}
+    assert c.call("connect", {"instance": "Bad"})["error"]["code"] == -32602
+
+
+def test_drop_save_reaches_the_part_and_answers_empty():
+    part = Plain()
+    c = Client(part)
+    assert c.call("drop_save", {"save": "s_1"})["result"] == {}
+    assert part.calls == [("drop_save", "s_1")]
+    assert c.call("drop_save", {"save": "S 1"})["error"]["code"] == -32602
+    assert c.call("drop_save", {})["error"]["code"] == -32602
+
+
+def test_counter_drop_save_of_an_unknown_save_succeeds(saves_root):
+    assert client().call("drop_save", {"save": "s_never"})["result"] == {}
+
+
+def test_fingerprint_refusal_is_32003():
+    c = Client(Plain())
+    params = {"instance": "i1", "config": {"moved": True}, "seed": 1, "clock_ms": 0}
+    assert c.call("start", params)["error"] == {"code": -32003, "message": "the plant moved"}

@@ -11,8 +11,9 @@ SEED_NOTE = ("accepted and unused: the market has no randomness, so the replay c
 
 
 def check_fingerprint(cfg):
-    """The configured source files must be the ones `describe` declared, or replays would differ."""
-    sources.check_unchanged(source_hashes(parse_config({})), source_files(cfg))
+    """The configured source files must be there and be the ones `describe` declared, or replays would
+    differ. Checked before importing them, so a refused start leaves nothing loaded."""
+    sources.check_unchanged(source_hashes(parse_config({})), source_files(cfg), "check hub_path and data_path")
 
 
 class RidgelineHub(Part):
@@ -44,8 +45,8 @@ class RidgelineHub(Part):
 
     def start(self, instance, config, seed, clock_ms, from_=None):
         cfg = parse_config(config)
-        world = World(cfg, clock_ms)
         check_fingerprint(cfg)
+        world = World(cfg, clock_ms)
         if from_ is not None:  # exact saves also serve approximate restores
             if not isinstance(from_, dict) or "save" not in from_:
                 raise errors.invalid("invalid params: from needs a save")

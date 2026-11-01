@@ -60,6 +60,8 @@ changes the fingerprint.
 - `sha256` of the files at the default paths. These are `factory.py`, `press_model.py`, `signals.py`,
   `paths.py`, `schedule.py`, `layout.py` and `ridgeline.json`, plus `tests/fake_sim.py` and
   `tests/press_dynamics.py` for `standin`, or `sim_io.py` and `ridgeline_scene.py` for `isaac`;
+- `adapter_sha256`: the sha256 of this adapter's own source files (`isaac_part/*.py`), since how it drives
+  the factory is behaviour too;
 - `backend`, `adapter` and the default `physics_hz`;
 - for `isaac`, `{gpu, driver}`. These are read from `/proc/driver/nvidia/version` and
   `/proc/driver/nvidia/gpus/*/information`, which don't query the GPU. Only when those files are absent does it

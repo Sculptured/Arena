@@ -1,4 +1,5 @@
 """The factory's code, read only: the files its behaviour depends on (the fingerprint) and importing them."""
+from pathlib import Path
 from types import SimpleNamespace
 
 from arena_part import errors, sources
@@ -8,6 +9,8 @@ from .config import Config, parse_config
 # The plain-Python modules Factory's behaviour depends on, in every backend.
 COMMON = ("factory.py", "press_model.py", "signals.py", "paths.py", "schedule.py", "layout.py")
 DATA = "ridgeline.json"
+# This package's own folder.
+ADAPTER_DIR = Path(__file__).resolve().parent
 
 
 def files(cfg: Config, backend) -> dict:
@@ -24,11 +27,13 @@ def declared(backend) -> dict:
 
 def check(cfg: Config, backend) -> None:
     """Every file must be there (invalid otherwise) and hash as declared (-32003 otherwise)."""
-    found = files(cfg, backend)
-    for name, path in found.items():
-        if not path.is_file():
-            raise errors.invalid(f"{name} not found at {path} (check isaac_path and data_path)")
-    sources.check_unchanged(declared(backend), found)
+    sources.check_unchanged(declared(backend), files(cfg, backend), "check isaac_path and data_path")
+
+
+def adapter_hashes() -> dict:
+    """The adapter's own source files (`isaac_part/*.py`) by name: how it drives the factory is behaviour
+    too."""
+    return sources.hashes({p.name: p for p in sorted(ADAPTER_DIR.glob("*.py"))})
 
 
 def load(cfg: Config) -> SimpleNamespace:

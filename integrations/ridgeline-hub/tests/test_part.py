@@ -235,6 +235,18 @@ def test_changed_market_changes_fingerprint_and_is_refused(tmp_path):
     assert e.value.code == -32003 and "market.py" in e.value.message and str(changed) in e.value.message
 
 
+def test_refused_start_imports_nothing(tmp_path, monkeypatch):
+    import sys
+    for name in [m for m in sys.modules if m.split(".")[0] == "ridgeline_hub"]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    changed = hub_copy(tmp_path, "\n# changed\n")
+    with pytest.raises(PartError) as e:
+        started(hub_path=str(changed))
+    assert e.value.code == -32003
+    assert "ridgeline_hub.market" not in sys.modules and str(changed) not in sys.path
+
+
 def test_restore_from_missing_save_is_unknown():
     with pytest.raises(PartError) as e:
         RidgelineHub().start("b", {}, 1, 0, {"save": "nope", "mode": "exact"})

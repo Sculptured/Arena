@@ -23,7 +23,7 @@ class IsaacSim(DocsPart):
             "name": NAME, "version": "0.1.0", "protocol": 1,
             "restore": {"exact": "replay", "approximate": True},
             "uses_clock": True,
-            "fingerprint": {"adapter": ADAPTER, "backend": self.backend.name,
+            "fingerprint": {"adapter": ADAPTER, "adapter_sha256": source.adapter_hashes(), "backend": self.backend.name,
                             "physics_hz": source.default_physics_hz(), "sha256": source.declared(self.backend),
                             **self.backend.host()},
             "tools": [t.schema() for t in TOOLS.values()],

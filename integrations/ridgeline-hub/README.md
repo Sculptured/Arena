@@ -22,7 +22,8 @@ customers) as an `arena-part/1` integration, running on the arena clock. It wrap
 Only `ridgeline_hub.market` is imported (through `hub_path` on `sys.path`). A missing path or module makes
 `start` fail with `-32602` naming the path. The factory folder is read only and never modified. `hub_path` is process-global (`sys.path` and
 `sys.modules`), so one integration process serves one hub. `describe` fingerprints the sha256 of `market.py`
-and `ridgeline.json` at the default paths; `start` refuses (`-32003`) configured files that differ.
+and `ridgeline.json` at the default paths; `start` refuses (`-32003`) configured files that differ, before it
+imports anything.
 
 ## Behaviour
 

@@ -51,15 +51,16 @@ class Part:
         raise errors.method_not_found("connect")
 
 
-def _valid_id(v) -> bool:
+def valid_id(v) -> bool:
+    """True for an instance or save id (`[a-z0-9_]{1,63}`)."""
     return isinstance(v, str) and _ID.fullmatch(v) is not None
 
 
 def _valid_keep(v) -> bool:
     """A `gc` keep entry: a save id, or an id prefix followed by `*` (`base_*`)."""
     if isinstance(v, str) and v.endswith("*"):
-        return v == "*" or _valid_id(v[:-1])
-    return _valid_id(v)
+        return v == "*" or valid_id(v[:-1])
+    return valid_id(v)
 
 
 def kept(keep, save_id) -> bool:
@@ -74,7 +75,7 @@ def ids_ok(params) -> bool:
         return True
     for k, v in params.items():
         if k in ("instance", "save"):
-            ok = _valid_id(v)
+            ok = valid_id(v)
         elif k == "keep":
             ok = not isinstance(v, list) or all(_valid_keep(s) for s in v)
         elif k in ("target", "a", "b", "from"):

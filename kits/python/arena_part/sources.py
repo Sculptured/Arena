@@ -39,9 +39,13 @@ def hashes(files: dict) -> dict:
     return {name: file_hash(p) for name, p in files.items()}
 
 
-def check_unchanged(declared: dict, files: dict) -> None:
-    """The files (name -> path) must hash as `declared` (name -> hash), or replays would differ: -32003
-    naming the first file that doesn't."""
+def check_unchanged(declared: dict, files: dict, hint: str = "") -> None:
+    """The files (name -> path) must be there (`invalid` naming the first that isn't, with `hint` on where
+    to look) and hash as `declared` (name -> hash), or replays would differ: -32003 naming the first file
+    that doesn't. Call it before importing any of them, so a refused start loads nothing."""
+    for name, path in files.items():
+        if not Path(path).is_file():
+            raise errors.invalid(f"{name} not found at {path}" + (f" ({hint})" if hint else ""))
     for name, actual in hashes(files).items():
         if actual != declared.get(name):
             raise errors.fingerprint(f"{name} at {files[name]} differs from the one the fingerprint declares")
