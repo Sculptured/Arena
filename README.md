@@ -176,6 +176,7 @@ Never start arenad while tests run: the tests make databases that arenad's start
 - A factory world and benchmark with agents (ERPNext, hub, Sculptured and the plant together), and any test of an integration inside a team's run other than `postgres`.
 - The design's `ridgeline-plant` integration. The plant is `isaac-sim` (stand-in or Isaac Sim) instead.
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and the branch fails with "no part of this world can be checked".
+- Re-rooting the kept base and gold saves of `mariadb` and `erpnext`: those saves pin the binlog, so a long-lived server's binlog grows until they are re-rooted. Not built, and no benchmark uses these integrations yet.
 - Process checkpointing (CRIU).
 - Fault injection.
 - SGLang or vLLM hosting, serving-state capture and chain-of-thought capture.

@@ -26,7 +26,7 @@ export default function Timeline({ lanes, team, selected, onSelect }: {
                 <span className="step-glyph" aria-hidden="true">{GLYPH[s.kind]}</span>
                 <span className="step-seq">{s.seq}</span>
                 <span className="step-label">{s.label}</span>
-                {s.wrote && <span className="step-mark write" title="writes the database">✎</span>}
+                {s.wrote && <span className="step-mark write" title="writes to the world">✎</span>}
                 {s.snapshot && <span className="step-mark snap" title="saved after this step">◉</span>}
               </button>
             ))}

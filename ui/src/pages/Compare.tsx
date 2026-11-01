@@ -52,7 +52,7 @@ export function Rows({ data }: { data: CompareResponse }) {
     <div className="panel pane">
       <div className="label">Differing rows ({data.differing_rows.length})</div>
       {skipped && <p className="small">{skipped}</p>}
-      {data.differing_rows.length === 0 && <p className="muted">{skipped ? 'No differences in the parts compared.' : 'The final databases are identical.'}</p>}
+      {data.differing_rows.length === 0 && <p className="muted">{skipped ? 'No differences in the parts compared.' : 'The final worlds are identical.'}</p>}
       {data.differing_rows.map((r) => <RowDoc key={r.key} r={r} />)}
     </div>
   );

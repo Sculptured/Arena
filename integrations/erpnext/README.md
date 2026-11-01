@@ -103,3 +103,10 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   the round trip and the check against a project (`arena_erpnext_t<pid>`, on a free port) and a
   server of its own, and removes them (`docker compose down -v`, the server's container and volume,
   the saves and sites) when it ends.
+
+## Known limits
+
+- **Kept base and gold saves pin the binlog.** A save holds a binlog position, and the binlog is purged
+  only up to the oldest position a remaining save needs. arenad keeps every benchmark's base and gold
+  saves (`base_*`, `gold_*`), so on a long-lived server the binlog grows from their positions until
+  those saves are re-rooted onto a dump. Re-rooting is not built; no benchmark uses this integration yet.

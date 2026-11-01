@@ -89,3 +89,10 @@ accounts, position, binlog files, dump, load, apply_log, restore, chain, rebase,
 `check_same_server`, `restore_error`, `chain_error`. The `erpnext` integration uses the same
 helper on a server of its own. The SQL tool schemas, argument parsing and inspect key lookup are
 shared with `postgres` in `arena_part::helpers::sql_tools`.
+
+## Known limits
+
+- **Kept base and gold saves pin the binlog.** A save holds a binlog position, and the binlog is purged
+  only up to the oldest position a remaining save needs. arenad keeps every benchmark's base and gold
+  saves (`base_*`, `gold_*`), so on a long-lived server the binlog grows from their positions until
+  those saves are re-rooted onto a dump. Re-rooting is not built; no benchmark uses this integration yet.

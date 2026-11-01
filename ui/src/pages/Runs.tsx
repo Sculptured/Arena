@@ -88,7 +88,7 @@ function DeleteRun({ run, onDone, onError }: { run: RunSummary; onDone: () => vo
         className="btn btn-sm"
         onClick={() => setConfirming(true)}
         disabled={running}
-        title={running ? 'A branch of this run is still running' : 'Delete this run and free its databases'}
+        title={running ? 'A branch of this run is still running' : 'Delete this run and free its saves'}
       >
         Delete run
       </button>

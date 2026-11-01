@@ -1,5 +1,11 @@
 # Integrations: any part of a system, saved and restored (design)
 
+> **As built (2026-11-01).** This is the design as written before the build; the build differs in two
+> places. Task 13's `ridgeline-plant` became `ridgeline-hub` (the factory's outside companies on the arena
+> clock: `integrations/ridgeline-hub/`), and Task 15 wraps the factory's own Isaac plant as `isaac-sim`
+> (Isaac Sim or a stand-in, with `isaac-sim-mirror` for a running plant) instead of a generic scene. The
+> integrations table in the arena `README.md` describes what was built.
+
 Status: 2026-10-31. The user asked for this and said "just build the set for it to work"; they then
 answered the open questions (recorded under "Decided with the user"). Choices marked **(my call)** were
 not reviewed by them.

@@ -15,6 +15,6 @@ describe('compare rows', () => {
     expect(html).not.toContain('identical');
   });
   it('says identical only when every part was compared', () => {
-    expect(renderToStaticMarkup(<Rows data={cmp({ not_compared: [] })} />)).toContain('The final databases are identical.');
+    expect(renderToStaticMarkup(<Rows data={cmp({ not_compared: [] })} />)).toContain('The final worlds are identical.');
   });
 });
