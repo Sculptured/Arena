@@ -36,7 +36,7 @@ impl Saves {
 
 impl Drop for Saves {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = arena_part::helpers::remove_tree(&self.0);
     }
 }
 
@@ -347,4 +347,36 @@ async fn failed_save_leaves_no_folder() {
     assert!(p.save(params).await.is_err());
     assert!(!dir.exists());
     assert!(p.drop_save(SaveId { save: "s1".into() }).await.is_ok());
+}
+
+/// A copy keeps folder modes: an instance started from (and saved with) a read-only folder still
+/// stops, and its save drops.
+#[tokio::test]
+async fn stop_and_drop_save_remove_read_only_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Saves::new("readonly");
+    let seed = s.0.join("seed");
+    fs::create_dir_all(seed.join("locked/inner")).unwrap();
+    fs::write(seed.join("locked/inner/f"), "x").unwrap();
+    for d in ["locked/inner", "locked"] {
+        fs::set_permissions(seed.join(d), fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    let p = s.part();
+    p.start(start("a", json!({"root": seed}), None))
+        .await
+        .unwrap();
+    save(&s, &p, "a", "s1").await;
+    let mode = fs::metadata(s.0.join("folder/s1/locked"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o500);
+    p.stop(IdParams {
+        instance: "a".into(),
+    })
+    .await
+    .unwrap();
+    assert!(!s.0.join("folder/.live/a").exists());
+    p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
+    assert!(!s.0.join("folder/s1").exists());
 }

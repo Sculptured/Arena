@@ -6,6 +6,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use arena_part::helpers::blocking;
 use arena_part::helpers::compose::Project;
 use arena_part::helpers::mariadb::Server;
 
@@ -28,11 +29,6 @@ pub struct Stack {
     pub sites: SitesDir,
     pub rest: Rest,
     project: Project,
-}
-
-/// Runs a blocking docker command off the async threads.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f).await?
 }
 
 impl Stack {

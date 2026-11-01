@@ -32,6 +32,25 @@ fn remove_not_kept_drops_save_folders_only() {
 }
 
 #[test]
+fn read_only_save_folders_are_removed() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = scratch();
+    let dirs = SaveDirs::under(tmp.path().to_path_buf());
+    for save in ["s1", "s2"] {
+        let nested = tmp.path().join(save).join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("f"), "x").unwrap();
+        for d in [nested.clone(), tmp.path().join(save).join("a")] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+    }
+    dirs.remove("s1").unwrap();
+    assert!(!tmp.path().join("s1").exists());
+    assert_eq!(dirs.remove_not_kept(&[] as &[&str]).unwrap().dropped, 1);
+    assert!(!tmp.path().join("s2").exists());
+}
+
+#[test]
 fn busy_marks_last_until_dropped() {
     let set = BusySet::default();
     let a = set.mark("a");

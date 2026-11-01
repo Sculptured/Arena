@@ -13,6 +13,7 @@ mod volumes;
 
 use std::path::{Path, PathBuf};
 
+use arena_part::helpers::blocking;
 use arena_part::helpers::compose::Project;
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::helpers::temp_dir::TempDir;
@@ -29,17 +30,6 @@ const PACKAGE: &str = "service";
 pub struct Service {
     saves: SaveDirs,
     live: Live,
-}
-
-/// Runs `f` on a thread of its own: Docker calls take seconds.
-async fn blocking<T, F>(f: F) -> Result<T, PartError>
-where
-    F: FnOnce() -> Result<T, PartError> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(PartError::internal_from)?
 }
 
 impl Service {
@@ -71,16 +61,10 @@ impl Service {
         new_instance(id, &Config::parse(&config)?)
     }
 
-    fn save_dir(&self, save: &str) -> Result<PathBuf, PartError> {
-        self.saves
-            .find(save)
-            .ok_or_else(|| PartError::unknown(format!("no save {save}")))
-    }
-
     /// The digests of a target's volumes: a save's folders, or a copy of a live instance's volumes.
     async fn digests(&self, t: &Target) -> Result<view::DigestMap, PartError> {
         match t {
-            Target::Save { save } => view::digests(&self.save_dir(save)?),
+            Target::Save { save } => view::digests(&self.saves.require(save)?),
             Target::Instance { instance } => {
                 let (inst, scratch) = (self.instance(instance)?, self.saves.scratch());
                 blocking(move || {
@@ -144,7 +128,7 @@ impl Part for Service {
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
         let inst = new_instance(&p.instance, &Config::parse(&p.config)?)?;
         let from = match &p.from {
-            Some(f) => Some(self.save_dir(&f.save)?),
+            Some(f) => Some(self.saves.require(&f.save)?),
             None => None,
         };
         // recorded first, so a project that comes up is never unknown to a restarted program

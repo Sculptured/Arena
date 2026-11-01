@@ -342,3 +342,23 @@ fn save_dirs_skips_dot_folders() {
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&saves).unwrap();
 }
+
+#[test]
+fn remove_save_dir_removes_read_only_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, saves) = (temp("ro"), temp("ro-saves"));
+    write_pkg(&root, "counter", r#"["${ARENA_BIN_DIR}/examples/counter"]"#);
+    let hub = hub_for(std::slice::from_ref(&root), &saves);
+    let dir = hub.save_dir("counter", "s1");
+    std::fs::create_dir_all(dir.join("a/b")).unwrap();
+    std::fs::write(dir.join("a/b/f"), "x").unwrap();
+    for d in ["a/b", "a"] {
+        std::fs::set_permissions(dir.join(d), std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    hub.remove_save_dir("counter", "s1");
+    let gone = !dir.exists();
+    for d in [&root, &saves] {
+        arena_part::helpers::remove_tree(d).unwrap();
+    }
+    assert!(gone);
+}

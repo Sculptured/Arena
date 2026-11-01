@@ -4,7 +4,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use arena_part::helpers::folder;
+use arena_part::helpers::{folder, remove_tree};
 use serde_json::Value;
 
 use crate::json_file;
@@ -92,10 +92,7 @@ impl SitesDir {
 
     /// Removes the site's folder (nothing to do when there is none).
     pub fn remove(&self, name: &str) -> io::Result<()> {
-        match std::fs::remove_dir_all(self.site(name)) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            r => r,
-        }
+        remove_tree(&self.site(name))
     }
 
     /// The names of the site folders there are.

@@ -8,6 +8,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use arena_part::helpers::blocking;
 use arena_part::proto::{FromSave, StartParams};
 use arena_part::PartError;
 use serde_json::Value;
@@ -18,7 +19,7 @@ use crate::live::Run;
 use crate::saves::{self, Meta};
 use crate::server::{self, Pids};
 use crate::team::{self, PROPOSERS};
-use crate::{blocking, reraise, Sculptured, R};
+use crate::{reraise, Sculptured, R};
 
 /// A save to start from: its folder, what it records and the changes it holds.
 struct Restored {
@@ -85,7 +86,7 @@ impl Sculptured {
     /// The save `f` names, when this build can restore it and every change that waited in it
     /// can be proposed again (-32001 otherwise).
     fn restored(&self, f: &FromSave, build: &str) -> R<Restored> {
-        let dir = self.save_dir(&f.save)?;
+        let dir = self.saves.require(&f.save)?;
         let meta = saves::meta(&dir).map_err(PartError::internal_from)?;
         if meta.build != build {
             let made = &meta.build;
@@ -154,15 +155,40 @@ impl Sculptured {
         Ok(())
     }
 
-    /// Stops every instance with a folder here that this value did not start.
+    /// Stops every instance with a folder here that this value did not start, going on after a
+    /// failure; the failures are reported together at the end.
     pub(crate) async fn stop_leaked(&self) -> R<()> {
-        for id in self.live.ids() {
-            if !self.mine.lock().expect("mine lock").contains(&id) {
-                self.stop_instance(&id).await?;
-            }
-        }
-        Ok(())
+        let leaked: Vec<String> = {
+            let mine = self.mine.lock().expect("mine lock");
+            self.live
+                .ids()
+                .into_iter()
+                .filter(|id| !mine.contains(id))
+                .collect()
+        };
+        stop_each(leaked, |id| async move { self.stop_instance(&id).await }).await
     }
+}
+
+/// Runs `stop` on each of `ids`, going on after a failure; every failure, named, in one error.
+async fn stop_each<F, Fut>(ids: Vec<String>, stop: F) -> R<()>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = R<()>>,
+{
+    let mut failed = vec![];
+    for id in ids {
+        if let Err(e) = stop(id.clone()).await {
+            failed.push(format!("{id}: {}", e.message));
+        }
+    }
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(PartError::internal(format!(
+        "could not stop {}",
+        failed.join("; ")
+    )))
 }
 
 /// A new scratch folder of its own (`<temp>/arena-sc-<16 hex>`), short enough for the runner's
@@ -181,4 +207,29 @@ fn scratch() -> io::Result<PathBuf> {
         }
     }
     Err(io::Error::other("no free scratch folder"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_failing_stop_does_not_stop_the_others() {
+        let ids: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        let stopped = std::sync::Mutex::new(vec![]);
+        let r = stop_each(ids.clone(), |id| {
+            stopped.lock().unwrap().push(id.clone());
+            async move {
+                match id.as_str() {
+                    "b" | "d" => Err(PartError::internal(format!("{id} is stuck"))),
+                    _ => Ok(()),
+                }
+            }
+        })
+        .await;
+        assert_eq!(stopped.into_inner().unwrap(), ids);
+        let e = r.unwrap_err();
+        assert_eq!(e.message, "could not stop b: b is stuck; d: d is stuck");
+        assert_eq!(stop_each(vec![], |_| async { Ok(()) }).await, Ok(()));
+    }
 }

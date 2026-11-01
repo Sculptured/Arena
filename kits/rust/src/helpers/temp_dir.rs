@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
+use super::remove_tree_or_log;
+
 pub struct TempDir(PathBuf);
 
 impl TempDir {
@@ -23,12 +25,12 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        remove_tree_or_log(&self.0);
     }
 }
 
 /// Removes the folders in `parent` last modified more than `max_age` ago (left by a crashed
-/// program); other entries and errors are ignored.
+/// program); other entries are left, and a failure is logged.
 pub fn sweep_stale(parent: &Path, max_age: Duration) {
     let Ok(rd) = std::fs::read_dir(parent) else {
         return;
@@ -41,7 +43,7 @@ pub fn sweep_stale(parent: &Path, max_age: Duration) {
             .ok()
             .and_then(|t| now.duration_since(t).ok());
         if entry.path().is_dir() && age.is_some_and(|a| a > max_age) {
-            let _ = std::fs::remove_dir_all(entry.path());
+            remove_tree_or_log(&entry.path());
         }
     }
 }

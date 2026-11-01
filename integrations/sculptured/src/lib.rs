@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use arena_part::helpers::blocking;
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
@@ -68,15 +69,6 @@ impl Instance {
     }
 }
 
-/// Runs `f` on a thread of its own: copies, backups and `--version` touch the disk.
-async fn blocking<T, F>(f: F) -> anyhow::Result<T>
-where
-    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(f).await?
-}
-
 impl Sculptured {
     /// Saves under env `ARENA_SAVES`.
     pub fn from_env() -> Sculptured {
@@ -115,12 +107,6 @@ impl Sculptured {
         busy.entry(id.to_string()).or_default().clone()
     }
 
-    fn save_dir(&self, save: &str) -> R<PathBuf> {
-        self.saves
-            .find(save)
-            .ok_or_else(|| PartError::unknown(format!("no save {save}")))
-    }
-
     /// A target's changes as the tools show them: a live instance's from its server, a save's
     /// from its folder.
     async fn changes(&self, t: &Target) -> R<ChangeMap> {
@@ -131,7 +117,7 @@ impl Sculptured {
                 let team = inst.team(&aliases);
                 team.changes().await
             }
-            Target::Save { save } => saves::changes(&self.save_dir(save)?),
+            Target::Save { save } => saves::changes(&self.saves.require(save)?),
         };
         Ok(changes::by_key(&list.map_err(PartError::internal_from)?))
     }
@@ -212,10 +198,15 @@ impl Part for Sculptured {
 
     /// Stops every instance this value did not start (leaked by a program that ended without
     /// stopping them), then drops the saves `keep` does not keep.
+    /// Stops the leaked instances and drops the saves not kept; a failing stop doesn't keep the
+    /// rest from being done, and every failure is reported at the end.
     async fn gc(&self, p: GcParams) -> R<GcResult> {
-        self.stop_leaked().await?;
-        self.saves
-            .remove_not_kept(&p.keep)
-            .map_err(PartError::internal_from)
+        let stopped = self.stop_leaked().await;
+        let removed = self.saves.remove_not_kept(&p.keep);
+        match (stopped, removed.map_err(PartError::internal_from)) {
+            (Ok(()), removed) => removed,
+            (Err(e), Ok(_)) => Err(e),
+            (Err(e), Err(r)) => Err(PartError::internal(format!("{}; {}", e.message, r.message))),
+        }
     }
 }

@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use arena_part::helpers::folder;
 use arena_part::helpers::save_dirs::SaveDirs;
+use arena_part::helpers::{folder, remove_tree};
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
 use async_trait::async_trait;
@@ -63,23 +63,17 @@ impl Folder {
         }
     }
 
-    fn save_dir(&self, save: &str) -> Result<PathBuf, PartError> {
-        self.saves
-            .find(save)
-            .ok_or_else(|| PartError::unknown(format!("no save {save}")))
-    }
-
     fn target_dir(&self, t: &Target) -> Result<PathBuf, PartError> {
         match t {
             Target::Instance { instance } => self.instance_dir(instance),
-            Target::Save { save } => self.save_dir(save),
+            Target::Save { save } => self.saves.require(save),
         }
     }
 
     /// Fills `dir` from a save, from the `root` the config names, or leaves it empty.
     fn fill(&self, dir: &Path, p: &StartParams) -> Result<(), PartError> {
         if let Some(from) = &p.from {
-            return folder::restore(&self.save_dir(&from.save)?, dir)
+            return folder::restore(&self.saves.require(&from.save)?, dir)
                 .map_err(PartError::internal_from);
         }
         match p.config.get("root").and_then(Value::as_str) {
@@ -162,15 +156,8 @@ impl Part for Folder {
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
         let dir = self.instance_dir(&p.instance)?;
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(PartError::internal_from(format!(
-                    "cannot remove {dir:?}: {e}"
-                )));
-            }
-        }
+        remove_tree(&dir)
+            .map_err(|e| PartError::internal_from(format!("cannot remove {dir:?}: {e}")))?;
         self.instances().remove(&p.instance);
         Ok(())
     }

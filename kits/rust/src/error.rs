@@ -53,6 +53,12 @@ impl fmt::Display for PartError {
 
 impl std::error::Error for PartError {}
 
+impl From<tokio::task::JoinError> for PartError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        Self::internal_from(e)
+    }
+}
+
 impl From<anyhow::Error> for PartError {
     fn from(e: anyhow::Error) -> Self {
         Self::internal(format!("{e:#}"))

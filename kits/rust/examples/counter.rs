@@ -211,7 +211,11 @@ impl Part for Counter {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
-        let fresh = if self.seeded { (p.seed % 1000) as i64 } else { 0 };
+        let fresh = if self.seeded {
+            (p.seed % 1000) as i64
+        } else {
+            0
+        };
         let mut state = State {
             value: fresh,
             secs: p.clock_ms / 1000,

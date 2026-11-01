@@ -5,6 +5,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use arena_part::helpers::remove_tree_or_log;
 use arena_part::proto::valid_id;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -81,11 +82,11 @@ impl Live {
         names.filter(|n| valid_id(n)).collect()
     }
 
-    /// Removes the instance's folder and its scratch folder, if known (errors are ignored).
+    /// Removes the instance's folder and its scratch folder, if known (failures are logged).
     pub fn remove(&self, instance: &str, tmp: Option<&Path>) {
-        let _ = std::fs::remove_dir_all(self.folder(instance));
+        remove_tree_or_log(&self.folder(instance));
         if let Some(t) = tmp {
-            let _ = std::fs::remove_dir_all(t);
+            remove_tree_or_log(t);
         }
     }
 }

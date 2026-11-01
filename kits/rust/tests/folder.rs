@@ -1,5 +1,6 @@
 //! The folder helper: hard-linked saves, copying restores.
-use arena_part::helpers::folder::{copy_save, copy_save_except, digest, restore, size};
+use arena_part::helpers::folder::{copy_save, copy_save_except, digest, discard, restore, size};
+use arena_part::helpers::remove_tree;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ impl Tmp {
 
 impl Drop for Tmp {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = remove_tree(&self.0);
     }
 }
 
@@ -157,4 +158,29 @@ fn copies_leave_out_sockets() {
     let _listener = std::os::unix::net::UnixListener::bind(live.join("tools.sock")).unwrap();
     assert_eq!(copy_save(&live, &s1, None).unwrap(), 1);
     assert!(s1.join("a.txt").is_file() && !s1.join("tools.sock").exists());
+}
+
+/// A tree under `root` whose nested folders are read-only, as a copy of read-only folders is.
+fn read_only_tree(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    put(root, "a/b/f", "x");
+    for d in ["a/b", "a"] {
+        fs::set_permissions(root.join(d), fs::Permissions::from_mode(0o500)).unwrap();
+    }
+}
+
+#[test]
+fn read_only_trees_are_removed() {
+    use arena_part::helpers::temp_dir::TempDir;
+    let t = Tmp::new("readonly");
+    let doomed = t.0.join("discarded");
+    read_only_tree(&doomed);
+    discard(&doomed);
+    assert!(!doomed.exists());
+    let scratch = TempDir::new_in(&t.0, "ro").unwrap();
+    let path = scratch.path().to_path_buf();
+    read_only_tree(&path);
+    drop(scratch);
+    assert!(!path.exists());
+    remove_tree(&t.0.join("missing")).unwrap();
 }

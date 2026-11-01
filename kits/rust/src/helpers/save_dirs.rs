@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use super::folder;
 use super::temp_dir::sweep_stale;
+use super::{folder, remove_tree};
 use crate::proto::{kept, valid_id, GcResult};
+use crate::PartError;
 
 /// Scratch folders older than this are leftovers of a crashed program.
 const STALE_AFTER: Duration = Duration::from_secs(3600);
@@ -67,7 +68,13 @@ impl SaveDirs {
         dir.is_dir().then_some(dir)
     }
 
-    /// Removes the folder of `save` (nothing to do when it has none).
+    /// The folder of `save`; an unknown save is -32002.
+    pub fn require(&self, save: &str) -> Result<PathBuf, PartError> {
+        self.find(save)
+            .ok_or_else(|| PartError::unknown(format!("no save {save}")))
+    }
+
+    /// Removes the folder of `save`, read-only folders too (nothing to do when it has none).
     pub fn remove(&self, save: &str) -> io::Result<()> {
         let dir = self.find(save);
         self.known
@@ -75,7 +82,7 @@ impl SaveDirs {
             .expect("save folder map lock")
             .remove(save);
         match dir {
-            Some(d) => std::fs::remove_dir_all(d),
+            Some(d) => remove_tree(&d),
             None => Ok(()),
         }
     }

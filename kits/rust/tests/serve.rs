@@ -54,19 +54,40 @@ fn flavour_client(f: &str) -> Client {
     Client::new(counter::Counter::new(counter::Flavour::parse(f).unwrap()))
 }
 
-/// Sets ARENA_SAVES once for this test process; returns the folder of `<save>` for counter.
-fn save_dir(save: &str) -> String {
-    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    let root = ROOT.get_or_init(|| {
-        let d = std::env::temp_dir().join(format!("arena-part-test-{}", std::process::id()));
-        std::env::set_var("ARENA_SAVES", &d);
-        d
-    });
-    root.join("counter")
-        .join(save)
-        .to_str()
-        .unwrap()
-        .to_string()
+/// The test process's save root (`ARENA_SAVES`, set once), shared by the tests that save while
+/// they run, and removed when the last of them ends (after a failure too).
+struct Saves;
+
+/// How many tests hold the save root.
+static SAVES_USERS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+
+fn saves_root() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("arena-part-test-{}", std::process::id()))
+}
+
+impl Saves {
+    fn take() -> Saves {
+        static ENV: std::sync::Once = std::sync::Once::new();
+        ENV.call_once(|| std::env::set_var("ARENA_SAVES", saves_root()));
+        *SAVES_USERS.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        Saves
+    }
+
+    /// The folder of the counter's `save`.
+    fn dir(&self, save: &str) -> String {
+        let d = saves_root().join("counter").join(save);
+        d.to_str().expect("a UTF-8 temp path").to_string()
+    }
+}
+
+impl Drop for Saves {
+    fn drop(&mut self) {
+        let mut users = SAVES_USERS.lock().unwrap_or_else(|e| e.into_inner());
+        *users -= 1;
+        if *users == 0 {
+            let _ = arena_part::helpers::remove_tree(&saves_root());
+        }
+    }
 }
 
 /// A part with deliberately odd handlers: `panic`, `wait` (blocks until `poke`).
@@ -179,13 +200,14 @@ async fn gc_keep_takes_ids_and_prefixes() {
 
 #[tokio::test]
 async fn save_then_start_from_save_restores() {
+    let saves = Saves::take();
     let mut c = client();
     start(&mut c, "i1").await;
     add(&mut c, "i1", 5).await;
     let r = c
         .call(
             "save",
-            json!({"instance": "i1", "save": "s1", "dir": save_dir("s1")}),
+            json!({"instance": "i1", "save": "s1", "dir": saves.dir("s1")}),
         )
         .await;
     assert_eq!(r["result"]["exact"], true, "{r}");
@@ -205,12 +227,13 @@ async fn save_then_start_from_save_restores() {
 
 #[tokio::test]
 async fn fresh_process_starts_from_other_processs_save() {
+    let saves = Saves::take();
     let mut a = client();
     start(&mut a, "i1").await;
     add(&mut a, "i1", 9).await;
     a.call(
         "save",
-        json!({"instance": "i1", "save": "s_x", "dir": save_dir("s_x")}),
+        json!({"instance": "i1", "save": "s_x", "dir": saves.dir("s_x")}),
     )
     .await;
     let mut b = client();
@@ -231,8 +254,8 @@ async fn fresh_process_starts_from_other_processs_save() {
 
 #[tokio::test]
 async fn unknown_save_is_32002() {
+    let _saves = Saves::take(); // sets ARENA_SAVES
     let mut c = client();
-    save_dir("x");
     let r = c
         .call(
             "start",
@@ -267,12 +290,13 @@ async fn flavours_describe_their_restore() {
 
 #[tokio::test]
 async fn replay_only_save_is_32001() {
+    let saves = Saves::take();
     let mut c = flavour_client("replay_only");
     start(&mut c, "i1").await;
     let r = c
         .call(
             "save",
-            json!({"instance": "i1", "save": "s_r", "dir": save_dir("s_r")}),
+            json!({"instance": "i1", "save": "s_r", "dir": saves.dir("s_r")}),
         )
         .await;
     assert_eq!(r["error"]["code"], -32001, "{r}");
@@ -280,12 +304,13 @@ async fn replay_only_save_is_32001() {
 
 #[tokio::test]
 async fn approx_save_reports_inexact() {
+    let saves = Saves::take();
     let mut c = flavour_client("approx_and_replay");
     start(&mut c, "i1").await;
     let r = c
         .call(
             "save",
-            json!({"instance": "i1", "save": "s_a", "dir": save_dir("s_a")}),
+            json!({"instance": "i1", "save": "s_a", "dir": saves.dir("s_a")}),
         )
         .await;
     assert_eq!(r["result"]["exact"], false, "{r}");
@@ -293,12 +318,13 @@ async fn approx_save_reports_inexact() {
 
 #[tokio::test]
 async fn broken_restore_restores_zero() {
+    let saves = Saves::take();
     let mut c = flavour_client("broken_restore");
     start(&mut c, "i1").await;
     add(&mut c, "i1", 5).await;
     c.call(
         "save",
-        json!({"instance": "i1", "save": "s_b", "dir": save_dir("s_b")}),
+        json!({"instance": "i1", "save": "s_b", "dir": saves.dir("s_b")}),
     )
     .await;
     c.call(

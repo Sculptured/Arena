@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest as _, Sha256};
 
+use super::{remove_tree, remove_tree_or_log};
+
 /// What a folder holds: file count, bytes and one hash over every path and file content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Digest {
@@ -41,9 +43,10 @@ pub fn restore(save: &Path, dst: &Path) -> io::Result<()> {
     copy_save_except(save, dst, None, &|_| false).map(|_| ())
 }
 
-/// Removes a folder left half written by a failed save or start (errors are ignored).
+/// Removes a folder left half written by a failed save or start, read-only folders too (a
+/// failure is logged).
 pub fn discard(dir: &Path) {
-    let _ = fs::remove_dir_all(dir);
+    remove_tree_or_log(dir);
 }
 
 /// Bytes of the files under `path`, recursively (0 when it doesn't exist).
@@ -134,7 +137,7 @@ impl Tree<'_> {
 /// Removes whatever is at `path` (a file or a link, not a folder) so it can be replaced.
 fn clear(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if m.is_dir() => fs::remove_dir_all(path),
+        Ok(m) if m.is_dir() => remove_tree(path),
         Ok(_) => fs::remove_file(path),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),

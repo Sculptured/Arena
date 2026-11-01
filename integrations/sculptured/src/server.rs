@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use arena_part::helpers::blocking;
 use arena_part::helpers::process_group::{self, Identity};
 use serde::{Deserialize, Serialize};
 
@@ -190,9 +191,7 @@ pub async fn kill(binary: PathBuf, data: PathBuf, pids: Pids) -> Result<()> {
         }
         std::io::Result::Ok(())
     };
-    tokio::task::spawn_blocking(task)
-        .await?
-        .context("stopping sculptured")
+    blocking(task).await.context("stopping sculptured")
 }
 
 fn log_tail(log: &Path) -> String {
