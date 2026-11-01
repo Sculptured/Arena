@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kits/rust", "integrations/postgres", "integrations/folder", "integrations/service", "benchmarks/retail"]
+members = ["kits/rust", "integrations/postgres", "integrations/folder", "integrations/service", "integrations/mariadb", "benchmarks/retail"]
 exclude = ["core"]
 
 [workspace.dependencies]
@@ -11,6 +11,8 @@ anyhow = "1"
 async-trait = "0.1"
 sha2 = "0.11"
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust"] }
+flate2 = "1"
 
 [workspace.lints.clippy]
 too_many_lines = "warn"

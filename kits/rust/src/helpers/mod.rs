@@ -3,6 +3,8 @@
 pub mod compose;
 #[cfg(feature = "folder")]
 pub mod folder;
+#[cfg(feature = "mariadb")]
+pub mod mariadb;
 #[cfg(feature = "postgres")]
 pub mod pg;
 #[cfg(feature = "folder")]

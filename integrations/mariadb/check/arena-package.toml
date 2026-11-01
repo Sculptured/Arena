@@ -1,0 +1,17 @@
+# The conformance target of the mariadb integration: the same program with its SQL tools on.
+# Run: arena-part-check integrations/mariadb/check --config check.json
+# with check.json like {"init_sql": "CREATE TABLE t(id int primary key, v text)", "container": "..", "port": .., "volume": ".."}
+kind = "integration"
+name = "mariadb-check"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-mariadb", "--sql-tools"] }
+needs = { gpu_vram_gb = 0, services = [] }
+
+[[example]]
+tool = "sql_execute"
+args = { sql = "INSERT INTO t(id, v) VALUES (1, 'a') ON DUPLICATE KEY UPDATE v = CONCAT(v, 'a')" }
+
+[[example]]
+tool = "sql_query"
+args = { sql = "SELECT * FROM t" }

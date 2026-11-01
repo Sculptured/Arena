@@ -1,0 +1,7 @@
+kind = "integration"
+name = "mariadb"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-mariadb"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { init_sql = { type = "string", description = "SQL run in a fresh empty database" }, container = { type = "string", description = "server container (default arena-mariadb)" }, port = { type = "integer", description = "server port on 127.0.0.1 (default 3307)" }, volume = { type = "string", description = "server data volume (default arena_mariadb_data)" }, root_password = { type = "string", description = "server root password (default arena)" }, dump_after_bytes = { type = "integer", description = "binlog bytes a restore may read before a save writes a dump (default 64 MiB)" } } }
