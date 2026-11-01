@@ -264,7 +264,7 @@ fn limit_refuses_new_runs() {
             (st, v["error"].as_str()),
             (
                 507,
-                Some("the arena's databases use more than the limit; delete old runs")
+                Some("the arena's saves use more than the limit; delete old runs")
             )
         );
         // 404 and 409 are reported before 507.
@@ -300,7 +300,7 @@ fn limit_refuses_new_runs() {
             (st, v["error"].as_str()),
             (
                 507,
-                Some("the arena's databases use more than the limit; delete old runs")
+                Some("the arena's saves use more than the limit; delete old runs")
             )
         );
         assert_eq!(

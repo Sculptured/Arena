@@ -10,6 +10,17 @@ use arena_retail::{
 use common::*;
 use serde_json::{json, Value};
 
+/// tau2-bench retail's tools that change the database.
+const WRITE_TOOLS: &[&str] = &[
+    "cancel_pending_order",
+    "exchange_delivered_order_items",
+    "modify_pending_order_address",
+    "modify_pending_order_items",
+    "modify_pending_order_payment",
+    "modify_user_address",
+    "return_delivered_order_items",
+];
+
 fn changed_rows(base: &Value, now: &Value) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
     for t in ["users", "orders", "products"] {
@@ -26,7 +37,7 @@ fn eligible(task: &Value) -> bool {
     let ec = &task["evaluation_criteria"];
     let has_write = ec["actions"].as_array().is_some_and(|a| {
         a.iter()
-            .any(|x| tools::WRITE_TOOLS.contains(&x["name"].as_str().unwrap()))
+            .any(|x| tools::is_write(x["name"].as_str().unwrap()))
     });
     let nl = ec
         .get("nl_assertions")
@@ -152,7 +163,7 @@ async fn unknown_tool_and_bad_args_are_tool_errors() {
 }
 
 #[tokio::test]
-async fn describe_lists_tasks_and_effects() {
+async fn describe_lists_tasks() {
     let d = retail().describe().await.unwrap();
     assert_eq!(d.name, "retail");
     assert_eq!(d.world.len(), 1);
@@ -169,8 +180,13 @@ async fn describe_lists_tasks_and_effects() {
         d.instructions,
         std::fs::read_to_string(data_dir().join("policy.md")).unwrap()
     );
+}
+
+#[tokio::test]
+async fn describe_lists_tools_and_their_effects() {
+    let d = retail().describe().await.unwrap();
     for t in &d.tools {
-        let want = if tools::WRITE_TOOLS.contains(&t.name.as_str()) {
+        let want = if WRITE_TOOLS.contains(&t.name.as_str()) {
             Effect::Write
         } else {
             Effect::Read
@@ -180,11 +196,8 @@ async fn describe_lists_tasks_and_effects() {
     }
     let mut names: Vec<&str> = d.tools.iter().map(|t| t.name.as_str()).collect();
     names.sort();
-    let mut want: Vec<&str> = tools::READ_TOOLS
-        .iter()
-        .chain(tools::WRITE_TOOLS)
-        .copied()
-        .collect();
+    let mut want: Vec<&str> = tools::tool_names().collect();
+    assert_eq!(want.len(), 16);
     want.sort();
     assert_eq!(names, want);
     assert!(!names.contains(&"handoff"));

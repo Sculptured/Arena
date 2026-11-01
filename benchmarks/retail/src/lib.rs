@@ -53,7 +53,7 @@ fn schemas() -> Vec<ToolSchema> {
         .map(|v| {
             let name = v["name"].as_str().unwrap_or("").to_string();
             ToolSchema {
-                effect: if tools::WRITE_TOOLS.contains(&name.as_str()) {
+                effect: if tools::is_write(&name) {
                     Effect::Write
                 } else {
                     Effect::Read

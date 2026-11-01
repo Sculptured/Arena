@@ -18,5 +18,5 @@ mod schema;
 mod value;
 
 pub use call::{call, ToolOutcome};
-pub use schema::{tool_schemas, READ_TOOLS, WRITE_TOOLS};
+pub use schema::{is_write, tool_names, tool_schemas};
 pub use value::fold;

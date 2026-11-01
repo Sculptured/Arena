@@ -8,7 +8,7 @@ use tokio_postgres::Transaction;
 
 use super::calc::calculate;
 use super::fail::{bad, R};
-use super::schema::READ_TOOLS;
+use super::schema::is_write;
 use super::value::{fold, py_json_str, st, strs};
 
 pub(super) struct Retail<'a> {
@@ -69,8 +69,12 @@ impl<'a> Retail<'a> {
         Ok(v)
     }
 
-    pub(super) fn put(&mut self, table: &str, id: &str, doc: Value) {
-        self.cache.insert(format!("{table}/{id}"), doc);
+    /// The tool's result: `doc`, written back as `table/id` when the tool succeeds.
+    pub(super) fn finish(&mut self, table: &str, id: &str, doc: Value) -> R<Value> {
+        let key = format!("{table}/{id}");
+        self.cache.insert(key.clone(), doc.clone());
+        self.writes.insert(key);
+        Ok(doc)
     }
 
     /// A document that must exist; `missing` is the error when it doesn't.
@@ -115,7 +119,7 @@ impl<'a> Retail<'a> {
 
     /// Runs the named tool with its (already checked) arguments.
     pub(super) async fn run(&mut self, name: &str, a: &Value) -> R<Value> {
-        if READ_TOOLS.contains(&name) {
+        if !is_write(name) {
             self.run_read(name, a).await
         } else {
             self.run_write(name, a).await

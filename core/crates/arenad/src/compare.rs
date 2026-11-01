@@ -30,7 +30,7 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
         "restored": branch.restored,
         "seconds": seconds,
         "tokens": ends.iter().map(|e| e.tokens.unwrap_or(0)).sum::<i64>(),
-        "cost_usd": ends.iter().fold(Some(0.0f64), |c, e| add_cost(c, e.cost_usd)),
+        "cost_usd": ends.iter().try_fold(0.0f64, |c, e| add_cost(Some(c), e.cost_usd)),
         "cost_source": combined_source(&ends),
     })
 }

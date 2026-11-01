@@ -245,8 +245,10 @@ impl Run<'_> {
             .await?;
         self.restore_and_self_diff(&d, config, have_saves).await?;
         self.replay_phase(&d, config).await?;
-        self.stop_all_step().await?;
-        self.drop_saves_step(usage_before).await
+        let r = self.stop_all_step().await;
+        self.step("stop", r)?;
+        let r = self.drop_saves_step(usage_before).await;
+        self.step("drop_saves", r)
     }
 
     /// 1. describe, and check what it says.
@@ -371,24 +373,15 @@ impl Run<'_> {
     }
 
     /// 10. stop everything (a part may free an instance's storage on stop).
-    async fn stop_all_step(&mut self) -> Res<()> {
-        let r = async {
-            for i in self.live.clone() {
-                self.stop(i).await?;
-            }
-            Ok("all instances stopped".to_string())
+    async fn stop_all_step(&mut self) -> Res<String> {
+        for i in self.live.clone() {
+            self.stop(i).await?;
         }
-        .await;
-        self.step("stop", r)
+        Ok("all instances stopped".to_string())
     }
 
     /// 11. drop saves; with every instance stopped, usage must be back to where it started.
-    async fn drop_saves_step(&mut self, usage_before: u64) -> Res<()> {
-        let r = self.drop_saves_and_compare(usage_before).await;
-        self.step("drop_saves", r)
-    }
-
-    async fn drop_saves_and_compare(&mut self, usage_before: u64) -> Res<String> {
+    async fn drop_saves_step(&mut self, usage_before: u64) -> Res<String> {
         while let Some(s) = self.saves.first().copied() {
             self.call("drop_save", json!({"save": s}))
                 .await

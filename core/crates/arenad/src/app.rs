@@ -157,46 +157,6 @@ pub fn install_default_drivers(state: &Arc<AppState>) -> bool {
     state.install_drivers(m)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::is_openrouter_url;
-
-    #[test]
-    fn openrouter_detection_is_exact() {
-        assert!(is_openrouter_url("https://openrouter.ai/api/v1"));
-        assert!(!is_openrouter_url("https://openrouter.ai.evil.com/api/v1"));
-        assert!(!is_openrouter_url("http://openrouter.ai"));
-        assert!(!is_openrouter_url("https://evil.com/openrouter.ai"));
-        assert!(!is_openrouter_url("not a url"));
-    }
-
-    #[test]
-    fn loopback_hosts() {
-        use super::is_loopback_host as ok;
-        for h in [
-            "127.0.0.1",
-            "127.0.0.1:4510",
-            "localhost",
-            "LOCALHOST:80",
-            "[::1]",
-            "[::1]:4510",
-        ] {
-            assert!(ok(h), "{h}");
-        }
-        for h in [
-            "evil.example",
-            "127.0.0.1.evil.example",
-            "localhost.evil.com:80",
-            "127.0.0.1:abc",
-            "[::2]",
-            "",
-            "::1",
-        ] {
-            assert!(!ok(h), "{h}");
-        }
-    }
-}
-
 /// True when `host` (a Host header value) names this machine's loopback: `127.0.0.1`, `localhost`
 /// or `[::1]`, with an optional port.
 fn is_loopback_host(host: &str) -> bool {
@@ -248,4 +208,44 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(crate::gateway::router())
         .merge(api)
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openrouter_url;
+
+    #[test]
+    fn openrouter_detection_is_exact() {
+        assert!(is_openrouter_url("https://openrouter.ai/api/v1"));
+        assert!(!is_openrouter_url("https://openrouter.ai.evil.com/api/v1"));
+        assert!(!is_openrouter_url("http://openrouter.ai"));
+        assert!(!is_openrouter_url("https://evil.com/openrouter.ai"));
+        assert!(!is_openrouter_url("not a url"));
+    }
+
+    #[test]
+    fn loopback_hosts() {
+        use super::is_loopback_host as ok;
+        for h in [
+            "127.0.0.1",
+            "127.0.0.1:4510",
+            "localhost",
+            "LOCALHOST:80",
+            "[::1]",
+            "[::1]:4510",
+        ] {
+            assert!(ok(h), "{h}");
+        }
+        for h in [
+            "evil.example",
+            "127.0.0.1.evil.example",
+            "localhost.evil.com:80",
+            "127.0.0.1:abc",
+            "[::2]",
+            "",
+            "::1",
+        ] {
+            assert!(!ok(h), "{h}");
+        }
+    }
 }

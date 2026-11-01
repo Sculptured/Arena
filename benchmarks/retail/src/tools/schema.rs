@@ -2,27 +2,6 @@
 
 use serde_json::{json, Map, Value};
 
-pub const READ_TOOLS: &[&str] = &[
-    "calculate",
-    "find_user_id_by_name_zip",
-    "find_user_id_by_email",
-    "get_order_details",
-    "get_product_details",
-    "get_item_details",
-    "get_user_details",
-    "list_all_product_types",
-    "transfer_to_human_agents",
-];
-pub const WRITE_TOOLS: &[&str] = &[
-    "cancel_pending_order",
-    "exchange_delivered_order_items",
-    "modify_pending_order_address",
-    "modify_pending_order_items",
-    "modify_pending_order_payment",
-    "modify_user_address",
-    "return_delivered_order_items",
-];
-
 #[derive(Clone, Copy)]
 enum Ty {
     Str,
@@ -40,105 +19,170 @@ const ADDR: &[Field] = &[
     ("zip", Ty::Str),
 ];
 
-const DESCRIPTIONS: &[(&str, &str)] = &[
-    (
-        "calculate",
-        "Evaluate an arithmetic expression and return the result rounded to 2 decimals.",
-    ),
-    (
-        "find_user_id_by_name_zip",
-        "Find a user id by first name, last name and zip code.",
-    ),
-    ("find_user_id_by_email", "Find a user id by email address."),
-    (
-        "get_order_details",
-        "Get the details of an order (order ids start with '#').",
-    ),
-    (
-        "get_product_details",
-        "Get the details of a product (product ids differ from item ids).",
-    ),
-    (
-        "get_item_details",
-        "Get the details of a product item (variant) by item id.",
-    ),
-    (
-        "get_user_details",
-        "Get the details of a user, including payment methods and orders.",
-    ),
-    (
-        "list_all_product_types",
-        "List every product type with its product id.",
-    ),
-    (
-        "transfer_to_human_agents",
-        "Transfer the customer to a human agent with a summary of the issue.",
-    ),
-    (
-        "cancel_pending_order",
-        "Cancel a pending order; reason is 'no longer needed' or 'ordered by mistake'.",
-    ),
-    (
-        "exchange_delivered_order_items",
-        "Request an exchange of delivered order items for new items of the same product.",
-    ),
-    (
-        "modify_pending_order_address",
-        "Change the shipping address of a pending order.",
-    ),
-    (
-        "modify_pending_order_items",
-        "Replace items of a pending order with other variants of the same product (one-time).",
-    ),
-    (
-        "modify_pending_order_payment",
-        "Change the payment method of a pending order.",
-    ),
-    (
-        "modify_user_address",
-        "Change the default address of a user.",
-    ),
-    (
-        "return_delivered_order_items",
-        "Request a return of delivered order items.",
-    ),
-];
+/// A tool: its name, whether it writes, its description and its arguments (in schema order,
+/// followed by the address fields when `address`).
+struct Tool {
+    name: &'static str,
+    write: bool,
+    description: &'static str,
+    args: &'static [Field],
+    address: bool,
+}
 
-/// The arguments of a tool, in the order they are listed in its schema.
-fn fields(name: &str) -> Vec<Field> {
-    use Ty::*;
-    let with_addr = |first: Field| [&[first], ADDR].concat();
-    match name {
-        "calculate" => vec![("expression", Str)],
-        "find_user_id_by_name_zip" => vec![("first_name", Str), ("last_name", Str), ("zip", Str)],
-        "find_user_id_by_email" => vec![("email", Str)],
-        "get_order_details" => vec![("order_id", Str)],
-        "modify_pending_order_payment" => vec![("order_id", Str), ("payment_method_id", Str)],
-        "get_product_details" => vec![("product_id", Str)],
-        "get_item_details" => vec![("item_id", Str)],
-        "get_user_details" => vec![("user_id", Str)],
-        "transfer_to_human_agents" => vec![("summary", Str)],
-        "cancel_pending_order" => vec![("order_id", Str), ("reason", Str)],
-        "exchange_delivered_order_items" | "modify_pending_order_items" => vec![
-            ("order_id", Str),
-            ("item_ids", List),
-            ("new_item_ids", List),
-            ("payment_method_id", Str),
-        ],
-        "modify_pending_order_address" => with_addr(("order_id", Str)),
-        "modify_user_address" => with_addr(("user_id", Str)),
-        "return_delivered_order_items" => vec![
-            ("order_id", Str),
-            ("item_ids", List),
-            ("payment_method_id", Str),
-        ],
-        _ => vec![],
+const fn tool(
+    name: &'static str,
+    write: bool,
+    description: &'static str,
+    args: &'static [Field],
+) -> Tool {
+    Tool {
+        name,
+        write,
+        description,
+        args,
+        address: false,
     }
 }
 
-fn spec(name: &str) -> Option<(&'static str, Vec<Field>)> {
-    let (_, desc) = DESCRIPTIONS.iter().find(|(n, _)| *n == name)?;
-    Some((desc, fields(name)))
+const fn with_address(t: Tool) -> Tool {
+    Tool { address: true, ..t }
+}
+
+const ITEMS: &[Field] = &[
+    ("order_id", Ty::Str),
+    ("item_ids", Ty::List),
+    ("new_item_ids", Ty::List),
+    ("payment_method_id", Ty::Str),
+];
+
+/// Every tool, reads first.
+const TOOLS: &[Tool] = &[
+    tool(
+        "calculate",
+        false,
+        "Evaluate an arithmetic expression and return the result rounded to 2 decimals.",
+        &[("expression", Ty::Str)],
+    ),
+    tool(
+        "find_user_id_by_name_zip",
+        false,
+        "Find a user id by first name, last name and zip code.",
+        &[
+            ("first_name", Ty::Str),
+            ("last_name", Ty::Str),
+            ("zip", Ty::Str),
+        ],
+    ),
+    tool(
+        "find_user_id_by_email",
+        false,
+        "Find a user id by email address.",
+        &[("email", Ty::Str)],
+    ),
+    tool(
+        "get_order_details",
+        false,
+        "Get the details of an order (order ids start with '#').",
+        &[("order_id", Ty::Str)],
+    ),
+    tool(
+        "get_product_details",
+        false,
+        "Get the details of a product (product ids differ from item ids).",
+        &[("product_id", Ty::Str)],
+    ),
+    tool(
+        "get_item_details",
+        false,
+        "Get the details of a product item (variant) by item id.",
+        &[("item_id", Ty::Str)],
+    ),
+    tool(
+        "get_user_details",
+        false,
+        "Get the details of a user, including payment methods and orders.",
+        &[("user_id", Ty::Str)],
+    ),
+    tool(
+        "list_all_product_types",
+        false,
+        "List every product type with its product id.",
+        &[],
+    ),
+    tool(
+        "transfer_to_human_agents",
+        false,
+        "Transfer the customer to a human agent with a summary of the issue.",
+        &[("summary", Ty::Str)],
+    ),
+    tool(
+        "cancel_pending_order",
+        true,
+        "Cancel a pending order; reason is 'no longer needed' or 'ordered by mistake'.",
+        &[("order_id", Ty::Str), ("reason", Ty::Str)],
+    ),
+    tool(
+        "exchange_delivered_order_items",
+        true,
+        "Request an exchange of delivered order items for new items of the same product.",
+        ITEMS,
+    ),
+    with_address(tool(
+        "modify_pending_order_address",
+        true,
+        "Change the shipping address of a pending order.",
+        &[("order_id", Ty::Str)],
+    )),
+    tool(
+        "modify_pending_order_items",
+        true,
+        "Replace items of a pending order with other variants of the same product (one-time).",
+        ITEMS,
+    ),
+    tool(
+        "modify_pending_order_payment",
+        true,
+        "Change the payment method of a pending order.",
+        &[("order_id", Ty::Str), ("payment_method_id", Ty::Str)],
+    ),
+    with_address(tool(
+        "modify_user_address",
+        true,
+        "Change the default address of a user.",
+        &[("user_id", Ty::Str)],
+    )),
+    tool(
+        "return_delivered_order_items",
+        true,
+        "Request a return of delivered order items.",
+        &[
+            ("order_id", Ty::Str),
+            ("item_ids", Ty::List),
+            ("payment_method_id", Ty::Str),
+        ],
+    ),
+];
+
+impl Tool {
+    /// The arguments, in the order they are listed in the schema.
+    fn fields(&self) -> impl Iterator<Item = &'static Field> {
+        let address: &'static [Field] = if self.address { ADDR } else { &[] };
+        self.args.iter().chain(address)
+    }
+}
+
+fn find(name: &str) -> Option<&'static Tool> {
+    TOOLS.iter().find(|t| t.name == name)
+}
+
+/// Every tool's name, reads first.
+pub fn tool_names() -> impl Iterator<Item = &'static str> {
+    TOOLS.iter().map(|t| t.name)
+}
+
+/// True for a tool that changes the database.
+pub fn is_write(name: &str) -> bool {
+    find(name).is_some_and(|t| t.write)
 }
 
 fn property(ty: Ty) -> Value {
@@ -150,17 +194,15 @@ fn property(ty: Ty) -> Value {
 
 /// MCP-style tool entries `{name, description, inputSchema}`.
 pub fn tool_schemas() -> Vec<Value> {
-    READ_TOOLS
+    TOOLS
         .iter()
-        .chain(WRITE_TOOLS)
-        .map(|name| {
-            let (desc, args) = spec(name).expect("every tool has a spec");
-            let props: Map<String, Value> = args
-                .iter()
+        .map(|t| {
+            let props: Map<String, Value> = t
+                .fields()
                 .map(|(a, ty)| (a.to_string(), property(*ty)))
                 .collect();
-            let required: Vec<&str> = args.iter().map(|(a, _)| *a).collect();
-            json!({"name": name, "description": desc,
+            let required: Vec<&str> = t.fields().map(|(a, _)| *a).collect();
+            json!({"name": t.name, "description": t.description,
                    "inputSchema": {"type": "object", "properties": props, "required": required}})
         })
         .collect()
@@ -179,9 +221,10 @@ fn check_arg(name: &str, k: &str, ty: Ty, v: Option<&Value>) -> Result<(), Strin
 
 /// Checks a call the way Python would check its signature; the message is the error to report.
 pub(super) fn check_call(name: &str, args: &Value) -> Result<(), String> {
-    let Some((_, params)) = spec(name) else {
+    let Some(tool) = find(name) else {
         return Err(format!("Unknown tool {name}"));
     };
+    let params: Vec<&Field> = tool.fields().collect();
     let Some(obj) = args.as_object() else {
         return Err(format!("{name}() arguments must be a JSON object"));
     };

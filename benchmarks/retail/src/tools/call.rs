@@ -8,7 +8,7 @@ use tokio_postgres::{Client, Transaction};
 
 use super::fail::{Fail, R};
 use super::retail::Retail;
-use super::schema::{check_call, WRITE_TOOLS};
+use super::schema::{check_call, is_write};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutcome {
@@ -78,7 +78,7 @@ pub async fn call(client: &mut Client, name: &str, args: &Value) -> Result<ToolO
     let tx = client.transaction().await?;
     let mut retail = Retail {
         tx: &tx,
-        lock: WRITE_TOOLS.contains(&name),
+        lock: is_write(name),
         cache: HashMap::new(),
         all_loaded: HashSet::new(),
         reads: BTreeSet::new(),

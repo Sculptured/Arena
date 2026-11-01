@@ -54,27 +54,19 @@ struct Swaps {
 }
 
 impl Retail<'_> {
-    fn finish_order(&mut self, oid: &str, order: Value) -> R<Value> {
-        self.put("orders", oid, order.clone());
-        self.writes.insert(format!("orders/{oid}"));
-        Ok(order)
-    }
-
     pub(super) async fn modify_order_address(&mut self, oid: &str, a: &Value) -> R<Value> {
         let mut order = self.order(oid).await?;
         if !st(&order["status"]).contains("pending") {
             return bad("Non-pending order cannot be modified");
         }
         set_address(&mut order, a);
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 
     pub(super) async fn modify_user_address(&mut self, uid: &str, a: &Value) -> R<Value> {
         let mut user = self.user(uid).await?;
         set_address(&mut user, a);
-        self.put("users", uid, user.clone());
-        self.writes.insert(format!("users/{uid}"));
-        Ok(user)
+        self.finish("users", uid, user)
     }
 
     pub(super) async fn return_items(
@@ -99,7 +91,7 @@ impl Retail<'_> {
         order["status"] = json!("return requested");
         order["return_items"] = json!(sorted(&item_ids));
         order["return_payment_method_id"] = json!(pm);
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 
     pub(super) async fn cancel_pending_order(&mut self, oid: &str, reason: &str) -> R<Value> {
@@ -116,7 +108,7 @@ impl Retail<'_> {
         if let Some(h) = order["payment_history"].as_array_mut() {
             h.extend(refunds);
         }
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 
     /// Refund entries for every payment of the order; gift cards get their money back.
@@ -196,7 +188,7 @@ impl Retail<'_> {
         order["exchange_new_items"] = json!(sorted(&new_ids));
         order["exchange_payment_method_id"] = json!(pm);
         order["exchange_price_difference"] = diff_v;
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 
     pub(super) async fn modify_items(
@@ -222,7 +214,7 @@ impl Retail<'_> {
             apply_variant(&mut order, &item_ids, &new_ids, &variant);
         }
         order["status"] = json!("pending (item modified)");
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 
     /// Records the price difference of modified items as a payment or refund; gift cards pay.
@@ -275,7 +267,7 @@ impl Retail<'_> {
         if is_gift_card(&old_method) {
             self.set_balance(&uid, &old_id, round2(num(&old_method["balance"]) + amount));
         }
-        self.finish_order(oid, order)
+        self.finish("orders", oid, order)
     }
 }
 

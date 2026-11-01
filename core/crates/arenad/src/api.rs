@@ -206,7 +206,7 @@ async fn check_disk(state: &AppState) -> Result<(), ApiError> {
     let bytes = gc::usage(&state.hub, &state.benchmark).await?;
     if bytes >= state.config.max_db_bytes {
         return Err(ApiError::insufficient_storage(
-            "the arena's databases use more than the limit; delete old runs",
+            "the arena's saves use more than the limit; delete old runs",
         ));
     }
     Ok(())
@@ -403,6 +403,25 @@ enum Wake {
     Ev(Result<Event, RecvError>),
 }
 
+/// What the event pump does after a wake-up.
+enum Next {
+    /// Stop: arenad shuts down, or the client or the store is gone.
+    Stop,
+    /// See whether the branch has ended, then wait.
+    CheckStatus,
+    /// Wait for the next wake-up.
+    Wait,
+}
+
+/// `then` when `ok`, else `Next::Stop`.
+fn unless_gone(ok: bool, then: Next) -> Next {
+    if ok {
+        then
+    } else {
+        Next::Stop
+    }
+}
+
 impl Pump {
     /// Sends the stored events after `last`; false when the client is gone or the store failed.
     async fn catch_up(&mut self) -> bool {
@@ -419,27 +438,33 @@ impl Pump {
         true
     }
 
-    /// Handles one wake-up; `Some(check_status)` to go on, `None` to stop.
-    async fn on_wake(&mut self, wake: Wake) -> Option<bool> {
+    /// Handles one wake-up.
+    async fn on_wake(&mut self, wake: Wake) -> Next {
         match wake {
-            Wake::Stop => None,
-            Wake::Tick => Some(true),
-            Wake::Ev(Ok(e)) if e.branch_id == self.id => {
-                if e.seq == self.last + 1 {
-                    self.last = e.seq;
-                    self.tx.send(Ok(sse_event("event", &e))).await.ok()?;
-                } else if e.seq > self.last && !self.catch_up().await {
-                    return None;
-                }
-                Some(false)
+            Wake::Stop => Next::Stop,
+            Wake::Tick => Next::CheckStatus,
+            Wake::Ev(Ok(e)) if e.branch_id == self.id => self.on_event(&e).await,
+            Wake::Ev(Ok(_)) => Next::Wait,
+            Wake::Ev(Err(RecvError::Lagged(_))) => {
+                unless_gone(self.catch_up().await, Next::CheckStatus)
             }
-            Wake::Ev(Ok(_)) => Some(false),
-            Wake::Ev(Err(RecvError::Lagged(_))) => self.catch_up().await.then_some(true),
             Wake::Ev(Err(RecvError::Closed)) => {
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                Some(false)
+                Next::Wait
             }
         }
+    }
+
+    /// An event of this branch: sent when it is the next one; after a gap, the missed ones are
+    /// read from the store.
+    async fn on_event(&mut self, e: &Event) -> Next {
+        let ok = if e.seq == self.last + 1 {
+            self.last = e.seq;
+            self.tx.send(Ok(sse_event("event", e))).await.is_ok()
+        } else {
+            e.seq <= self.last || self.catch_up().await
+        };
+        unless_gone(ok, Next::Wait)
     }
 
     /// Sends the final `status` once the branch is no longer running; false to stop.
@@ -473,9 +498,9 @@ impl Pump {
                 got = rx.recv() => Wake::Ev(got),
             };
             match self.on_wake(wake).await {
-                None => return,
-                Some(true) if !self.status_check().await => return,
-                Some(_) => {}
+                Next::Stop => return,
+                Next::CheckStatus if !self.status_check().await => return,
+                Next::CheckStatus | Next::Wait => {}
             }
         }
     }

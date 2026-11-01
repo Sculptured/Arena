@@ -1,5 +1,7 @@
 //! Instance and save ids arenad chooses (`^[a-z0-9_]{1,63}$`): instances `b_<branch>_<part>`,
-//! saves `s_<uuid>`, base saves `base_<bench>_<version>_<part>`, gold saves `gold_<bench>_<ver>_<task>_<part>`.
+//! saves `s_<uuid>`, base saves `base_<bench>_<version>_<part>` and gold saves
+//! `gold_<bench>_<version>_<task>_<part>`, with `.` and `-` in the benchmark and version turned into
+//! `_`. A part or task that doesn't fit an id is replaced by a hash.
 
 use parts::proto::{valid_id, BenchDescribe};
 
