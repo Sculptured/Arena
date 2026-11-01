@@ -57,25 +57,26 @@ fn is_legacy(name: &str) -> bool {
         || name == "world_base"
 }
 
-fn internal(e: impl std::fmt::Display) -> PartError {
-    let m = format!("{e:#}");
-    if m.contains("invalid database name") {
-        return PartError::invalid(m);
-    }
-    PartError::internal(m)
-}
-
-fn check_id(id: &str) -> Result<(), PartError> {
-    if valid_id(id) {
-        Ok(())
-    } else {
-        Err(PartError::invalid(
-            "instance and save ids must match [a-z0-9_]{1,63}",
-        ))
-    }
-}
+/// Postgres database names are at most this long.
+const MAX_DB_NAME: usize = 63;
 
 impl Postgres {
+    /// An id is a valid protocol id whose database names (`pi_<ns><id>`, `ps_<ns><id>`) fit.
+    fn check_id(&self, id: &str) -> Result<(), PartError> {
+        if !valid_id(id) {
+            return Err(PartError::invalid(
+                "instance and save ids must match [a-z0-9_]{1,63}",
+            ));
+        }
+        if self.pi(id).len() > MAX_DB_NAME {
+            return Err(PartError::invalid(format!(
+                "the id {id} is too long for the namespace {:?} (database names are at most {MAX_DB_NAME} bytes)",
+                self.ns
+            )));
+        }
+        Ok(())
+    }
+
     pub fn from_env() -> Postgres {
         let url = std::env::var("ARENA_PG_URL").unwrap_or_else(|_| DEFAULT_URL.into());
         // arenad passes `ARENA_PG_URL` on to programs but not other variables, so the namespace can
@@ -108,11 +109,16 @@ impl Postgres {
 
     /// The database named `db`, or the legacy one named `id`; `what` names the thing in errors.
     async fn existing_db(&self, what: &str, id: &str, db: String) -> Result<String, PartError> {
-        check_id(id)?;
-        if self.pg.exists(&db).await.map_err(internal)? {
+        self.check_id(id)?;
+        if self
+            .pg
+            .exists(&db)
+            .await
+            .map_err(PartError::internal_from)?
+        {
             return Ok(db);
         }
-        if self.legacy_ok(id) && self.pg.exists(id).await.map_err(internal)? {
+        if self.legacy_ok(id) && self.pg.exists(id).await.map_err(PartError::internal_from)? {
             return Ok(id.into());
         }
         Err(PartError::unknown(format!("unknown {what} {id}")))
@@ -129,7 +135,10 @@ impl Postgres {
 
     /// A new empty instance database, running the config's `init_sql` in it.
     async fn create_fresh(&self, db: &str, config: &Value) -> Result<(), PartError> {
-        self.pg.create_empty(db).await.map_err(internal)?;
+        self.pg
+            .create_empty(db)
+            .await
+            .map_err(PartError::internal_from)?;
         let Some(sql) = config.get("init_sql").and_then(Value::as_str) else {
             return Ok(());
         };
@@ -507,7 +516,7 @@ impl Part for Postgres {
                     .get::<_, String>(0))
             })
             .await
-            .map_err(internal)?;
+            .map_err(PartError::internal_from)?;
         Ok(Describe {
             name: "postgres".into(),
             version: "0.1.0".into(),
@@ -527,13 +536,16 @@ impl Part for Postgres {
     }
 
     async fn start(&self, p: StartParams) -> Result<(), PartError> {
-        check_id(&p.instance)?;
+        self.check_id(&p.instance)?;
         let db = self.pi(&p.instance);
-        self.pg.drop(&db).await.map_err(internal)?;
+        self.pg.drop(&db).await.map_err(PartError::internal_from)?;
         match &p.from {
             Some(f) => {
                 let src = self.save_db(&f.save).await?;
-                self.pg.create_from(&db, &src).await.map_err(internal)?;
+                self.pg
+                    .create_from(&db, &src)
+                    .await
+                    .map_err(PartError::internal_from)?;
             }
             None => self.create_fresh(&db, &p.config).await?,
         }
@@ -556,7 +568,7 @@ impl Part for Postgres {
             .pg
             .with_db(&db, async |c| Ok(run_sql(c, sql, params, rows).await))
             .await
-            .map_err(internal)?;
+            .map_err(PartError::internal_from)?;
         let keys = if rows {
             read_keys(sql)
         } else {
@@ -566,16 +578,21 @@ impl Part for Postgres {
     }
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
-        check_id(&p.save)?;
+        self.check_id(&p.save)?;
         let db = self.instance_db(&p.instance).await?;
         let ps = self.ps(&p.save);
-        self.pg.drop(&ps).await.map_err(internal)?;
+        self.pg.drop(&ps).await.map_err(PartError::internal_from)?;
         // a benchmark may hold its own connection to the instance: close it for the copy
         self.pg
             .create_from_exclusive(&ps, &db)
             .await
-            .map_err(internal)?;
-        let bytes = self.pg.size(&ps).await.map_err(internal)?.unwrap_or(0);
+            .map_err(PartError::internal_from)?;
+        let bytes = self
+            .pg
+            .size(&ps)
+            .await
+            .map_err(PartError::internal_from)?
+            .unwrap_or(0);
         Ok(Saved {
             bytes: bytes.max(0) as u64,
             exact: true,
@@ -594,7 +611,7 @@ impl Part for Postgres {
                 }
             })
             .await
-            .map_err(internal)?
+            .map_err(PartError::internal_from)?
             .map_err(PartError::invalid)?;
         Ok(Docs { docs })
     }
@@ -610,35 +627,49 @@ impl Part for Postgres {
             .pg
             .with_db(&b, async |c| comparable_rows(c).await)
             .await;
-        let (ra, rb) = (ra.map_err(internal)?, rb.map_err(internal)?);
+        let (ra, rb) = (
+            ra.map_err(PartError::internal_from)?,
+            rb.map_err(PartError::internal_from)?,
+        );
         Ok(Differing::between(&ra, &rb))
     }
 
+    /// Drops the save's database; an unknown save is -32002. An old run's snapshot or final branch
+    /// database is dropped too, never `gold_*` or `world_base` (a no-op for those).
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {
-        check_id(&p.save)?;
+        self.check_id(&p.save)?;
+        let exists = async |db: &str| self.pg.exists(db).await.map_err(PartError::internal_from);
         let ps = self.ps(&p.save);
-        if self.pg.exists(&ps).await.map_err(internal)? {
-            return self.pg.drop(&ps).await.map_err(internal);
+        let db = if exists(&ps).await? {
+            ps
+        } else if self.legacy_ok(&p.save) && exists(&p.save).await? {
+            p.save.clone()
+        } else {
+            return Err(PartError::unknown(format!("unknown save {}", p.save)));
+        };
+        if db.starts_with("gold_") || db == "world_base" {
+            return Ok(());
         }
-        // An old run's snapshots and final branch database; never `gold_*` or `world_base`.
-        if self.legacy_ok(&p.save) && ["snap_", "branch_"].iter().any(|x| p.save.starts_with(x)) {
-            return self.pg.drop(&p.save).await.map_err(internal);
-        }
-        Ok(())
+        self.pg.drop(&db).await.map_err(PartError::internal_from)
     }
 
     async fn stop(&self, p: IdParams) -> Result<(), PartError> {
-        check_id(&p.instance)?;
+        self.check_id(&p.instance)?;
         // arenad saves what it wants to keep before it stops an instance.
         let db = self.pi(&p.instance);
         self.live.lock().unwrap().remove(&db);
-        self.pg.drop(&db).await.map_err(internal)
+        self.pg.drop(&db).await.map_err(PartError::internal_from)
     }
 
     async fn usage(&self) -> Result<Usage, PartError> {
         let mut bytes = 0i64;
         for kind in self.gc_kinds() {
-            for (_, size) in self.pg.list(&kind.prefix).await.map_err(internal)? {
+            for (_, size) in self
+                .pg
+                .list(&kind.prefix)
+                .await
+                .map_err(PartError::internal_from)?
+            {
                 bytes += size;
             }
         }
@@ -651,7 +682,12 @@ impl Part for Postgres {
         let live: HashSet<String> = self.live.lock().unwrap().clone();
         let mut doomed = vec![];
         for kind in self.gc_kinds() {
-            for (name, size) in self.pg.list(&kind.prefix).await.map_err(internal)? {
+            for (name, size) in self
+                .pg
+                .list(&kind.prefix)
+                .await
+                .map_err(PartError::internal_from)?
+            {
                 if !kind.is_kept(&name, &p.keep, &live) {
                     doomed.push((name, size));
                 }
@@ -659,7 +695,10 @@ impl Part for Postgres {
         }
         let mut out = GcResult::default();
         for (name, size) in doomed {
-            self.pg.drop(&name).await.map_err(internal)?;
+            self.pg
+                .drop(&name)
+                .await
+                .map_err(PartError::internal_from)?;
             out.dropped += 1;
             out.bytes += size.max(0) as u64;
         }

@@ -70,6 +70,8 @@ environment from arenad, disk only under the save storage given to it.
 - `inspect` with an empty `keys` list returns every key the part has for that target.
 - `usage` counts only what the part keeps outside `ARENA_SAVES` (databases, files elsewhere). arenad
   measures the save folders under `ARENA_SAVES` itself, so a part whose saves all live there reports 0.
+- `drop_save` of a save the part doesn't have answers `-32002` or succeeds; it is never another error.
+  arenad calls it without checking first and treats `-32002` as "already gone", which counts as success.
 - `gc` drops the saves not in `keep` (and instances that are not running). A `keep` entry is a save id,
   or an id prefix followed by `*`: `base_*` keeps every save whose id starts with `base_`. After a
   `gc`, arenad removes the folders under `ARENA_SAVES/<part>/` whose names `keep` does not keep.
@@ -90,7 +92,10 @@ A benchmark's tools reach parts only through `connect` info. Only parts with exa
 
 ## Errors
 
-JSON-RPC errors with a plain message.
+JSON-RPC errors with a plain message. They are for the protocol: a call that can't be done. A tool the
+agent called wrongly or that the part refuses for its own reasons (no such order, out of stock, a bad
+quantity) is a tool-level answer, `{error, reads, writes}` from `call_tool`, which the agent sees and can
+act on. `-32602` is only for protocol-level bad params (a bad id, a missing field, a malformed target).
 
 | Code | Meaning |
 |---|---|
@@ -113,6 +118,11 @@ Given the same `seed`, the same `fingerprint`, and the same ordered inputs (`cal
 repeat the call. A result that differs from the recorded one stops the replay with "replay diverged". A
 replay is refused when the `fingerprint` differs from the one recorded at the run's start. The conformance
 check (`arena-part-check`) tests this.
+
+So anything that changes how the part behaves must be in its `fingerprint` (its code, data files, the
+version of a program it drives) or checked at `start`: a `config` that points at other code or data than
+`describe` hashed is refused with `-32003` there. arenad also refuses an exact rerun when a replayed part's
+`{integration, config}` in the benchmark's world differs from the one the run recorded.
 
 ## Worked example
 

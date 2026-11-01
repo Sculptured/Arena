@@ -73,12 +73,14 @@ pub async fn save_exists(hub: &Hub, integration: &str, save: &str) -> Result<boo
     }
 }
 
-/// Drops `save` and the folder arenad made for it; false when there was no such save.
+/// Drops `save` and the folder arenad made for it; false when the integration answers that it
+/// has no such save (-32002: already gone, which counts as dropped).
 pub async fn drop_save(hub: &Hub, integration: &str, save: &str) -> Result<bool> {
-    let existed = save_exists(hub, integration, save).await?;
-    if existed {
-        let _: Value = call(hub, integration, "drop_save", json!({"save": save})).await?;
-    }
+    let existed = match call::<Value>(hub, integration, "drop_save", json!({"save": save})).await {
+        Ok(_) => true,
+        Err(e) if part_code(&e) == Some(-32002) => false,
+        Err(e) => return Err(e),
+    };
     hub.remove_save_dir(integration, save);
     Ok(existed)
 }

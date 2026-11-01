@@ -510,6 +510,12 @@ async fn bad_id_is_invalid_params() {
         .await
         .unwrap_err();
     assert_eq!(e.code, -32602);
+    // A valid id whose database name would not fit with the namespace.
+    let e = p
+        .start(start(&"x".repeat(60), json!({}), None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, -32602, "{}", e.message);
 }
 
 #[tokio::test]
@@ -535,6 +541,13 @@ async fn legacy_drop_save_drops_snap_and_branch_only() {
         assert!(!t.exists(&todo[0]).await.unwrap(), "snap_ is dropped");
         assert!(!t.exists(&todo[1]).await.unwrap(), "branch_ is dropped");
         assert!(t.exists(&todo[2]).await.unwrap(), "gold_ is kept");
+        // A save that isn't there (any more) is -32002: arenad counts it as already gone.
+        let gone = p
+            .drop_save(SaveId {
+                save: todo[0].clone(),
+            })
+            .await;
+        assert_eq!(gone.unwrap_err().code, -32002);
     })
     .await;
 }

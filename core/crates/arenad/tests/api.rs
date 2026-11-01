@@ -646,8 +646,13 @@ struct Toy {
 }
 
 async fn toy(tag: &str) -> Toy {
+    toy_with(tag, &[]).await
+}
+
+/// `toy` with the toy integration started with `part_args`.
+async fn toy_with(tag: &str, part_args: &[&str]) -> Toy {
     let up = FakeUpstream::start(vec![]).await;
-    let root = packages::toy_world(tag, &[], &[]);
+    let root = packages::toy_world(tag, part_args, &[]);
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let fx = setup_on(tag, hub, &up, |_| {}).await;
     let part = format!("toy-{tag}");
@@ -765,5 +770,36 @@ fn compare_prefixes_keys_in_a_two_part_world() {
         assert_eq!(v["differing_rows"], want);
         let (st, v) = t.fx.get(&format!("/api/compare?a={x}&b={z}")).await;
         assert_eq!(st, 409, "{v}");
+    })
+}
+
+/// Deleting a run drops each save its events name straight away (no probe first); a save the
+/// part says is already gone (-32002) is no error and doesn't count as dropped.
+#[test]
+fn delete_treats_an_unknown_save_as_gone() {
+    run(async {
+        let logs = packages::ToyRoot(packages::toy_dir("dellog"));
+        std::fs::create_dir_all(&logs.0).unwrap();
+        let log = logs.0.join("calls.log");
+        let t = toy_with("delgone", &["--log", &log.to_string_lossy()]).await;
+        t.save("s_d1", 1).await;
+        let events = vec![poked("s_d1"), poked("s_dgone")];
+        let b = t.branch(&["box"], json!({"box": "s_d1"}), events).await;
+        let run_id = t.fx.state.store.branch(&b).await.unwrap().run_id;
+        let url = format!("{}/api/runs/{run_id}", t.fx.base);
+        let (st, v) = app_support::send(t.fx.http.delete(url)).await;
+        assert_eq!((st, &v["dropped"]), (200, &json!(1)), "{v}");
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls.lines().filter(|l| l.starts_with("drop_save")).count(),
+            2
+        );
+        assert!(!calls.contains("inspect"), "{calls}");
+        let c = t.fx.state.hub.client(&t.part).await.unwrap();
+        let gone = c.call::<Value>("drop_save", json!({"save": "s_d1"})).await;
+        assert!(matches!(
+            gone,
+            Err(parts::CallError::Part { code: -32002, .. })
+        ));
     })
 }
