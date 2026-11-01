@@ -27,7 +27,7 @@ export default function App() {
         <span className="spacer" />
         <span
           className={`modes${h?.disk && h.disk.bytes >= h.disk.limit_bytes ? ' disk-full' : ''}`}
-          title="Space used by run databases, and the limit above which new runs are refused"
+          title="Space used by saved worlds, and the limit above which new runs are refused"
         >
           {diskLine(h)}
         </span>

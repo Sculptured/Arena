@@ -1,6 +1,6 @@
 import type {
   Branch, BranchDetail, Change, CompareResponse, Event, ForkResponse, Health, NewRunResponse,
-  RowsResponse, RunSummary, StatusEvent, TaskSummary, Team,
+  RestoreMode, RestorePlan, RowsResponse, RunSummary, StatusEvent, TaskSummary, Team,
 } from './types';
 
 export class ApiError extends Error {
@@ -38,8 +38,11 @@ export const runs = () => call<RunSummary[]>('/api/runs');
 export const branch = (id: string) => call<BranchDetail>(`/api/branches/${encodeURIComponent(id)}`);
 export const rows = (id: string, seq: number, keys: string[]) =>
   call<RowsResponse>(`/api/branches/${encodeURIComponent(id)}/rows?seq=${seq}&keys=${encodeURIComponent(keys.join(','))}`);
-export const fork = (id: string, at_seq: number, changes: Record<string, Change> = {}) =>
-  post<ForkResponse>(`/api/branches/${encodeURIComponent(id)}/fork`, { at_seq, changes });
+export const fork = (id: string, at_seq: number, changes: Record<string, Change> = {}, restore: RestoreMode = 'exact') =>
+  post<ForkResponse>(`/api/branches/${encodeURIComponent(id)}/fork`, { at_seq, changes, restore });
+/** How each part of a fork at `at_seq` would be restored; a 409 names the part that can't be. */
+export const restorePlan = (id: string, at_seq: number, restore: RestoreMode) =>
+  call<RestorePlan>(`/api/branches/${encodeURIComponent(id)}/restore-plan?at_seq=${at_seq}&restore=${restore}`);
 export const compare = (a: string, b: string) =>
   call<CompareResponse>(`/api/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
 

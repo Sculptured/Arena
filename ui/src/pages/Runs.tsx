@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteRun, runs as fetchRuns, startRun, tasks as fetchTasks } from '../api';
-import { DISK_CHANGED, StatusChip, formatTime } from '../components';
+import { ApproximateMark, DISK_CHANGED, StatusChip, formatTime } from '../components';
 import { loadTeam } from '../team';
 import type { Branch, RunSummary, TaskSummary } from '../types';
 
@@ -161,6 +161,7 @@ export default function Runs() {
                   >
                     <span className="tree-mark" aria-hidden="true">{depth ? '└' : '●'}</span>
                     <StatusChip status={b.status} />
+                    <ApproximateMark of={b} />
                     <span className="mono branch-id">{b.id.slice(0, 8)}</span>
                     {b.fork_note && <span className="fork-note">{b.fork_note}</span>}
                     <span className="spacer" />

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { health } from './api';
-import type { BranchStatus, Health } from './types';
+import { APPROXIMATE_LABEL, isApproximate, planLine } from './restore';
+import type { BranchStatus, Health, RestoredPart } from './types';
 
 const STATUS: Record<BranchStatus, { glyph: string; label: string }> = {
   running: { glyph: '◐', label: 'running' },
@@ -21,6 +22,12 @@ export function StatusChip({ status }: { status: BranchStatus }) {
   );
 }
 
+/** "Approximate restore" on a branch (or compare side) some part of which was restored approximately. */
+export function ApproximateMark({ of }: { of: { restored?: RestoredPart[] | null } }) {
+  if (!isApproximate(of)) return null;
+  return <span className="chip approx" title={of.restored?.map(planLine).join('\n')}>{APPROXIMATE_LABEL}</span>;
+}
+
 /** Pages dispatch this after they change how much disk the arena uses (e.g. delete a run). */
 export const DISK_CHANGED = 'arena:disk-changed';
 
@@ -39,14 +46,14 @@ export function useHealth(): Health | null {
   return h;
 }
 
-/** "DB 0.4 / 5 GB" (GB = 2^30 bytes); empty when the server doesn't report disk use. */
+/** "Saves 0.4 / 5 GB" (every save the arena keeps; GB = 2^30 bytes); empty when the server doesn't report disk use. */
 export function diskLine(h: Health | null): string {
   if (!h?.disk) return '';
   const gb = (n: number) => {
     const v = n / 2 ** 30;
     return v >= 10 ? Math.round(v).toString() : (Math.round(v * 10) / 10).toString();
   };
-  return `DB ${gb(h.disk.bytes)} / ${gb(h.disk.limit_bytes)} GB`;
+  return `Saves ${gb(h.disk.bytes)} / ${gb(h.disk.limit_bytes)} GB`;
 }
 
 export function modesLine(h: Health | null): string {

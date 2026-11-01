@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { branch as fetchBranch, compare } from '../api';
-import { StatusChip } from '../components';
+import { ApproximateMark, StatusChip } from '../components';
 import { formatCost, jsonDiff } from '../run/timeline';
 import { pretty } from '../run/Inspector';
-import type { CompareResponse, CompareSide, Event } from '../types';
+import { APPROXIMATE_NOTE, isApproximate, notComparedLine } from '../restore';
+import type { CompareResponse, CompareSide, Event, RowDiff } from '../types';
 
 function StepView({ id, ev }: { id: string; ev: Event | undefined }) {
   const p = (ev?.payload ?? {}) as Record<string, unknown>;
@@ -24,12 +25,35 @@ function StepView({ id, ev }: { id: string; ev: Event | undefined }) {
 function Side({ id, s }: { id: string; s: CompareSide }) {
   return (
     <div className="panel cmp-col">
-      <div className="cmp-top"><span className="mono">{id.slice(0, 8)}</span><StatusChip status={s.status} /></div>
+      <div className="cmp-top"><span className="mono">{id.slice(0, 8)}</span><StatusChip status={s.status} /><ApproximateMark of={s} /></div>
       <dl className="kv">
         <dt>Seconds</dt><dd>{s.seconds != null ? s.seconds.toFixed(1) : '–'}</dd>
         <dt>Tokens</dt><dd>{s.tokens ?? '–'}</dd>
         <dt>Cost</dt><dd>{formatCost(s.cost_usd, s.cost_source)}</dd>
       </dl>
+    </div>
+  );
+}
+
+function RowDoc({ r }: { r: RowDiff }) {
+  const d = jsonDiff(r.a ?? undefined, r.b ?? undefined);
+  return (
+    <div className="row-doc">
+      <div className="mono small">{r.key}{!r.a && <span className="muted"> (only in B)</span>}{!r.b && <span className="muted"> (only in A)</span>}</div>
+      <pre className="json diff">{d.map((l, i) => <div key={i} className={`dl dl${l.op === '+' ? 'add' : l.op === '-' ? 'del' : 'same'}`}>{l.op} {l.text}</div>)}</pre>
+    </div>
+  );
+}
+
+/** The final states' differing rows, and the parts left out (never read as "identical"). */
+export function Rows({ data }: { data: CompareResponse }) {
+  const skipped = notComparedLine(data.not_compared, 'compare');
+  return (
+    <div className="panel pane">
+      <div className="label">Differing rows ({data.differing_rows.length})</div>
+      {skipped && <p className="small">{skipped}</p>}
+      {data.differing_rows.length === 0 && <p className="muted">{skipped ? 'No differences in the parts compared.' : 'The final databases are identical.'}</p>}
+      {data.differing_rows.map((r) => <RowDoc key={r.key} r={r} />)}
     </div>
   );
 }
@@ -57,6 +81,7 @@ export default function Compare() {
         {data && (
           <>
             <div className="cmp-cols"><Side id={a} s={data.a} /><Side id={b} s={data.b} /></div>
+            {(isApproximate(data.a) || isApproximate(data.b)) && <div className="notice small">{APPROXIMATE_NOTE}</div>}
             <div className="panel pane">
               {data.first_divergent_seq != null
                 ? <strong>First divergence at step {data.first_divergent_seq}</strong>
@@ -68,19 +93,7 @@ export default function Compare() {
                 <StepView id={b} ev={evs[1].find((e) => e.seq === data.first_divergent_seq)} />
               </div>
             )}
-            <div className="panel pane">
-              <div className="label">Differing rows ({data.differing_rows.length})</div>
-              {data.differing_rows.length === 0 && <p className="muted">The final databases are identical.</p>}
-              {data.differing_rows.map((r) => {
-                const d = jsonDiff(r.a ?? undefined, r.b ?? undefined);
-                return (
-                  <div key={r.key} className="row-doc">
-                    <div className="mono small">{r.key}{!r.a && <span className="muted"> (only in B)</span>}{!r.b && <span className="muted"> (only in A)</span>}</div>
-                    <pre className="json diff">{d.map((l, i) => <div key={i} className={`dl dl${l.op === '+' ? 'add' : l.op === '-' ? 'del' : 'same'}`}>{l.op} {l.text}</div>)}</pre>
-                  </div>
-                );
-              })}
-            </div>
+            <Rows data={data} />
           </>
         )}
       </main>

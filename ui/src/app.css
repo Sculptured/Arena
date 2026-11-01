@@ -71,6 +71,7 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .chip.status-failed { color: var(--red); border-color: var(--red-line); background: var(--red-soft); }
 .chip.status-infra_error { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }
 .chip.status-interrupted { color: var(--muted); }
+.chip.approx { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }
 
 .notice { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1px solid var(--line-2); }
 .notice.error { color: var(--red); background: var(--red-soft); border-color: var(--red-line); }
@@ -110,7 +111,7 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); bo
 .run-main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); }
 .run-main > * { flex: none; }
 .run-side { width: 230px; flex: none; align-self: flex-start; padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
-.run-side .branch-row { padding: 4px 6px; gap: var(--space-2); }
+.run-side .branch-row { padding: 4px 6px; gap: 4px var(--space-2); flex-wrap: wrap; }
 .branch-row.current { background: var(--accent-soft); }
 .side-title { padding: 0 var(--space-1); }
 .side-actions { display: flex; flex-direction: column; gap: var(--space-2); align-items: stretch; border-top: 1px solid var(--line); padding-top: var(--space-3); }
@@ -158,6 +159,11 @@ pre.json.err { color: var(--red); }
 .fork-agent-top strong { align-self: center; min-width: 80px; }
 .fork-mode { width: 150px; flex: none; }
 .fork-actions { display: flex; align-items: center; gap: var(--space-3); }
+.restore-choice { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.restore-modes { display: flex; align-items: center; gap: var(--space-3); }
+.restore-mode { display: flex; align-items: center; gap: var(--space-1); cursor: pointer; }
+.restore-plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.world-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .cmp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .cmp-col { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }

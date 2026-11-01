@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { rows } from '../api';
 import { formatCost, rowKeys } from './timeline';
+import { notComparedLine, savedLine } from '../restore';
 import type { Event } from '../types';
 
 export const pretty = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? null, null, 2));
@@ -68,8 +69,8 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
             <div className="label">Reads / writes</div>
             <div className="small">reads: {reads.length ? reads.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
             <div className="small">writes: {writes.length ? writes.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
-            {p.snapshot_error && <div className="notice error">snapshot failed: {p.snapshot_error}</div>}
-            {p.snapshot && <div className="muted small">snapshot {String(p.snapshot)}</div>}
+            {p.snapshot_error && <div className="notice error">Saving after this step failed: {p.snapshot_error}</div>}
+            {savedLine(p) && <div className="muted small">{savedLine(p)}</div>}
           </div>
           <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} more={more} auto={auto} />
           {p.error ? <div className="block"><div className="label">Error</div><pre className="json err">{p.error}</pre></div> : <Block title="Result" value={p.result} />}
@@ -103,6 +104,7 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
         <>
           <div>{p.passed ? 'Passed' : 'Failed'}</div>
           {p.differing_rows?.length ? <Block title="Differing rows" value={p.differing_rows} /> : null}
+          {notComparedLine(p.unchecked, 'check') && <div className="small">{notComparedLine(p.unchecked, 'check')}</div>}
           {p.gold_db && <div className="muted small">gold db {String(p.gold_db)}</div>}
         </>
       );

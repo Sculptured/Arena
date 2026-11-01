@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { branch as fetchBranch, runs as fetchRuns, stream } from '../api';
-import { StatusChip } from '../components';
+import { ApproximateMark, StatusChip } from '../components';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
 import Timeline from '../run/Timeline';
 import { formatCost, lanes, summarize } from '../run/timeline';
 import type { Branch, BranchDetail, Event } from '../types';
+import { worldLine } from '../restore';
 import { branchTree } from './Runs';
 
 export default function Run() {
@@ -80,6 +81,7 @@ export default function Run() {
   const sm = summarize(detail, detail.events);
   const taskId = (detail.events.find((e) => e.kind === 'run_start')?.payload as any)?.task_id ?? '';
   const event = detail.events.find((e) => e.seq === selected) ?? null;
+  const world = worldLine(detail.events);
   const others = siblings.filter((b) => b.id !== detail.id && (b.status === 'passed' || b.status === 'failed'));
 
   return (
@@ -87,6 +89,7 @@ export default function Run() {
       <header className="page-head run-header">
         <h1 className="mono">{taskId ? `task ${taskId}` : 'Run'}</h1>
         <StatusChip status={detail.status} />
+        <ApproximateMark of={detail} />
         <span className="muted mono small">{detail.id.slice(0, 8)}</span>
         <span className="spacer" />
         {sm.scope && <span className="muted small">{sm.scope}</span>}
@@ -100,6 +103,7 @@ export default function Run() {
           {error && <div className="notice error" role="alert">{error}</div>}
           {detail.error && <div className="notice error">{detail.error}</div>}
           {detail.fork_note && <div className="muted small">{detail.fork_note}</div>}
+          {world && <div className="muted small world-line" title={world}>{world}</div>}
           <div className="panel pane">
             <Timeline lanes={ls} team={detail.team} selected={selected} onSelect={(s) => { setSelected(s); }} />
           </div>
@@ -134,6 +138,7 @@ export default function Run() {
                   <span className="tree-mark" aria-hidden="true">{depth ? '└' : '●'}</span>
                   <StatusChip status={b.status} />
                   <span className="mono branch-id">{b.id.slice(0, 6)}</span>
+                  <ApproximateMark of={b} />
                 </button>
               </li>
             ))}

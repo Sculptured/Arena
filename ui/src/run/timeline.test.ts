@@ -43,6 +43,8 @@ describe('lanes', () => {
     const s = (n: number) => steps.find((x) => x.seq === n)!;
     expect(s(6)).toMatchObject({ wrote: true, snapshot: true });
     expect(s(2)).toMatchObject({ wrote: false, snapshot: false });
+    const saved = lanes([ev(1, 'triage', 'tool_call', { name: 'start_line', writes: ['line/1'], snapshot: null, saves: { plant: 's2' } })], team, null);
+    expect(saved[0].steps[0].snapshot).toBe(true);
   });
 });
 

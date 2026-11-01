@@ -1,3 +1,4 @@
+import { savedParts } from '../restore';
 import type { AgentKind, AgentSpec, Branch, Change, Event, Team } from '../types';
 
 export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check';
@@ -40,7 +41,7 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
         step.kind = 'tool';
         step.label = typeof p.name === 'string' ? p.name : 'tool';
         step.wrote = nonEmpty(p.writes);
-        step.snapshot = typeof p.snapshot === 'string' && p.snapshot !== '';
+        step.snapshot = savedParts(p).length > 0;
         break;
       case 'check': step.kind = 'check'; step.label = p.passed ? 'check passed' : 'check failed'; break;
     }
