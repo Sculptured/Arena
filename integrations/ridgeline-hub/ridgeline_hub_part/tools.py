@@ -3,25 +3,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from arena_part import errors
-
-class Refusal(Exception):
-    """A tool refused the call (unknown id, mismatch, bad argument): answered as a tool-level `error`."""
-
-
-REQUIRED = object()
-TYPES = {"string": (str,), "integer": (int,), "number": (int, float), "array": (list,), "object": (dict,)}
-
-
-@dataclass(frozen=True)
-class Param:
-    name: str
-    type: str
-    default: object = REQUIRED
-
-    def check(self, value):
-        ok = isinstance(value, TYPES[self.type]) and not isinstance(value, bool)
-        if not ok and not (value is None and self.default is None):
-            raise Refusal(f"{self.name} must be of type {self.type}")
+from arena_part.params import Param, Refusal, input_schema, normalize, refused
 
 
 @dataclass(frozen=True)
@@ -37,24 +19,8 @@ class Tool:
     record: Callable | None = None  # (world, args, result): store the accepted, unchecked proposal_id
 
     def schema(self) -> dict:
-        props = {p.name: {"type": p.type} for p in self.params}
-        required = [p.name for p in self.params if p.default is REQUIRED]
         return {"name": self.name, "description": self.description, "effect": self.effect,
-                "inputSchema": {"type": "object", "properties": props, "required": required}}
-
-    def normalize(self, args) -> dict:
-        if not isinstance(args, dict):
-            raise Refusal("args must be an object")
-        out = {}
-        for p in self.params:
-            if p.name in args:
-                p.check(args[p.name])
-                out[p.name] = args[p.name]
-            elif p.default is REQUIRED:
-                raise Refusal(f"{self.name}: missing {p.name}")
-            else:
-                out[p.name] = p.default
-        return out
+                "inputSchema": input_schema(self.params)}
 
 
 def _pick(*names):
@@ -198,12 +164,12 @@ def run_tool(world, name: str, args) -> dict:
     if tool is None:
         raise errors.invalid(f"unknown tool {name}")
     try:
-        args = tool.normalize(args)
+        args = normalize(tool.name, tool.params, args)
         if tool.validate:
             tool.validate(world, args)
         result = getattr(world.market, tool.method)(*tool.args_of(args))
     except (Refusal, ValueError) as e:
-        return {"error": str(e), "reads": [], "writes": []}
+        return refused(str(e))
     if tool.record:
         tool.record(world, args, result)
     reads, writes = tool.keys(args, result)

@@ -1,0 +1,7 @@
+kind = "integration"
+name = "isaac-sim-mirror"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--directory", "../isaac-sim", "python", "-m", "isaac_part", "--mode", "mirror"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { plant_url = { type = "string" } } }

@@ -1,9 +1,5 @@
 """The arena-part/1 integration: one World per instance, saved as one JSON file."""
-import os
-import shutil
-from pathlib import Path
-
-from arena_part import Part, errors, kept
+from arena_part import Part, errors, saves, sources
 
 from . import state
 from .config import parse_config, source_files, source_hashes
@@ -14,18 +10,9 @@ NAME = "ridgeline-hub"
 SEED_NOTE = ("accepted and unused: the market has no randomness, so the replay contract holds for any seed")
 
 
-def saves_root() -> Path:
-    """Saves live at `$ARENA_SAVES/ridgeline-hub/<save>/` by convention (the package name)."""
-    return Path(os.environ.get("ARENA_SAVES", "saves")) / NAME
-
-
 def check_fingerprint(cfg):
     """The configured source files must be the ones `describe` declared, or replays would differ."""
-    declared = source_hashes(parse_config({}))
-    for name, actual in source_hashes(cfg).items():
-        if actual != declared[name]:
-            path = source_files(cfg)[name]
-            raise errors.fingerprint(f"{name} at {path} differs from the one the fingerprint declares")
+    sources.check_unchanged(source_hashes(parse_config({})), source_files(cfg))
 
 
 class RidgelineHub(Part):
@@ -42,7 +29,7 @@ class RidgelineHub(Part):
         if "instance" in target:
             return state.snapshot(self._world(target["instance"]))
         if "save" in target:
-            return state.read(saves_root() / target["save"])
+            return state.read(saves.root(NAME) / target["save"])
         raise errors.invalid("invalid params: target needs instance or save")
 
     def describe(self):
@@ -62,7 +49,7 @@ class RidgelineHub(Part):
         if from_ is not None:  # exact saves also serve approximate restores
             if not isinstance(from_, dict) or "save" not in from_:
                 raise errors.invalid("invalid params: from needs a save")
-            state.restore(world, state.read(saves_root() / from_["save"]))
+            state.restore(world, state.read(saves.root(NAME) / from_["save"]))
         self.instances[instance] = world
 
     def call_tool(self, instance, name, args, clock_ms):
@@ -87,7 +74,7 @@ class RidgelineHub(Part):
         return {"differing": sorted(k for k in da.keys() | db.keys() if da.get(k) != db.get(k))}
 
     def drop_save(self, save):
-        shutil.rmtree(saves_root() / save, ignore_errors=True)
+        saves.drop(NAME, save)
 
     def stop(self, instance):
         self.instances.pop(instance, None)
@@ -96,9 +83,4 @@ class RidgelineHub(Part):
         return {"bytes": 0}  # every save lives under ARENA_SAVES, which arenad measures itself
 
     def gc(self, keep):
-        root = saves_root()
-        doomed = [p for p in root.iterdir() if p.is_dir() and not kept(keep, p.name)] if root.is_dir() else []
-        freed = sum(f.stat().st_size for p in doomed for f in p.rglob("*") if f.is_file())
-        for p in doomed:
-            shutil.rmtree(p, ignore_errors=True)
-        return {"dropped": len(doomed), "bytes": freed}
+        return saves.gc(NAME, keep)
