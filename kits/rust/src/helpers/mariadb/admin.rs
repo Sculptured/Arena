@@ -10,6 +10,15 @@ use super::sql::{like_prefix, quote_ident};
 /// The database holding the server's identity, made when the server is first ensured.
 const META_DB: &str = "arena_meta";
 
+/// `CREATE TABLE IF NOT EXISTS` for the one-row identity table.
+fn server_table() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {}.server (one TINYINT NOT NULL PRIMARY KEY \
+         CHECK (one = 1), id CHAR(36) NOT NULL)",
+        quote_ident(META_DB)
+    )
+}
+
 impl Server {
     /// A new empty database `name` (an old one of that name is dropped first).
     pub async fn create_db(&self, name: &str) -> Result<()> {
@@ -81,12 +90,51 @@ impl Server {
     /// `one = 1`), so two ensures at once can't make two identities.
     pub(super) async fn ensure_identity(&self) -> Result<()> {
         let db = quote_ident(META_DB);
+        self.migrate_identity().await?;
         self.unlogged(&format!(
-            "CREATE DATABASE IF NOT EXISTS {db}; \
-             CREATE TABLE IF NOT EXISTS {db}.server (one TINYINT NOT NULL PRIMARY KEY \
-             CHECK (one = 1), id CHAR(36) NOT NULL); \
-             INSERT IGNORE INTO {db}.server (one, id) VALUES (1, UUID())"
+            "CREATE DATABASE IF NOT EXISTS {db}; {}; \
+             INSERT IGNORE INTO {db}.server (one, id) VALUES (1, UUID())",
+            server_table()
         ))
+        .await
+    }
+
+    /// An identity table from before the one-row key (`server (id)`) is made again with the
+    /// key, keeping its first id (a table without one gets a new id from `ensure_identity`).
+    async fn migrate_identity(&self) -> Result<()> {
+        let Some(kept) = self.old_identity().await? else {
+            return Ok(());
+        };
+        let db = quote_ident(META_DB);
+        self.with_conn(async |c| {
+            c.query_drop("SET sql_log_bin = 0").await?;
+            c.query_drop(format!("DROP TABLE {db}.server; {}", server_table()))
+                .await?;
+            if let Some(id) = kept {
+                let insert = format!("INSERT INTO {db}.server (one, id) VALUES (1, ?)");
+                c.exec_drop(insert, (id,)).await?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// `Some` when there is an identity table without the `one` column, with its first id.
+    async fn old_identity(&self) -> Result<Option<Option<String>>> {
+        let tables = "SELECT COUNT(*) FROM information_schema.TABLES \
+                      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'server'";
+        let keyed = "SELECT COUNT(*) FROM information_schema.COLUMNS \
+                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'server' AND COLUMN_NAME = 'one'";
+        let first = format!("SELECT MIN(id) FROM {}.server", quote_ident(META_DB));
+        self.with_conn(async |c| {
+            let table: Option<u64> = c.exec_first(tables, (META_DB,)).await?;
+            let keyed: Option<u64> = c.exec_first(keyed, (META_DB,)).await?;
+            if table.unwrap_or(0) == 0 || keyed.unwrap_or(0) > 0 {
+                return Ok(None);
+            }
+            let id: Option<Option<String>> = c.query_first(first).await?;
+            Ok(Some(id.flatten()))
+        })
         .await
     }
 

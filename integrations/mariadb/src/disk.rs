@@ -76,21 +76,24 @@ impl Mariadb {
         let freed = self.remove_unused_blobs().await?;
         let saves = self.manifests()?;
         for s in self.reachable_servers(&saves).await {
-            let here = match s.reference().await {
-                Ok(r) => r,
-                Err(e) => {
-                    let name = &s.config().container;
-                    eprintln!("arena-mariadb: not purging {name}: {e:#}");
-                    continue;
-                }
-            };
-            let needed = self.needed(&here, &saves);
-            let (files, now) = (s.binlog_files().await?, s.position().await?);
-            if let Some(file) = purge_target(&needed, &now, &files) {
-                s.purge_to(file).await?;
+            // One server that misbehaves must not stop the others being purged.
+            if let Err(e) = self.purge(&s, &saves).await {
+                let name = &s.config().container;
+                eprintln!("arena-mariadb: not purging {name}: {e}");
             }
         }
         Ok(freed)
+    }
+
+    /// Purges the binlog files on `s` before the oldest position still needed there.
+    async fn purge(&self, s: &Server, saves: &[(String, Manifest)]) -> Result<(), PartError> {
+        let here = s.reference().await?;
+        let needed = self.needed(&here, saves);
+        let (files, now) = (s.binlog_files().await?, s.position().await?);
+        if let Some(file) = purge_target(&needed, &now, &files) {
+            s.purge_to(file).await?;
+        }
+        Ok(())
     }
 
     fn drop_saves_not_kept(&self, keep: &[String]) -> Result<GcResult, PartError> {

@@ -33,7 +33,11 @@ database.
   (`SHOW BINLOG EVENTS`) for DDL that names `mi_<instance>` but ran under another default database (or
   none), as a `connect` client can. If it finds any, the save fails with -32001 "changes to <instance>
   were made while another database was selected, so this save can't be exact", and no manifest is
-  written.
+  written. The change stays in that instance's history, so every later save of it fails the same
+  way: it can't be saved exactly any more. To recover, start a new instance from its last good save
+  and redo the change through `sql_execute` (or with the instance's database as the default
+  database). Comments don't hide a `USE`: the check reads past `/* */`, `-- ` and `#` comments and
+  into executable comments (`/*! .. */`), for `sql_execute` and `init_sql` alike.
 - **Restore** (`from`, either mode; restores are exact): a new database, the root dump if any, then for
   each segment `mariadb-binlog --database=<db> --rewrite-db=<db>-><target>` over the binlog files
   spanning it, piped into `mariadb` inside the server container. The replay runs as a temporary account

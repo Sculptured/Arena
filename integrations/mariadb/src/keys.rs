@@ -71,13 +71,51 @@ fn token(chars: &[char], i: &mut usize, params: &mut usize) -> Tok {
     }
 }
 
+fn starts(chars: &[char], i: usize, pat: &str) -> bool {
+    pat.chars()
+        .enumerate()
+        .all(|(k, c)| chars.get(i + k) == Some(&c))
+}
+
+fn skip_line(chars: &[char], i: &mut usize) {
+    while *i < chars.len() && chars[*i] != '\n' {
+        *i += 1;
+    }
+}
+
+/// Skips what the server ignores at `chars[*i]`: whitespace and comments (`/* */`, `-- `, `#`).
+/// An executable comment (`/*!50000 .. */`, `/*M!.. */`) is code to the server, so only its
+/// markers are skipped and its body is read as tokens. Returns whether anything was skipped.
+fn skip_ignored(chars: &[char], i: &mut usize) -> bool {
+    let c = chars[*i];
+    if c.is_whitespace() {
+        *i += 1;
+    } else if starts(chars, *i, "/*!") || starts(chars, *i, "/*M!") {
+        *i += if chars[*i + 2] == 'M' { 4 } else { 3 };
+        take_while(chars, i, |c| c.is_ascii_digit());
+    } else if starts(chars, *i, "/*") {
+        *i += 2;
+        while *i < chars.len() && !starts(chars, *i, "*/") {
+            *i += 1;
+        }
+        *i = (*i + 2).min(chars.len());
+    } else if starts(chars, *i, "*/") {
+        *i += 2; // the end of an executable comment
+    } else if c == '#'
+        || (starts(chars, *i, "--") && chars.get(*i + 2).is_none_or(|c| c.is_whitespace()))
+    {
+        skip_line(chars, i);
+    } else {
+        return false;
+    }
+    true
+}
+
 fn tokens(sql: &str) -> Vec<Tok> {
     let chars: Vec<char> = sql.chars().collect();
     let (mut out, mut i, mut params) = (vec![], 0, 0);
     while i < chars.len() {
-        if chars[i].is_whitespace() {
-            i += 1;
-        } else {
+        if !skip_ignored(&chars, &mut i) {
             out.push(token(&chars, &mut i, &mut params));
         }
     }
@@ -435,6 +473,11 @@ mod tests {
     fn statements_that_cannot_be_pinned() {
         assert_eq!(k("UPDATE t SET v = 'a' WHERE id = 1; DELETE FROM u"), ["*"]);
         assert_eq!(
+            k("UPDATE t SET v = 'a' WHERE id = 1 /*!; DELETE FROM u */"),
+            ["*"]
+        );
+        assert_eq!(k("/* note */ DELETE FROM t WHERE id = 3 -- why"), ["t/3"]);
+        assert_eq!(
             k("INSERT INTO t (id, v) VALUES (1, 'a');"),
             ["t/1"],
             "a trailing ; is one statement"
@@ -466,6 +509,26 @@ mod tests {
     }
 
     #[test]
+    fn comments_do_not_hide_use() {
+        for sql in [
+            "/* x */ USE information_schema",
+            "-- c\nUSE x",
+            "# c\nUSE x",
+            "/*!50000 USE x */",
+            "/*M!100100 USE x */",
+            "SELECT 1; /* y */ use x",
+        ] {
+            assert!(changes_default_db(sql), "{sql:?}");
+        }
+        assert!(!changes_default_db("SELECT 1 -- USE x"));
+        assert!(!changes_default_db("SELECT 1 /* USE x */"));
+        assert!(
+            !changes_default_db("SELECT 1 --1"),
+            "-- needs a space to be a comment"
+        );
+    }
+
+    #[test]
     fn read_only_statements() {
         assert!(read_only("SELECT * FROM t"));
         assert!(read_only(" with x as (select 1) select * from x;"));
@@ -473,7 +536,10 @@ mod tests {
         assert!(!read_only("SELECT 1; DELETE FROM t"));
         assert!(!read_only("DELETE FROM t"));
         assert!(!read_only("CREATE TABLE z (id int)"));
-        assert!(!read_only("/* x */ SELECT 1"));
+        assert!(read_only("/* x */ SELECT 1"));
+        assert!(read_only("-- note\nSELECT 1"));
+        assert!(!read_only("/*!50000 DELETE FROM t */"));
+        assert!(!read_only("SELECT 1 /*!; DELETE FROM t */"));
     }
 
     #[test]

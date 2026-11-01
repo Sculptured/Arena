@@ -504,6 +504,41 @@ async fn check_replaced_server_refused(p: &Mariadb, e: &Env, cfg: &Value) {
     assert!(err.message.contains("replaced"), "{err}");
 }
 
+#[tokio::test]
+#[ignore]
+async fn live_mariadb_identity_migration() {
+    use arena_part::helpers::mariadb::mysql_async::prelude::Queryable;
+    let e = Env::new("identity");
+    let p = e.part();
+    p.start(start("a", &e.config(json!({})), None))
+        .await
+        .unwrap();
+    let server = e.server();
+    let old_schema = async |id: Option<&str>| {
+        let insert = id.map(|id| format!("INSERT INTO arena_meta.server VALUES ('{id}');"));
+        let sql = format!(
+            "SET sql_log_bin = 0; DROP TABLE arena_meta.server; \
+             CREATE TABLE arena_meta.server (id CHAR(36) NOT NULL); {}",
+            insert.unwrap_or_default()
+        );
+        server
+            .with_conn(async |c| Ok(c.query_drop(sql).await?))
+            .await
+            .unwrap();
+    };
+    let kept = "11111111-2222-4333-8444-555555555555";
+    old_schema(Some(kept)).await;
+    server.ensure().await.unwrap();
+    assert_eq!(server.identity().await.unwrap(), kept, "the old id is kept");
+    old_schema(None).await;
+    server.ensure().await.unwrap();
+    assert_eq!(
+        server.identity().await.unwrap().len(),
+        36,
+        "an empty old table gets an id"
+    );
+}
+
 fn build_all() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
