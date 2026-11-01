@@ -14,6 +14,9 @@ pub const MANIFEST: &str = "manifest.json";
 pub struct ServerRef {
     pub container: String,
     pub port: u16,
+    /// The server's identity: a new server behind the same container name has another.
+    #[serde(default)]
+    pub id: String,
 }
 
 /// The events of database `db` from `from` to `to`.
@@ -79,17 +82,20 @@ impl Manifest {
         self.segments.iter().map(|s| &s.from).min()
     }
 
-    /// Reads `<dir>/manifest.json`.
+    /// Reads `<dir>/manifest.json` (an error of kind `NotFound` when there is none).
     pub fn read(dir: &Path) -> io::Result<Manifest> {
         let text = std::fs::read(dir.join(MANIFEST))?;
         serde_json::from_slice(&text).map_err(io::Error::other)
     }
 
-    /// Writes `<dir>/manifest.json` (creating `dir`); returns its size.
+    /// Writes `<dir>/manifest.json` (creating `dir`) all at once: a reader sees the old file or
+    /// the new one, never part of one. Returns its size.
     pub fn write(&self, dir: &Path) -> io::Result<u64> {
         std::fs::create_dir_all(dir)?;
         let text = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
-        std::fs::write(dir.join(MANIFEST), &text)?;
+        let tmp = dir.join(format!(".{MANIFEST}.tmp"));
+        std::fs::write(&tmp, &text)?;
+        std::fs::rename(&tmp, dir.join(MANIFEST))?;
         Ok(text.len() as u64)
     }
 }

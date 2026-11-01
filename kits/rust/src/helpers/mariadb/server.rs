@@ -1,15 +1,13 @@
-//! One MariaDB server in a container: start it, query it, dump, load and replay its binlog.
+//! One MariaDB server in a container: start it and connect to it. Administration, the binlog
+//! and dumps are in `admin.rs`, `binlog.rs` and `dumps.rs`.
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts, OptsBuilder, Row};
+use mysql_async::{Conn, Opts, OptsBuilder};
 
-use super::blobs::Blobs;
-use super::docker::{self, Replay};
-use super::manifest::{Manifest, Segment, ServerRef};
-use super::position::{span, BinlogFile, Position};
-use super::sql::{like_prefix, quote_ident, valid_binlog_name};
+use super::docker;
+use super::login::Login;
 
 /// The server image; it is never pulled, so it must be present locally.
 pub const IMAGE: &str = "mariadb:11.8";
@@ -44,17 +42,27 @@ pub fn valid_docker_name(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
-/// A database name this helper creates or drops: `[a-z0-9_]{1,64}`.
-fn check_db(name: &str) -> Result<()> {
+/// A name of `[a-z0-9_]`, 1 to `max` characters.
+fn check_name(what: &str, name: &str, max: usize) -> Result<()> {
     let ok = !name.is_empty()
-        && name.len() <= 64
+        && name.len() <= max
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     if !ok {
-        bail!("{name:?} is not a database name this part uses");
+        bail!("{name:?} is not a {what} name this part uses");
     }
     Ok(())
+}
+
+/// A database name this helper creates or drops: `[a-z0-9_]{1,64}` (MariaDB's limit).
+pub(super) fn check_db(name: &str) -> Result<()> {
+    check_name("database", name, 64)
+}
+
+/// An account name: `[a-z0-9_]{1,80}` (a replay account is `rp_` and a database name).
+pub(super) fn check_account(name: &str) -> Result<()> {
+    check_name("account", name, 80)
 }
 
 /// A handle on one server. Creating it does nothing; [`Server::ensure`] starts the container.
@@ -75,26 +83,25 @@ impl Server {
         &self.config
     }
 
-    /// What a manifest records about this server.
-    pub fn reference(&self) -> ServerRef {
-        ServerRef {
-            container: self.config.container.clone(),
-            port: self.config.port,
-        }
-    }
-
-    /// Starts the container if it is not running, then waits until the server takes connections.
+    /// Starts the container if it is not running, waits until the server takes connections,
+    /// and gives a new server its identity.
     pub async fn ensure(&self) -> Result<()> {
         let cfg = self.config.clone();
         tokio::task::spawn_blocking(move || docker::ensure_container(&cfg)).await??;
-        self.wait_ready().await
+        self.wait_ready().await?;
+        self.ensure_identity().await
+    }
+
+    /// Whether the server takes connections now.
+    pub async fn reachable(&self) -> bool {
+        self.with_conn(async |_| Ok(())).await.is_ok()
     }
 
     async fn wait_ready(&self) -> Result<()> {
         let deadline = Instant::now() + READY_TIMEOUT;
         loop {
-            match self.conn(None).await {
-                Ok(c) => return Ok(c.disconnect().await?),
+            match self.with_conn(async |_| Ok(())).await {
+                Ok(()) => return Ok(()),
                 Err(e) if Instant::now() > deadline => {
                     return Err(e.context(format!("{} did not come up", self.config.container)))
                 }
@@ -103,189 +110,54 @@ impl Server {
         }
     }
 
-    fn opts(&self, db: Option<&str>) -> Opts {
+    fn opts(&self, login: &Login, db: Option<&str>) -> Opts {
         OptsBuilder::default()
             .ip_or_hostname("127.0.0.1")
             .tcp_port(self.config.port)
             .prefer_socket(false)
-            .user(Some("root"))
-            .pass(Some(self.config.root_password.clone()))
+            .user(Some(login.user.clone()))
+            .pass(Some(login.password.clone()))
             .db_name(db)
             .into()
     }
 
-    /// A connection, with `db` as the default database when given.
-    pub async fn conn(&self, db: Option<&str>) -> Result<Conn> {
-        let c = Conn::new(self.opts(db)).await;
-        c.with_context(|| format!("connecting to MariaDB in {}", self.config.container))
-    }
-
-    /// Connects with `db` as the default database, runs `f`, and closes the connection.
-    pub async fn with_db<T>(
+    /// Connects as `login`, with `db` as the default database when given, runs `f`, and closes
+    /// the connection.
+    pub async fn with_login<T>(
         &self,
-        db: &str,
+        login: &Login,
+        db: Option<&str>,
         f: impl AsyncFnOnce(&mut Conn) -> Result<T>,
     ) -> Result<T> {
-        let mut c = self.conn(Some(db)).await?;
+        let c = Conn::new(self.opts(login, db)).await;
+        let mut c =
+            c.with_context(|| format!("connecting to MariaDB in {}", self.config.container))?;
         let out = f(&mut c).await;
         let _ = c.disconnect().await;
         out
     }
 
-    /// Runs `sql` on a connection whose statements stay out of the binlog.
-    async fn unlogged(&self, sql: &str) -> Result<()> {
-        let mut c = self.conn(None).await?;
-        c.query_drop("SET sql_log_bin = 0").await?;
-        c.query_drop(sql).await?;
-        Ok(c.disconnect().await?)
+    /// Runs `f` as root with no default database.
+    pub async fn with_conn<T>(&self, f: impl AsyncFnOnce(&mut Conn) -> Result<T>) -> Result<T> {
+        self.with_login(&Login::root(&self.config), None, f).await
     }
 
-    /// A new empty database `name` (an old one of that name is dropped first).
-    pub async fn create_db(&self, name: &str) -> Result<()> {
-        self.drop_db(name).await?;
-        self.unlogged(&format!("CREATE DATABASE {}", quote_ident(name)))
+    /// Runs `f` as root with `db` as the default database.
+    pub async fn with_db<T>(
+        &self,
+        db: &str,
+        f: impl AsyncFnOnce(&mut Conn) -> Result<T>,
+    ) -> Result<T> {
+        self.with_login(&Login::root(&self.config), Some(db), f)
             .await
     }
 
-    pub async fn drop_db(&self, name: &str) -> Result<()> {
-        check_db(name)?;
-        self.unlogged(&format!("DROP DATABASE IF EXISTS {}", quote_ident(name)))
-            .await
-    }
-
-    /// The databases whose names start with `prefix`, with their sizes in bytes.
-    pub async fn databases(&self, prefix: &str) -> Result<Vec<(String, u64)>> {
-        let sql = "SELECT s.SCHEMA_NAME, CAST(COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH), 0) \
-                   AS UNSIGNED) FROM information_schema.SCHEMATA s LEFT JOIN \
-                   information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME \
-                   WHERE s.SCHEMA_NAME LIKE ? GROUP BY s.SCHEMA_NAME ORDER BY 1";
-        let mut c = self.conn(None).await?;
-        let rows: Vec<(String, u64)> = c.exec(sql, (like_prefix(prefix),)).await?;
-        c.disconnect().await?;
-        Ok(rows)
-    }
-
-    pub async fn exists(&self, db: &str) -> Result<bool> {
-        let mut c = self.conn(None).await?;
-        let sql = "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?";
-        let n: Option<u64> = c.exec_first(sql, (db,)).await?;
-        c.disconnect().await?;
-        Ok(n.unwrap_or(0) > 0)
-    }
-
-    /// The end of the binlog now.
-    pub async fn position(&self) -> Result<Position> {
-        let mut c = self.conn(None).await?;
-        let row: Option<Row> = c.query_first("SHOW BINLOG STATUS").await?;
-        c.disconnect().await?;
-        let row =
-            row.ok_or_else(|| anyhow!("binary logging is off in {}", self.config.container))?;
-        let file: String = row.get(0).context("SHOW BINLOG STATUS: no file")?;
-        let pos: u64 = row.get(1).context("SHOW BINLOG STATUS: no position")?;
-        Ok(Position::new(file, pos))
-    }
-
-    /// The binlog files on the server, oldest first.
-    pub async fn binlog_files(&self) -> Result<Vec<BinlogFile>> {
-        let mut c = self.conn(None).await?;
-        let rows: Vec<Row> = c.query("SHOW BINARY LOGS").await?;
-        c.disconnect().await?;
-        rows.into_iter()
-            .map(|r| {
-                let name: Option<String> = r.get(0);
-                let size: Option<u64> = r.get(1);
-                Ok(BinlogFile::new(
-                    name.context("no Log_name")?,
-                    size.context("no File_size")?,
-                ))
-            })
-            .collect()
-    }
-
-    /// Removes the binlog files before `file`.
-    pub async fn purge_to(&self, file: &str) -> Result<()> {
-        if !valid_binlog_name(file) {
-            bail!("{file:?} is not a binlog file name");
-        }
-        let mut c = self.conn(None).await?;
-        c.query_drop(format!("PURGE BINARY LOGS TO '{file}'"))
-            .await?;
-        Ok(c.disconnect().await?)
-    }
-
-    /// The server's version (`11.8.3-MariaDB-..`).
-    pub async fn version(&self) -> Result<String> {
-        let mut c = self.conn(None).await?;
-        let v: Option<String> = c.query_first("SELECT VERSION()").await?;
-        c.disconnect().await?;
-        v.context("SELECT VERSION() gave nothing")
-    }
-
-    /// Dumps `db` into `blobs`; returns the blob id.
-    pub async fn dump(&self, db: &str, blobs: &Blobs) -> Result<String> {
-        check_db(db)?;
-        let (cfg, db, blobs) = (self.config.clone(), db.to_string(), blobs.clone());
-        let task = move || docker::dump(&cfg, &db, |r| blobs.write_from(r));
-        tokio::task::spawn_blocking(task).await?
-    }
-
-    /// Runs the dump `id` from `blobs` in `db`, unlogged.
-    pub async fn load(&self, blobs: &Blobs, id: &str, db: &str) -> Result<()> {
-        check_db(db)?;
-        let mut src = blobs.open(id).with_context(|| format!("dump {id}"))?;
-        let (cfg, db) = (self.config.clone(), db.to_string());
-        let task = move || docker::load(&cfg, &db, &mut src);
-        tokio::task::spawn_blocking(task).await?
-    }
-
-    /// Replays `seg` (its database's events between its positions) into `into`, unlogged.
-    pub async fn apply_log(&self, seg: &Segment, into: &str) -> Result<()> {
-        check_db(&seg.db)?;
-        check_db(into)?;
-        let files = self.binlog_files().await?;
-        let names = span(&files, &seg.from, &seg.to)?;
-        let dir = self.binlog_dir().await?;
-        let replay = Replay {
-            db: seg.db.clone(),
-            into: into.to_string(),
-            files: names.iter().map(|f| format!("{dir}/{}", f.name)).collect(),
-            start: seg.from.pos,
-            stop: seg.to.pos,
-        };
-        let cfg = self.config.clone();
-        let task = move || docker::apply_binlog(&cfg, &replay);
-        tokio::task::spawn_blocking(task).await?
-    }
-
-    /// The folder of the binlog files inside the container.
-    async fn binlog_dir(&self) -> Result<String> {
-        let mut c = self.conn(None).await?;
-        let base: Option<String> = c.query_first("SELECT @@log_bin_basename").await?;
-        c.disconnect().await?;
-        let base = base.context("binary logging is off")?;
-        let (dir, _) = base.rsplit_once('/').context("odd log_bin_basename")?;
-        Ok(dir.to_string())
-    }
-
-    /// Builds `target` from `m`: a new database, the root dump, then each segment. Returns the
-    /// binlog position after, where `target`'s own changes begin. `target` is dropped on failure.
-    pub async fn restore(&self, m: &Manifest, blobs: &Blobs, target: &str) -> Result<Position> {
-        self.create_db(target).await?;
-        let built = self.rebuild(m, blobs, target).await;
-        if built.is_err() {
-            let _ = self.drop_db(target).await;
-        }
-        built?;
-        self.position().await
-    }
-
-    async fn rebuild(&self, m: &Manifest, blobs: &Blobs, target: &str) -> Result<()> {
-        if let Some(root) = &m.root {
-            self.load(blobs, root, target).await?;
-        }
-        for seg in &m.segments {
-            self.apply_log(seg, target).await?;
-        }
-        Ok(())
+    /// Runs `sql` as root on a connection whose statements stay out of the binlog.
+    pub(super) async fn unlogged(&self, sql: &str) -> Result<()> {
+        self.with_conn(async |c| {
+            c.query_drop("SET sql_log_bin = 0").await?;
+            Ok(c.query_drop(sql).await?)
+        })
+        .await
     }
 }

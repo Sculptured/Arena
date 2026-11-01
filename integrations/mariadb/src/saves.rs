@@ -1,5 +1,6 @@
 //! Saves as manifests in `$ARENA_SAVES/mariadb/<save>/manifest.json`, dumps in `.blobs/`.
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use arena_part::helpers::mariadb::{Manifest, Segment};
@@ -19,16 +20,28 @@ impl Mariadb {
         Manifest::read(&dir).map_err(|e| PartError::internal(format!("save {save}: {e}")))
     }
 
-    /// Every readable save on disk, by id (dot folders such as `.blobs` are not saves).
-    pub(crate) fn manifests(&self) -> Vec<(String, Manifest)> {
+    /// Every save on disk, by id. A folder without a manifest is not a save (dot folders such
+    /// as `.blobs` neither); a manifest that can't be read is an error, so nothing is purged or
+    /// swept on a guess.
+    pub(crate) fn manifests(&self) -> Result<Vec<(String, Manifest)>, PartError> {
         let Ok(rd) = std::fs::read_dir(self.dirs.root()) else {
-            return vec![];
+            return Ok(vec![]);
         };
-        rd.filter_map(Result::ok)
+        let mut out = vec![];
+        for name in rd
+            .filter_map(Result::ok)
             .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|name| valid_id(name))
-            .filter_map(|name| Some((name.clone(), self.manifest(&name).ok()?)))
-            .collect()
+        {
+            if !valid_id(&name) {
+                continue;
+            }
+            match Manifest::read(&self.dirs.root().join(&name)) {
+                Ok(m) => out.push((name, m)),
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(PartError::internal(format!("save {name}: {e}"))),
+            }
+        }
+        Ok(out)
     }
 
     /// The instance's base plus its changes since `start`; a dump instead when restoring that
@@ -40,55 +53,46 @@ impl Mariadb {
         let own = Segment {
             db: inst.db.clone(),
             from: inst.start.clone(),
-            to: now.clone(),
+            to: now,
         };
-        let mut m = inst.base.then(own);
-        let mut blob_bytes = 0;
-        if m.needs_dump(&files, inst.dump_after) {
-            m = self.rebase(&p.instance, &inst, now).await?;
-            blob_bytes = m.root.as_deref().map_or(0, |id| self.blobs.size(id));
+        let m = inst.base.then(own);
+        if !m.needs_dump(&files, inst.dump_after) {
+            return self.write_save(&p, &m, 0);
         }
+        // Held until the manifest naming the new dump is written, so no sweep takes it.
+        let _gate = self.blob_gate.lock().await;
+        let m = self.rebase(&p.instance, &inst).await?;
+        let blob_bytes = m.root.as_deref().map_or(0, |id| self.blobs.size(id));
+        self.write_save(&p, &m, blob_bytes)
+    }
+
+    fn write_save(&self, p: &SaveParams, m: &Manifest, extra: u64) -> Result<Saved, PartError> {
         let dir = Path::new(&p.dir);
         let bytes = m.write(dir).map_err(PartError::internal_from)?;
         self.dirs.note(&p.save, dir);
         Ok(Saved {
-            bytes: bytes + blob_bytes,
+            bytes: bytes + extra,
             exact: true,
         })
     }
 
-    /// Dumps the instance as its new base; its own changes now start at `now`.
-    async fn rebase(
-        &self,
-        id: &str,
-        inst: &Instance,
-        now: arena_part::helpers::mariadb::Position,
-    ) -> Result<Manifest, PartError> {
-        // Hold the gate until a live instance refers to the new dump, so no blob sweep runs in
-        // between and takes it for unused.
-        let _gate = self.blob_gate.lock().await;
-        let blob = inst.server.dump(&inst.db, &self.blobs).await?;
-        let m = Manifest::rooted(inst.server.reference(), blob);
+    /// Dumps the instance as its new base; its own changes now start where the dump is
+    /// consistent.
+    async fn rebase(&self, id: &str, inst: &Instance) -> Result<Manifest, PartError> {
+        let dumped = inst.server.dump(&inst.db, &self.blobs).await?;
+        let m = Manifest::rooted(inst.server_ref.clone(), dumped.blob);
         if let Some(live) = self.live.lock().expect("instances lock").get_mut(id) {
             live.base = m.clone();
-            live.start = now;
+            live.start = dumped.at;
         }
         Ok(m)
-    }
-
-    pub(crate) async fn drop_save_files(&self, save: &str) -> Result<(), PartError> {
-        self.dirs.remove(save).map_err(PartError::internal_from)?;
-        self.remove_unused_blobs().await.map(drop)
     }
 
     /// Removes dumps no save and no live instance needs; returns the bytes freed.
     pub(crate) async fn remove_unused_blobs(&self) -> Result<u64, PartError> {
         let _gate = self.blob_gate.lock().await;
-        let mut used: HashSet<String> = self
-            .manifests()
-            .into_iter()
-            .filter_map(|(_, m)| m.root)
-            .collect();
+        let saves = self.manifests()?;
+        let mut used: HashSet<String> = saves.iter().filter_map(|(_, m)| m.root.clone()).collect();
         let live = self.live.lock().expect("instances lock");
         used.extend(live.values().filter_map(|i| i.base.root.clone()));
         drop(live);

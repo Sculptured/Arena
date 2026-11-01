@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
 use arena_part::helpers::pg::{tokio_postgres, Templates};
+use arena_part::helpers::sql_tools::{
+    lookup, schemas, sql_args, tool_error, tool_output, which, KeyLookup, SqlTool,
+};
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
 use async_trait::async_trait;
@@ -170,22 +173,6 @@ impl Postgres {
     pub fn with_sql_tools(mut self) -> Postgres {
         self.sql_tools = true;
         self
-    }
-}
-
-fn tool(name: &str, description: &str, effect: Effect) -> ToolSchema {
-    ToolSchema {
-        name: name.into(),
-        description: description.into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "sql": {"type": "string"},
-                "params": {"type": "array", "items": {}, "description": "values for $1, $2, .."}
-            },
-            "required": ["sql"]
-        }),
-        effect,
     }
 }
 
@@ -452,70 +439,29 @@ async fn some_rows(
     c: &Client,
     keys: &[String],
 ) -> anyhow::Result<Result<Map<String, Value>, String>> {
-    let tables: HashMap<String, String> = pk_tables(c).await?.into_iter().collect();
+    let pks: HashMap<String, String> = pk_tables(c).await?.into_iter().collect();
     let all: Vec<(String, String)> = user_tables(c).await?;
+    let is_table = |t: &str| all.iter().any(|(s, n)| s == "public" && n == t);
     let mut out = Map::new();
     for k in keys {
-        if let Some((t, _)) = k.split_once('/') {
-            if !tables.contains_key(t) && all.iter().any(|(s, n)| s == "public" && n == t) {
-                return Ok(Err(format!(
-                    "table {t} has no single-column primary key; inspect {t}/* is not supported"
-                )));
-            }
-        }
-        let doc = match k.split_once('/') {
-            Some((t, id)) if tables.contains_key(t) => {
+        let doc = match lookup(k, &pks, is_table) {
+            Err(m) => return Ok(Err(m)),
+            Ok(KeyLookup::Missing) => Value::Null,
+            Ok(KeyLookup::Row { table, pk, id }) => {
                 let sql = format!(
                     "SELECT row_to_json(t) FROM {} t WHERE {}::text = $1",
-                    q(t),
-                    q(&tables[t])
+                    q(table),
+                    q(pk)
                 );
                 match c.query_opt(&sql, &[&id]).await? {
                     Some(r) => r.get::<_, Value>(0),
                     None => Value::Null,
                 }
             }
-            _ => Value::Null,
         };
         out.insert(k.clone(), doc);
     }
     Ok(Ok(out))
-}
-
-fn sql_tools() -> Vec<ToolSchema> {
-    vec![
-        tool(
-            "sql_query",
-            "Run a SELECT and get the rows as JSON objects.",
-            Effect::Read,
-        ),
-        tool(
-            "sql_execute",
-            "Run an INSERT, UPDATE, DELETE or other statement and get the rows affected.",
-            Effect::Write,
-        ),
-    ]
-}
-
-/// The `sql` and `params` of a tool call.
-fn sql_args(args: &Value) -> Result<(&str, Vec<Value>), String> {
-    let sql = args
-        .get("sql")
-        .and_then(Value::as_str)
-        .ok_or("sql must be a string")?;
-    let params = match args.get("params") {
-        None | Some(Value::Null) => vec![],
-        Some(Value::Array(a)) => a.clone(),
-        Some(_) => return Err("params must be a list".into()),
-    };
-    Ok((sql, params))
-}
-
-fn tool_error(m: String) -> ToolOutput {
-    ToolOutput {
-        error: Some(m),
-        ..Default::default()
-    }
 }
 
 /// The names of the databases a gc may drop, and how to read the id out of a name.
@@ -572,7 +518,11 @@ impl Part for Postgres {
             },
             uses_clock: false,
             fingerprint: json!({"server_version": version}),
-            tools: if self.sql_tools { sql_tools() } else { vec![] },
+            tools: if self.sql_tools {
+                schemas("values for $1, $2, ..")
+            } else {
+                vec![]
+            },
         })
     }
 
@@ -593,33 +543,26 @@ impl Part for Postgres {
 
     async fn call_tool(&self, p: CallToolParams) -> Result<ToolOutput, PartError> {
         let db = self.instance_db(&p.instance).await?;
-        let rows = match (p.name.as_str(), self.sql_tools) {
-            ("sql_query", true) => true,
-            ("sql_execute", true) => false,
-            (o, _) => return Ok(tool_error(format!("unknown tool {o}"))),
+        let tool = match which(&p.name, self.sql_tools) {
+            Ok(t) => t,
+            Err(out) => return Ok(out),
         };
         let (sql, params) = match sql_args(&p.args) {
             Ok(a) => a,
             Err(m) => return Ok(tool_error(m)),
         };
+        let rows = tool == SqlTool::Query;
         let res = self
             .pg
-            .with_db(&db, async |c| Ok(run_sql(c, sql, &params, rows).await))
+            .with_db(&db, async |c| Ok(run_sql(c, sql, params, rows).await))
             .await
             .map_err(internal)?;
-        Ok(match res {
-            Err(e) => tool_error(e),
-            Ok(v) if rows => ToolOutput {
-                result: Some(v),
-                reads: read_keys(sql),
-                ..Default::default()
-            },
-            Ok(v) => ToolOutput {
-                result: Some(v),
-                writes: write_keys(sql),
-                ..Default::default()
-            },
-        })
+        let keys = if rows {
+            read_keys(sql)
+        } else {
+            write_keys(sql)
+        };
+        Ok(tool_output(tool, res, keys))
     }
 
     async fn save(&self, p: SaveParams) -> Result<Saved, PartError> {
@@ -668,14 +611,7 @@ impl Part for Postgres {
             .with_db(&b, async |c| comparable_rows(c).await)
             .await;
         let (ra, rb) = (ra.map_err(internal)?, rb.map_err(internal)?);
-        let keys: HashSet<&String> = ra.keys().chain(rb.keys()).collect();
-        let mut differing: Vec<String> = keys
-            .into_iter()
-            .filter(|k| ra.get(*k) != rb.get(*k))
-            .cloned()
-            .collect();
-        differing.sort();
-        Ok(Differing { differing })
+        Ok(Differing::between(&ra, &rb))
     }
 
     async fn drop_save(&self, p: SaveId) -> Result<(), PartError> {

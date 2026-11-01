@@ -1,8 +1,9 @@
-//! `usage` and `gc`: the binlog and the databases on the servers, and the saves on disk.
-use std::collections::HashMap;
+//! `usage`, `drop_save` and `gc`: the binlog, databases and accounts on the servers, and the
+//! saves and dumps on disk.
+use std::collections::{HashMap, HashSet};
 
 use arena_part::helpers::folder;
-use arena_part::helpers::mariadb::{purge_target, Manifest, Position, Server};
+use arena_part::helpers::mariadb::{purge_target, Manifest, Position, Server, ServerRef};
 use arena_part::proto::{kept, valid_id, GcResult, Usage};
 use arena_part::PartError;
 
@@ -10,6 +11,7 @@ use crate::views::VIEW_PREFIX;
 use crate::Mariadb;
 
 const INSTANCE_PREFIX: &str = "mi_";
+const REPLAY_PREFIX: &str = "rp_";
 
 impl Mariadb {
     /// The servers this program used plus those the saves on disk name, that answer now (a
@@ -20,17 +22,16 @@ impl Mariadb {
             all.insert(s.config().container.clone(), s);
         }
         for (_, m) in saves {
-            if let (false, Ok(s)) = (
-                all.contains_key(&m.server.container),
-                self.servers.for_ref(&m.server),
-            ) {
+            if all.contains_key(&m.server.container) {
+                continue;
+            }
+            if let Ok(s) = self.servers.for_ref(&m.server) {
                 all.insert(m.server.container.clone(), s);
             }
         }
         let mut out = vec![];
         for s in all.into_values() {
-            if let Ok(c) = s.conn(None).await {
-                let _ = c.disconnect().await;
+            if s.reachable().await {
                 out.push(s);
             }
         }
@@ -39,7 +40,7 @@ impl Mariadb {
 
     pub(crate) async fn bytes_used(&self) -> Result<Usage, PartError> {
         let mut bytes = 0;
-        for s in self.reachable_servers(&self.manifests()).await {
+        for s in self.reachable_servers(&self.manifests()?).await {
             bytes += s.binlog_files().await?.iter().map(|f| f.size).sum::<u64>();
             for prefix in [INSTANCE_PREFIX, VIEW_PREFIX] {
                 bytes += s.databases(prefix).await?.iter().map(|d| d.1).sum::<u64>();
@@ -48,76 +49,101 @@ impl Mariadb {
         Ok(Usage { bytes })
     }
 
+    pub(crate) async fn drop_save_files(&self, save: &str) -> Result<(), PartError> {
+        self.dirs.remove(save).map_err(PartError::internal_from)?;
+        self.settle().await.map(drop)
+    }
+
     pub(crate) async fn collect(&self, keep: &[String]) -> Result<GcResult, PartError> {
-        let mut out = self.drop_saves_not_kept(keep);
-        let saves = self.manifests();
-        for s in self.reachable_servers(&saves).await {
-            let (n, bytes) = self.drop_idle_databases(&s).await?;
-            out.dropped += n;
-            out.bytes += bytes;
-            s.purge_to(purge_target(&self.needed(&s, &saves), &s.position().await?))
-                .await?;
+        let mut out = self.drop_saves_not_kept(keep)?;
+        for s in self.reachable_servers(&self.manifests()?).await {
+            let idle = self.drop_idle(&s).await?;
+            out.dropped += idle.dropped;
+            out.bytes += idle.bytes;
         }
-        out.bytes += self.remove_unused_blobs().await?;
+        out.bytes += self.settle().await?;
         Ok(out)
     }
 
-    fn drop_saves_not_kept(&self, keep: &[String]) -> GcResult {
+    /// After saves went: removes the dumps nothing needs and purges the binlog files before the
+    /// oldest position a save or a live instance still needs. Returns the dump bytes freed.
+    async fn settle(&self) -> Result<u64, PartError> {
+        let freed = self.remove_unused_blobs().await?;
+        let saves = self.manifests()?;
+        for s in self.reachable_servers(&saves).await {
+            let here = s.reference().await?;
+            let needed = self.needed(&here, &saves);
+            let (files, now) = (s.binlog_files().await?, s.position().await?);
+            if let Some(file) = purge_target(&needed, &now, &files) {
+                s.purge_to(file).await?;
+            }
+        }
+        Ok(freed)
+    }
+
+    fn drop_saves_not_kept(&self, keep: &[String]) -> Result<GcResult, PartError> {
         let mut out = GcResult::default();
         let Ok(rd) = std::fs::read_dir(self.dirs.root()) else {
-            return out;
+            return Ok(out);
         };
         for e in rd.filter_map(Result::ok) {
             let name = e.file_name().to_string_lossy().into_owned();
             if valid_id(&name) && !kept(keep, &name) && e.path().is_dir() {
                 let bytes = folder::size(&e.path());
-                if self.dirs.remove(&name).is_ok() {
-                    out.dropped += 1;
-                    out.bytes += bytes;
-                }
+                self.dirs
+                    .remove(&name)
+                    .map_err(|err| PartError::internal(format!("removing save {name}: {err}")))?;
+                out.dropped += 1;
+                out.bytes += bytes;
             }
         }
-        out
+        Ok(out)
     }
 
-    /// Drops the instance databases that are not live and the scratch ones nobody reads.
-    async fn drop_idle_databases(&self, s: &Server) -> Result<(u64, u64), PartError> {
-        let mut busy = self.open_views();
-        busy.extend(self.live_on(s).into_iter().map(|(db, _, _)| db));
-        let (mut n, mut bytes) = (0, 0);
+    /// The databases nobody uses: instances not running, scratch copies nobody reads, and the
+    /// accounts of either.
+    fn busy_dbs(&self) -> HashSet<String> {
+        let mut busy = self.busy.snapshot();
+        let live = self.live.lock().expect("instances lock");
+        busy.extend(live.values().map(|i| i.db.clone()));
+        busy
+    }
+
+    /// Drops idle databases (counted) and idle accounts on `s`.
+    async fn drop_idle(&self, s: &Server) -> Result<GcResult, PartError> {
+        let busy = self.busy_dbs();
+        let mut out = GcResult::default();
         for prefix in [INSTANCE_PREFIX, VIEW_PREFIX] {
             for (db, size) in s.databases(prefix).await? {
                 if !busy.contains(&db) {
                     s.drop_db(&db).await?;
-                    n += 1;
-                    bytes += size;
+                    out.dropped += 1;
+                    out.bytes += size;
                 }
             }
         }
-        Ok((n, bytes))
+        for prefix in [INSTANCE_PREFIX, REPLAY_PREFIX] {
+            for user in s.logins(prefix).await? {
+                let db = user.strip_prefix(REPLAY_PREFIX).unwrap_or(&user);
+                if !busy.contains(db) {
+                    s.drop_login(&user).await?;
+                }
+            }
+        }
+        Ok(out)
     }
 
-    /// The live instances on `s`: database, base manifest and start.
-    fn live_on(&self, s: &Server) -> Vec<(String, Manifest, Position)> {
-        let live = self.live.lock().expect("instances lock");
-        live.values()
-            .filter(|i| i.server.reference() == s.reference())
-            .map(|i| (i.db.clone(), i.base.clone(), i.start.clone()))
-            .collect()
-    }
-
-    /// The binlog positions on `s` that a kept save or a live instance still needs.
-    fn needed(&self, s: &Server, saves: &[(String, Manifest)]) -> Vec<Position> {
-        let mine = |m: &&Manifest| m.server == s.reference();
+    /// The binlog positions on the server `here` that a save or a live instance still needs.
+    fn needed(&self, here: &ServerRef, saves: &[(String, Manifest)]) -> Vec<Position> {
         let mut out: Vec<Position> = saves
             .iter()
-            .map(|(_, m)| m)
-            .filter(mine)
-            .filter_map(|m| m.oldest().cloned())
+            .filter(|(_, m)| &m.server == here)
+            .filter_map(|(_, m)| m.oldest().cloned())
             .collect();
-        for (_, base, start) in self.live_on(s) {
-            out.extend(base.oldest().cloned());
-            out.push(start);
+        let live = self.live.lock().expect("instances lock");
+        for i in live.values().filter(|i| &i.server_ref == here) {
+            out.extend(i.base.oldest().cloned());
+            out.push(i.start.clone());
         }
         out
     }

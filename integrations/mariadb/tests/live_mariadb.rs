@@ -115,6 +115,20 @@ async fn tool(p: &Mariadb, inst: &str, name: &str, sql: &str) -> ToolOutput {
     out
 }
 
+/// The error a tool call gives (it must give one).
+async fn tool_err(p: &Mariadb, inst: &str, name: &str, sql: &str) -> String {
+    let out = p
+        .call_tool(CallToolParams {
+            instance: inst.into(),
+            name: name.into(),
+            args: json!({"sql": sql}),
+            clock_ms: 0,
+        })
+        .await
+        .unwrap();
+    out.error.unwrap_or_else(|| panic!("{sql} should fail"))
+}
+
 async fn exec(p: &Mariadb, inst: &str, sql: &str) -> ToolOutput {
     tool(p, inst, "sql_execute", sql).await
 }
@@ -270,10 +284,16 @@ async fn live_mariadb_dump_threshold() {
     let m2 = Manifest::read(&e.save_dir("s2")).unwrap();
     assert_eq!(m2.root, m1.root, "the dump is the new base");
     assert_eq!(m2.segments.len(), 1);
-    rotate_binlogs(&e).await;
+    rotate_binlogs(&e, 3).await;
     p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
     assert_eq!(blob_count(&e), 1, "s2 still needs the dump");
-    check_purge_keeps_what_s2_needs(&p, &e, &m2).await;
+    assert_purged_to(&e, &m2).await;
+    p.gc(GcParams {
+        keep: vec!["s2".into()],
+    })
+    .await
+    .unwrap();
+    assert_purged_to(&e, &m2).await;
     restore(&p, &cfg, "b", "s2").await;
     let r = rows(&p, "b").await;
     assert_eq!(r[0]["v"].as_str().unwrap().len(), 5000);
@@ -281,13 +301,8 @@ async fn live_mariadb_dump_threshold() {
     check_dump_freed_last(&p, &e).await;
 }
 
-/// gc keeping s2 purges the binlog files before s2's oldest segment.
-async fn check_purge_keeps_what_s2_needs(p: &Mariadb, e: &Env, m2: &Manifest) {
-    p.gc(GcParams {
-        keep: vec!["s2".into()],
-    })
-    .await
-    .unwrap();
+/// The binlog files before s2's oldest position are gone (drop_save and gc both purge).
+async fn assert_purged_to(e: &Env, m2: &Manifest) {
     let files = e.server().binlog_files().await.unwrap();
     assert_eq!(
         files[0].name, m2.segments[0].from.file,
@@ -310,12 +325,16 @@ async fn check_dump_freed_last(p: &Mariadb, e: &Env) {
     assert_eq!(blob_count(e), 0);
 }
 
-async fn rotate_binlogs(e: &Env) {
+async fn rotate_binlogs(e: &Env, times: usize) {
     use arena_part::helpers::mariadb::mysql_async::prelude::Queryable;
-    let mut c = e.server().conn(None).await.unwrap();
-    for _ in 0..3 {
-        c.query_drop("FLUSH BINARY LOGS").await.unwrap();
-    }
+    let server = e.server();
+    let flushed = server.with_conn(async |c| {
+        for _ in 0..times {
+            c.query_drop("FLUSH BINARY LOGS").await?;
+        }
+        Ok(())
+    });
+    flushed.await.unwrap();
 }
 
 fn blob_count(e: &Env) -> usize {
@@ -326,6 +345,116 @@ fn blob_count(e: &Env) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_mariadb_exact_with_neighbours_and_rotation() {
+    let e = Env::new("exact");
+    let cfg = e.config(json!({}));
+    let p = e.part();
+    p.start(start("a", &cfg, None)).await.unwrap();
+    p.start(start("b", &cfg, None)).await.unwrap();
+    exec(&p, "a", "INSERT INTO t VALUES (1, 'a1')").await;
+    // b writes rows and DDL inside a's segment
+    exec(&p, "b", "INSERT INTO t VALUES (1, 'b1'), (2, 'b2')").await;
+    exec(&p, "b", "CREATE TABLE extra (id int primary key)").await;
+    exec(&p, "b", "ALTER TABLE t ADD COLUMN w int").await;
+    rotate_binlogs(&e, 1).await;
+    exec(&p, "a", "UPDATE t SET v = 'a1x' WHERE id = 1").await;
+    exec(&p, "b", "INSERT INTO extra VALUES (7)").await;
+    rotate_binlogs(&e, 2).await;
+    exec(&p, "a", "INSERT INTO t VALUES (3, 'a3')").await;
+    save(&p, &e, "a", "s1").await;
+    let m = Manifest::read(&e.save_dir("s1")).unwrap();
+    assert_ne!(
+        m.segments[0].from.file, m.segments[0].to.file,
+        "the segment spans files"
+    );
+    restore(&p, &cfg, "c", "s1").await;
+    check_only_a_restored(&p).await;
+}
+
+/// c equals a and holds nothing of b's.
+async fn check_only_a_restored(p: &Mariadb) {
+    assert!(differing(p, inst_t("a"), inst_t("c")).await.is_empty());
+    let tables = tool(p, "c", "sql_query", "SHOW TABLES")
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        tables.as_array().unwrap().len(),
+        1,
+        "no table of b's: {tables}"
+    );
+    let cols = tool(p, "c", "sql_query", "SELECT * FROM t WHERE id = 1").await;
+    assert_eq!(cols.result.unwrap(), json!([{"id": 1, "v": "a1x"}]));
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_mariadb_accounts_and_identity() {
+    let e = Env::new("accounts");
+    let cfg = e.config(json!({}));
+    let p = e.part();
+    p.start(start("a", &cfg, None)).await.unwrap();
+    p.start(start("other", &cfg, None)).await.unwrap();
+    check_tools_are_confined(&p).await;
+    check_qualified_ddl_fails_loudly(&p, &e, &cfg).await;
+    check_replaced_server_refused(&p, &e, &cfg).await;
+}
+
+/// An instance's account can't leave its database, turn binlogging off or purge it.
+async fn check_tools_are_confined(p: &Mariadb) {
+    let ex = "sql_execute";
+    assert!(tool_err(p, "a", ex, "SET sql_log_bin = 0")
+        .await
+        .contains("BINLOG ADMIN"));
+    assert!(tool_err(p, "a", ex, "DROP DATABASE mi_other")
+        .await
+        .contains("denied"));
+    let purge = tool_err(p, "a", ex, "PURGE BINARY LOGS TO 'binlog.000002'").await;
+    assert!(purge.contains("BINLOG ADMIN"), "{purge}");
+    assert!(tool_err(p, "a", ex, "CREATE VIEW vv AS SELECT 1")
+        .await
+        .contains("denied"));
+    let q = tool_err(p, "a", "sql_query", "DELETE FROM t").await;
+    assert!(q.contains("use sql_execute"), "{q}");
+    let url = p
+        .connect(IdParams {
+            instance: "a".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        url["url"].as_str().unwrap().starts_with("mysql://mi_a:"),
+        "{url}"
+    );
+}
+
+/// A statement naming its database replays as an account limited to the target: the restore
+/// fails and leaves nothing, and the source is untouched.
+async fn check_qualified_ddl_fails_loudly(p: &Mariadb, e: &Env, cfg: &Value) {
+    exec(p, "a", "CREATE TABLE mi_a.q (id int primary key)").await;
+    save(p, e, "a", "sq").await;
+    let err = p.start(start("b", cfg, Some("sq"))).await.unwrap_err();
+    assert!(err.message.contains("denied"), "{err}");
+    assert!(!e.server().exists("mi_b").await.unwrap());
+    assert!(e.server().logins("rp_").await.unwrap().is_empty());
+    let q = tool(p, "a", "sql_query", "SELECT COUNT(*) AS n FROM q").await;
+    assert_eq!(q.result.unwrap(), json!([{"n": 0}]));
+}
+
+/// A save whose server identity differs (a new volume behind the name) is refused with -32001.
+async fn check_replaced_server_refused(p: &Mariadb, e: &Env, cfg: &Value) {
+    exec(p, "other", "INSERT INTO t VALUES (1, 'x')").await;
+    save(p, e, "other", "so").await;
+    let mut m = Manifest::read(&e.save_dir("so")).unwrap();
+    m.server.id = "00000000-0000-0000-0000-000000000000".into();
+    m.write(&e.save_dir("so")).unwrap();
+    let err = p.start(start("c", cfg, Some("so"))).await.unwrap_err();
+    assert_eq!(err.code, -32001);
+    assert!(err.message.contains("replaced"), "{err}");
 }
 
 fn build_all() {

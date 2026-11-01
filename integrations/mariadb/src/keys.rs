@@ -176,15 +176,15 @@ impl Cursor {
         self.eat_sym(')').then_some(out)
     }
 
-    fn skip_to_word(&mut self, w: &str) -> bool {
-        while self.peek().is_some() && !self.is_word(w) {
+    /// Skips any of `words` (statement modifiers such as `IGNORE`).
+    fn skip_words(&mut self, words: &[&str]) {
+        while words.iter().any(|w| self.is_word(w)) {
             self.i += 1;
         }
-        self.eat_word(w)
     }
 }
 
-fn parse_select(c: &mut Cursor) -> Parsed {
+fn parse_select(c: &mut Cursor) -> Option<Parsed> {
     let mut p = Parsed::default();
     let mut joined = false;
     while c.peek().is_some() {
@@ -201,15 +201,26 @@ fn parse_select(c: &mut Cursor) -> Parsed {
             c.i += 1;
         }
     }
-    p
+    Some(p)
 }
 
-fn parse_insert(c: &mut Cursor) -> Parsed {
-    c.eat_word("into");
-    let mut p = Parsed {
-        tables: c.name().into_iter().collect(),
+/// One table; `None` (so `*`) when the statement's target can't be read out.
+fn one_table(c: &mut Cursor) -> Option<Parsed> {
+    Some(Parsed {
+        tables: vec![c.name()?],
         ..Parsed::default()
-    };
+    })
+}
+
+/// `INSERT [INTO] t (cols) VALUES (vals)` pins the row; a `REPLACE` may delete rows on any
+/// unique key, so it is the whole table.
+fn parse_insert(c: &mut Cursor, replace: bool) -> Option<Parsed> {
+    c.skip_words(&["low_priority", "delayed", "high_priority", "ignore"]);
+    c.eat_word("into");
+    let mut p = one_table(c)?;
+    if replace {
+        return Some(p);
+    }
     let cols = c.list(Cursor::name);
     let vals = (c.eat_word("values") || c.eat_word("value"))
         .then(|| c.list(Cursor::value))
@@ -217,16 +228,16 @@ fn parse_insert(c: &mut Cursor) -> Parsed {
     if let (Some(cols), Some(vals), true) = (cols, vals, c.at_end()) {
         p.pinned = cols.into_iter().zip(vals).collect();
     }
-    p
+    Some(p)
 }
 
-fn parse_update(c: &mut Cursor) -> Parsed {
-    let mut p = Parsed {
-        tables: c.name().into_iter().collect(),
-        ..Parsed::default()
-    };
+/// `UPDATE t SET .. [WHERE col = v]`; anything else after the table (a join, a second table,
+/// an alias) is `*`.
+fn parse_update(c: &mut Cursor) -> Option<Parsed> {
+    c.skip_words(&["low_priority", "ignore"]);
+    let mut p = one_table(c)?;
     if !c.eat_word("set") {
-        return p;
+        return None;
     }
     while let Some(col) = c.name() {
         p.assigned.push(col);
@@ -240,40 +251,58 @@ fn parse_update(c: &mut Cursor) -> Parsed {
     if c.eat_word("where") {
         p.pinned = c.sole_pin();
     }
-    p
+    Some(p)
 }
 
-fn parse_delete(c: &mut Cursor) -> Parsed {
+/// `DELETE FROM t [WHERE col = v | ORDER BY .. | LIMIT ..]`; a multi-table delete is `*`.
+fn parse_delete(c: &mut Cursor) -> Option<Parsed> {
+    c.skip_words(&["low_priority", "quick", "ignore"]);
     if !c.eat_word("from") {
-        return Parsed::default();
+        return None;
     }
-    let mut p = Parsed {
-        tables: c.name().into_iter().collect(),
-        ..Parsed::default()
-    };
-    if c.skip_to_word("where") {
+    let mut p = one_table(c)?;
+    if c.eat_word("where") {
         p.pinned = c.sole_pin();
+    } else if !(c.at_end() || c.is_word("order")) {
+        return None;
     }
-    p
+    Some(p)
 }
 
-fn parse(sql: &str) -> Parsed {
-    let mut c = Cursor {
-        toks: tokens(sql),
-        i: 0,
+/// What the statement touches; `None` when it can't be told.
+fn parse(toks: Vec<Tok>) -> Option<Parsed> {
+    let mut c = Cursor { toks, i: 0 };
+    let Some(Tok::Word(first)) = c.peek() else {
+        return None;
     };
-    let first = match c.peek() {
-        Some(Tok::Word(w)) => w.to_ascii_lowercase(),
-        _ => return Parsed::default(),
-    };
+    let first = first.to_ascii_lowercase();
     c.i += 1;
     match first.as_str() {
         "select" => parse_select(&mut c),
-        "insert" | "replace" => parse_insert(&mut c),
+        "insert" => parse_insert(&mut c, false),
+        "replace" => parse_insert(&mut c, true),
         "update" => parse_update(&mut c),
         "delete" => parse_delete(&mut c),
-        _ => Parsed::default(),
+        _ => None,
     }
+}
+
+/// Whether anything follows a `;`.
+fn several(toks: &[Tok]) -> bool {
+    toks.iter()
+        .position(|t| *t == Tok::Sym(';'))
+        .is_some_and(|i| i + 1 < toks.len())
+}
+
+/// Whether `sql` is one statement that only reads (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN).
+pub fn read_only(sql: &str) -> bool {
+    let toks = tokens(sql);
+    let reads = ["select", "with", "show", "describe", "desc", "explain"];
+    let first = match toks.first() {
+        Some(Tok::Word(w)) => reads.iter().any(|r| w.eq_ignore_ascii_case(r)),
+        _ => false,
+    };
+    first && !several(&toks)
 }
 
 /// The text of a pinned value, as `inspect` writes it in a key.
@@ -289,18 +318,29 @@ fn val_text(v: &Val, params: &[Value]) -> Option<String> {
     }
 }
 
+/// `<table>/*` for each table, sorted; `*` when there are none.
+fn whole_tables(tables: &[String]) -> Vec<String> {
+    let mut all: Vec<String> = tables.iter().map(|t| format!("{t}/*")).collect();
+    all.sort();
+    all.dedup();
+    if all.is_empty() {
+        vec!["*".into()]
+    } else {
+        all
+    }
+}
+
 /// The keys `sql` touches, given each table's one-column primary key (`pks`).
 pub fn keys(sql: &str, params: &[Value], pks: &HashMap<String, String>) -> Vec<String> {
-    let p = parse(sql);
+    let toks = tokens(sql);
+    if several(&toks) {
+        return vec!["*".into()];
+    }
+    let Some(p) = parse(toks) else {
+        return vec!["*".into()];
+    };
     let [table] = p.tables.as_slice() else {
-        let mut all: Vec<String> = p.tables.iter().map(|t| format!("{t}/*")).collect();
-        all.sort();
-        all.dedup();
-        return if all.is_empty() {
-            vec!["*".into()]
-        } else {
-            all
-        };
+        return whole_tables(&p.tables);
     };
     let is_pk = |col: &str| {
         pks.get(table)
@@ -375,6 +415,38 @@ mod tests {
             ["w/*"],
             "no known key"
         );
+    }
+
+    #[test]
+    fn statements_that_cannot_be_pinned() {
+        assert_eq!(k("UPDATE t SET v = 'a' WHERE id = 1; DELETE FROM u"), ["*"]);
+        assert_eq!(
+            k("INSERT INTO t (id, v) VALUES (1, 'a');"),
+            ["t/1"],
+            "a trailing ; is one statement"
+        );
+        assert_eq!(k("UPDATE t, u SET t.v = u.code WHERE t.id = 1"), ["*"]);
+        assert_eq!(
+            k("UPDATE t JOIN u ON t.id = u.code SET t.v = 1 WHERE t.id = 1"),
+            ["*"]
+        );
+        assert_eq!(k("DELETE t FROM t JOIN u ON t.id = u.code"), ["*"]);
+        assert_eq!(k("DELETE FROM t USING t JOIN u WHERE t.id = 1"), ["*"]);
+        assert_eq!(k("REPLACE INTO t (id, v) VALUES (1, 'a')"), ["t/*"]);
+        assert_eq!(k("INSERT IGNORE INTO t (id, v) VALUES (4, 'a')"), ["t/4"]);
+        assert_eq!(k("UPDATE LOW_PRIORITY t SET v = 1 WHERE id = 2"), ["t/2"]);
+        assert_eq!(k("DELETE FROM t ORDER BY id LIMIT 1"), ["t/*"]);
+    }
+
+    #[test]
+    fn read_only_statements() {
+        assert!(read_only("SELECT * FROM t"));
+        assert!(read_only(" with x as (select 1) select * from x;"));
+        assert!(read_only("SHOW TABLES"));
+        assert!(!read_only("SELECT 1; DELETE FROM t"));
+        assert!(!read_only("DELETE FROM t"));
+        assert!(!read_only("CREATE TABLE z (id int)"));
+        assert!(!read_only("/* x */ SELECT 1"));
     }
 
     #[test]

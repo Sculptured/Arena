@@ -2,9 +2,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
+use arena_part::helpers::folder::hex;
 use arena_part::helpers::mariadb::mysql_async::prelude::Queryable;
 use arena_part::helpers::mariadb::mysql_async::Conn;
 use arena_part::helpers::mariadb::quote_ident;
+use arena_part::helpers::sql_tools::{lookup, KeyLookup};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -62,8 +64,7 @@ async fn whole_tables(c: &mut Conn) -> Result<BTreeMap<String, Value>> {
             .collect();
         lines.sort();
         let hash = Sha256::digest(lines.join("\n").as_bytes());
-        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-        out.insert(format!("{table}/*"), json!(hex));
+        out.insert(format!("{table}/*"), json!(hex(&hash)));
     }
     Ok(out)
 }
@@ -95,14 +96,10 @@ pub async fn some_rows(
     let tables = base_tables(c).await?;
     let mut out = Map::new();
     for k in keys {
-        let doc = match k.split_once('/') {
-            Some((t, id)) if pks.contains_key(t) => one_row(c, t, &pks[t], id).await?,
-            Some((t, _)) if tables.iter().any(|x| x == t) => {
-                return Ok(Err(format!(
-                    "table {t} has no single-column primary key; inspect {t}/* is not supported"
-                )))
-            }
-            _ => Value::Null,
+        let doc = match lookup(k, &pks, |t| tables.iter().any(|x| x == t)) {
+            Err(m) => return Ok(Err(m)),
+            Ok(KeyLookup::Missing) => Value::Null,
+            Ok(KeyLookup::Row { table, pk, id }) => one_row(c, table, pk, id).await?,
         };
         out.insert(k.clone(), doc);
     }

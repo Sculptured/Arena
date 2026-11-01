@@ -2,53 +2,14 @@
 use arena_part::helpers::mariadb::mysql_async::consts::ColumnType;
 use arena_part::helpers::mariadb::mysql_async::prelude::Queryable;
 use arena_part::helpers::mariadb::mysql_async::{self as my, Conn, Params, Row};
-use arena_part::proto::{Effect, ToolSchema};
+use arena_part::helpers::sql_tools::schemas;
+use arena_part::proto::ToolSchema;
 use serde_json::{json, Map, Value};
 
-fn tool(name: &str, description: &str, effect: Effect) -> ToolSchema {
-    ToolSchema {
-        name: name.into(),
-        description: description.into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "sql": {"type": "string"},
-                "params": {"type": "array", "items": {}, "description": "values for the ? placeholders, in order"}
-            },
-            "required": ["sql"]
-        }),
-        effect,
-    }
-}
+use crate::keys::read_only;
 
 pub fn tools() -> Vec<ToolSchema> {
-    vec![
-        tool(
-            "sql_query",
-            "Run a SELECT in this instance's database and get the rows as JSON objects.",
-            Effect::Read,
-        ),
-        tool(
-            "sql_execute",
-            "Run an INSERT, UPDATE, DELETE or other statement in this instance's database and get \
-             the rows affected.",
-            Effect::Write,
-        ),
-    ]
-}
-
-/// The `sql` and `params` of a tool call.
-pub fn args(args: &Value) -> Result<(&str, &[Value]), String> {
-    let sql = args
-        .get("sql")
-        .and_then(Value::as_str)
-        .ok_or("sql must be a string")?;
-    let params = match args.get("params") {
-        None | Some(Value::Null) => &[][..],
-        Some(Value::Array(a)) => a.as_slice(),
-        Some(_) => return Err("params must be a list".into()),
-    };
-    Ok((sql, params))
+    schemas("values for the ? placeholders, in order")
 }
 
 fn param(v: &Value) -> my::Value {
@@ -130,10 +91,20 @@ pub async fn rows(
     Ok(rows.into_iter().map(row_json).collect())
 }
 
-/// `sql_query`: the rows as a JSON list.
+/// `sql_query`: the rows as a JSON list. Only one reading statement, run in a read-only
+/// transaction that is rolled back.
 pub async fn query(c: &mut Conn, sql: &str, vals: &[Value]) -> Result<Value, String> {
-    let rows = rows(c, sql, vals).await.map_err(|e| e.to_string())?;
-    Ok(Value::Array(rows.into_iter().map(Value::Object).collect()))
+    if !read_only(sql) {
+        return Err("sql_query runs one SELECT, WITH, SHOW, DESCRIBE or EXPLAIN; use sql_execute to change data".into());
+    }
+    c.query_drop("START TRANSACTION READ ONLY")
+        .await
+        .map_err(|e| e.to_string())?;
+    let got = rows(c, sql, vals).await;
+    let rolled_back = c.query_drop("ROLLBACK").await;
+    let got = got.map_err(|e| e.to_string())?;
+    rolled_back.map_err(|e| e.to_string())?;
+    Ok(Value::Array(got.into_iter().map(Value::Object).collect()))
 }
 
 /// `sql_execute`: without params any statements (several, `;`-separated, may run); with params

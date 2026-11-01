@@ -5,7 +5,8 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use arena_part::helpers::mariadb::{
-    purge_target, span, span_bytes, BinlogFile, Blobs, Manifest, Position, Segment, ServerRef,
+    dump_position, percent_encode, purge_target, span, span_bytes, BinlogFile, Blobs, Manifest,
+    Position, Segment, ServerRef,
 };
 use arena_part::helpers::temp_dir::TempDir;
 
@@ -28,6 +29,7 @@ fn server() -> ServerRef {
     ServerRef {
         container: "arena-mariadb".into(),
         port: 3307,
+        id: "5f0c7a52-0000-4000-8000-000000000001".into(),
     }
 }
 
@@ -137,16 +139,56 @@ fn manifest_reads_back_what_it_wrote() {
     ));
     let bytes = m.write(dir.path()).unwrap();
     assert!(bytes > 0);
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["manifest.json"],
+        "written by rename, no temp file left"
+    );
     assert_eq!(Manifest::read(dir.path()).unwrap(), m);
-    assert!(Manifest::read(&dir.path().join("missing")).is_err());
+    let missing = Manifest::read(&dir.path().join("missing")).unwrap_err();
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
 }
 
 #[test]
 fn purge_target_is_the_oldest_needed_file_or_the_current_one() {
+    let f = files();
     let current = pos("binlog.000010", 300);
-    let needed = [pos("binlog.000003", 50), pos("binlog.000002", 999)];
-    assert_eq!(purge_target(&needed, &current), "binlog.000002");
-    assert_eq!(purge_target(&[], &current), "binlog.000010");
+    let needed = [pos("binlog.000010", 50), pos("binlog.000003", 999)];
+    assert_eq!(purge_target(&needed, &current, &f), Some("binlog.000003"));
+    assert_eq!(purge_target(&[], &current, &f), Some("binlog.000010"));
+}
+
+#[test]
+fn purge_target_is_clamped_to_files_on_the_server() {
+    let f = files();
+    let current = pos("binlog.000010", 300);
+    // already purged past it: nothing to do
+    assert_eq!(purge_target(&[pos("binlog.000001", 4)], &current, &f), None);
+    // the first file on the server: nothing before it
+    assert_eq!(purge_target(&[pos("binlog.000002", 4)], &current, &f), None);
+    // a needed file that is missing in the middle: the newest one before it
+    assert_eq!(
+        purge_target(&[pos("binlog.000007", 4)], &current, &f),
+        Some("binlog.000003")
+    );
+}
+
+#[test]
+fn dump_head_notes_the_position() {
+    let head = "-- Position\n--\n\n-- CHANGE MASTER TO MASTER_LOG_FILE='binlog.000002', \
+                MASTER_LOG_POS=841;\n\nCREATE TABLE t (id int);";
+    assert_eq!(dump_position(head), Some(pos("binlog.000002", 841)));
+    assert_eq!(dump_position("CREATE TABLE t (id int);"), None);
+}
+
+#[test]
+fn passwords_are_percent_encoded_for_urls() {
+    assert_eq!(percent_encode("ab-C.9_~"), "ab-C.9_~");
+    assert_eq!(percent_encode("p@ss:w/rd%"), "p%40ss%3Aw%2Frd%25");
 }
 
 #[test]

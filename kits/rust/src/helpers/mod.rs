@@ -1,4 +1,4 @@
-//! Helpers for common kinds of integration. Each sits behind a cargo feature.
+//! Helpers for common kinds of integration. Most sit behind a cargo feature.
 #[cfg(feature = "compose")]
 pub mod compose;
 #[cfg(feature = "folder")]
@@ -9,6 +9,7 @@ pub mod mariadb;
 pub mod pg;
 #[cfg(feature = "folder")]
 pub mod save_dirs;
+pub mod sql_tools;
 #[cfg(feature = "compose")]
 pub mod tar_digest;
 #[cfg(feature = "folder")]

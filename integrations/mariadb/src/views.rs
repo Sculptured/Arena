@@ -1,6 +1,5 @@
 //! `inspect` and `diff`: an instance is read in place; a save is rebuilt into a scratch database
 //! `mx_<pid>_<n>` (unlogged) for the read and dropped after.
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arena_part::helpers::mariadb::mysql_async::Conn;
@@ -8,6 +7,7 @@ use arena_part::helpers::mariadb::Server;
 use arena_part::proto::{DiffParams, Differing, Docs, InspectParams, Target};
 use arena_part::PartError;
 
+use crate::instances::{check_same_server, restore_error};
 use crate::{rows, Mariadb};
 
 /// Scratch databases for reading saves start with this.
@@ -27,7 +27,8 @@ fn view_name() -> String {
 }
 
 impl Mariadb {
-    async fn open(&self, t: &Target) -> Result<Opened, PartError> {
+    /// The database to read; a save is rebuilt (the caller marks `db` busy first).
+    async fn open(&self, t: &Target, db: &str) -> Result<Opened, PartError> {
         let save = match t {
             Target::Instance { instance } => {
                 let i = self.instance(instance)?;
@@ -41,24 +42,14 @@ impl Mariadb {
         };
         let m = self.manifest(save)?;
         let server = self.servers.for_ref(&m.server)?;
-        let db = view_name();
-        self.views.lock().expect("views lock").insert(db.clone());
-        if let Err(e) = server.restore(&m, &self.blobs, &db).await {
-            self.views.lock().expect("views lock").remove(&db);
-            return Err(PartError::internal(format!("reading save {save}: {e:#}")));
-        }
+        check_same_server(save, &m.server, &server.reference().await?)?;
+        let built = server.restore(&m, &self.blobs, db).await;
+        built.map_err(|e| restore_error(save, e))?;
         Ok(Opened {
             server,
-            db,
+            db: db.to_string(),
             view: true,
         })
-    }
-
-    async fn close(&self, o: Opened) {
-        if o.view {
-            let _ = o.server.drop_db(&o.db).await;
-            self.views.lock().expect("views lock").remove(&o.db);
-        }
     }
 
     /// Runs `f` on a connection to the target's database.
@@ -67,9 +58,13 @@ impl Mariadb {
         t: &Target,
         f: impl AsyncFnOnce(&mut Conn) -> anyhow::Result<T>,
     ) -> Result<T, PartError> {
-        let o = self.open(t).await?;
+        let name = view_name();
+        let _busy = self.busy.mark(&name);
+        let o = self.open(t, &name).await?;
         let out = o.server.with_db(&o.db, f).await;
-        self.close(o).await;
+        if o.view {
+            o.server.drop_db(&o.db).await?;
+        }
         Ok(out?)
     }
 
@@ -91,18 +86,6 @@ impl Mariadb {
     pub(crate) async fn diff_targets(&self, p: DiffParams) -> Result<Differing, PartError> {
         let a = self.read(&p.a, async |c| rows::comparable(c).await).await?;
         let b = self.read(&p.b, async |c| rows::comparable(c).await).await?;
-        let keys: HashSet<&String> = a.keys().chain(b.keys()).collect();
-        let mut differing: Vec<String> = keys
-            .into_iter()
-            .filter(|k| a.get(*k) != b.get(*k))
-            .cloned()
-            .collect();
-        differing.sort();
-        Ok(Differing { differing })
-    }
-
-    /// The scratch databases being read now (gc leaves them alone).
-    pub(crate) fn open_views(&self) -> HashSet<String> {
-        self.views.lock().expect("views lock").clone()
+        Ok(Differing::between(&a, &b))
     }
 }

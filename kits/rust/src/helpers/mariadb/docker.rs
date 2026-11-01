@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 
 use anyhow::{bail, Context, Result};
 
+use super::login::Login;
 use super::server::{ServerConfig, IMAGE};
 
 /// The label on containers this helper made; any other container is never used.
@@ -101,22 +102,15 @@ fn run_container(cfg: &ServerConfig) -> Result<()> {
     output(cmd, "docker run").map(drop)
 }
 
-/// `docker exec -i <container> <tool> -uroot <args..>` with the password in `MYSQL_PWD`.
-fn exec(cfg: &ServerConfig, tool: &str, args: &[&str]) -> Command {
+/// `docker exec -i <container> <tool> -u<user> <args..>` with the password in `MYSQL_PWD`.
+fn exec(cfg: &ServerConfig, login: &Login, tool: &str, args: &[&str]) -> Command {
     let mut cmd = docker();
-    cmd.args([
-        "exec",
-        "-i",
-        "-e",
-        "MYSQL_PWD",
-        &cfg.container,
-        tool,
-        "-uroot",
-    ])
-    .args(args)
-    .env("MYSQL_PWD", &cfg.root_password)
-    .stdin(Stdio::null())
-    .stdout(Stdio::null());
+    let user = format!("-u{}", login.user);
+    cmd.args(["exec", "-i", "-e", "MYSQL_PWD", &cfg.container, tool, &user])
+        .args(args)
+        .env("MYSQL_PWD", &login.password)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
     cmd
 }
 
@@ -160,7 +154,8 @@ impl Running {
     }
 }
 
-/// Streams `mariadb-dump` of `db` into `sink`.
+/// Streams `mariadb-dump` of `db` (as root) into `sink`. The dump notes the binlog position
+/// it is consistent with (`--master-data=2`, as a comment).
 pub fn dump<T>(
     cfg: &ServerConfig,
     db: &str,
@@ -168,22 +163,23 @@ pub fn dump<T>(
 ) -> Result<T> {
     let args = [
         "--single-transaction",
+        "--master-data=2",
         "--skip-dump-date",
-        "--routines",
-        "--triggers",
         db,
     ];
-    let mut cmd = exec(cfg, "mariadb-dump", &args);
+    let mut cmd = exec(cfg, &Login::root(cfg), "mariadb-dump", &args);
     cmd.stdout(Stdio::piped());
     let mut run = Running::spawn(cmd, "mariadb-dump")?;
+    // The pipe closes when `sink` returns, so a failed sink never leaves the dump blocked.
     let got = sink(&mut run.stdout());
-    run.finish()?;
-    Ok(got?)
+    let done = run.finish();
+    let got = got.context("storing the dump")?;
+    done.map(|()| got)
 }
 
-/// Runs the SQL read from `src` in `db`, unlogged.
-pub fn load(cfg: &ServerConfig, db: &str, src: &mut dyn Read) -> Result<()> {
-    let mut cmd = exec(cfg, "mariadb", &[UNLOGGED, db]);
+/// Runs the SQL read from `src` in `db` as `login`, unlogged.
+pub fn load(cfg: &ServerConfig, login: &Login, db: &str, src: &mut dyn Read) -> Result<()> {
+    let mut cmd = exec(cfg, login, "mariadb", &[UNLOGGED, db]);
     cmd.stdin(Stdio::piped());
     let mut run = Running::spawn(cmd, "mariadb")?;
     let mut stdin = run.child.stdin.take().expect("stdin was piped");
@@ -202,8 +198,8 @@ pub struct Replay {
     pub stop: u64,
 }
 
-/// `mariadb-binlog` over the replay's files, piped into `mariadb` (unlogged).
-pub fn apply_binlog(cfg: &ServerConfig, r: &Replay) -> Result<()> {
+/// `mariadb-binlog` over the replay's files, piped into `mariadb` as `login` (unlogged).
+pub fn apply_binlog(cfg: &ServerConfig, login: &Login, r: &Replay) -> Result<()> {
     let filter = format!("--database={}", r.db);
     let rewrite = format!("--rewrite-db={}->{}", r.db, r.into);
     let (start, stop) = (
@@ -212,10 +208,10 @@ pub fn apply_binlog(cfg: &ServerConfig, r: &Replay) -> Result<()> {
     );
     let mut args = vec![filter.as_str(), &rewrite, &start, &stop];
     args.extend(r.files.iter().map(String::as_str));
-    let mut read = exec(cfg, "mariadb-binlog", &args);
+    let mut read = exec(cfg, &Login::root(cfg), "mariadb-binlog", &args);
     read.stdout(Stdio::piped());
     let mut reader = Running::spawn(read, "mariadb-binlog")?;
-    let mut apply = exec(cfg, "mariadb", &[UNLOGGED, &r.into]);
+    let mut apply = exec(cfg, login, "mariadb", &[UNLOGGED, &r.into]);
     apply.stdin(reader.stdout());
     let applier = Running::spawn(apply, "mariadb (applying the binlog)")?;
     let applied = applier.finish();

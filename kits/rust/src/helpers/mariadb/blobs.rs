@@ -10,6 +10,8 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use sha2::{Digest, Sha256};
 
+use crate::helpers::folder::hex;
+
 const SUFFIX: &str = ".sql.gz";
 
 /// A folder of gzipped SQL dumps, each named by the hash of its content.
@@ -119,8 +121,4 @@ fn write_gz(r: &mut impl Read, path: &Path) -> io::Result<String> {
     }
     gz.finish()?.sync_all()?;
     Ok(hex(&hash.finalize()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

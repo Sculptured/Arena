@@ -104,11 +104,29 @@ pub fn span_bytes(files: &[BinlogFile], from: &Position, to: &Position) -> u64 {
     size(&from.file).saturating_sub(from.pos) + middle + to.pos
 }
 
-/// The file to `PURGE BINARY LOGS TO`: the one holding the oldest position still needed, or the
-/// current file when nothing is needed. Only files before it are removed.
+/// The file to `PURGE BINARY LOGS TO`, if any: the newest file on the server (`files`) not after
+/// the one holding the oldest position still needed, or the current file when nothing is needed.
+/// Only files before it are removed, so `None` when that is the first file on the server.
 pub fn purge_target<'a>(
     needed: impl IntoIterator<Item = &'a Position>,
-    current: &'a Position,
-) -> &'a str {
-    needed.into_iter().min().map_or(&current.file, |p| &p.file)
+    current: &Position,
+    files: &'a [BinlogFile],
+) -> Option<&'a str> {
+    let keep_from = file_seq(&needed.into_iter().min().unwrap_or(current).file);
+    let target = files
+        .iter()
+        .filter(|f| file_seq(&f.name) <= keep_from)
+        .max_by_key(|f| file_seq(&f.name))?;
+    let first = files.iter().map(|f| file_seq(&f.name)).min();
+    (Some(file_seq(&target.name)) != first).then_some(target.name.as_str())
+}
+
+/// The binlog position a `mariadb-dump --master-data=2` notes in its head
+/// (`-- CHANGE MASTER TO MASTER_LOG_FILE='binlog.000002', MASTER_LOG_POS=841;`).
+pub fn dump_position(head: &str) -> Option<Position> {
+    let rest = head.split("MASTER_LOG_FILE='").nth(1)?;
+    let (file, rest) = rest.split_once('\'')?;
+    let rest = rest.split("MASTER_LOG_POS=").nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    Some(Position::new(file, digits.parse().ok()?))
 }

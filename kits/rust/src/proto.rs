@@ -1,4 +1,6 @@
 //! Wire types of arena-part/1. See docs/protocol.md.
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -194,6 +196,19 @@ pub struct Differing {
     pub differing: Vec<String>,
 }
 
+impl Differing {
+    /// The keys whose docs differ between `a` and `b` (a key only one side has differs), sorted.
+    pub fn between<V: PartialEq>(a: &BTreeMap<String, V>, b: &BTreeMap<String, V>) -> Differing {
+        let keys: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+        let differing = keys
+            .into_iter()
+            .filter(|k| a.get(*k) != b.get(*k))
+            .cloned()
+            .collect();
+        Differing { differing }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdParams {
     pub instance: String,
@@ -312,6 +327,14 @@ mod tests {
         let keep = ["s_1", "gold_*"];
         assert!(kept(&keep, "s_1") && kept(&keep, "gold_x_1"));
         assert!(!kept(&keep, "s_12") && !kept(&keep, "xgold_1"));
+    }
+
+    #[test]
+    fn differing_between_maps() {
+        let a: BTreeMap<String, i32> = [("x".into(), 1), ("y".into(), 2)].into();
+        let b: BTreeMap<String, i32> = [("y".into(), 3), ("z".into(), 4), ("x".into(), 1)].into();
+        assert_eq!(Differing::between(&a, &b).differing, ["y", "z"]);
+        assert!(Differing::between(&a, &a).differing.is_empty());
     }
 
     #[test]

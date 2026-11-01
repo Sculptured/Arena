@@ -1,6 +1,7 @@
 //! The `mariadb` integration: each instance is a database `mi_<instance>` on a dedicated MariaDB
 //! server with row-based binary logging, and each save records how to rebuild it: an optional
 //! dump plus binlog segments (see `arena_part::helpers::mariadb`). Saves restore exactly.
+mod busy;
 mod disk;
 mod instances;
 mod keys;
@@ -11,20 +12,21 @@ mod settings;
 mod sql;
 mod views;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use arena_part::helpers::mariadb::{Blobs, IMAGE};
+use arena_part::helpers::mariadb::{percent_encode, Blobs, IMAGE};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub use keys::keys;
+pub use keys::{keys, read_only};
 pub use settings::{Settings, DEFAULT_DUMP_AFTER};
 
+use busy::BusySet;
 use instances::Instance;
 use servers::Servers;
 
@@ -35,8 +37,8 @@ pub struct Mariadb {
     sql_tools: bool,
     servers: Servers,
     live: Mutex<HashMap<String, Instance>>,
-    /// Scratch databases being read for `inspect` and `diff`.
-    views: Mutex<HashSet<String>>,
+    /// Databases being built (starts) or read (saves for `inspect` and `diff`).
+    busy: BusySet,
     /// Held while a dump is made and while unused dumps are removed.
     blob_gate: tokio::sync::Mutex<()>,
 }
@@ -60,7 +62,7 @@ impl Mariadb {
             sql_tools: false,
             servers: Servers::default(),
             live: Mutex::new(HashMap::new()),
-            views: Mutex::new(HashSet::new()),
+            busy: BusySet::default(),
             blob_gate: tokio::sync::Mutex::new(()),
         }
     }
@@ -132,9 +134,8 @@ impl Part for Mariadb {
 
     async fn connect(&self, p: IdParams) -> R<Value> {
         let i = self.instance(&p.instance)?;
-        let c = i.server.config();
-        Ok(json!({
-            "url": format!("mysql://root:{}@127.0.0.1:{}/{}", c.root_password, c.port, i.db),
-        }))
+        let (user, pass) = (&i.login.user, percent_encode(&i.login.password));
+        let port = i.server.config().port;
+        Ok(json!({"url": format!("mysql://{user}:{pass}@127.0.0.1:{port}/{}", i.db)}))
     }
 }
