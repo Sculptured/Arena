@@ -197,8 +197,7 @@ impl Part for Sculptured {
     }
 
     /// Stops every instance this value did not start (leaked by a program that ended without
-    /// stopping them), then drops the saves `keep` does not keep.
-    /// Stops the leaked instances and drops the saves not kept; a failing stop doesn't keep the
+    /// stopping them), then drops the saves `keep` does not keep. A failing stop doesn't keep the
     /// rest from being done, and every failure is reported at the end.
     async fn gc(&self, p: GcParams) -> R<GcResult> {
         let stopped = self.stop_leaked().await;

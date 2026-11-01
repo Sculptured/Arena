@@ -19,9 +19,10 @@ counts() {
   local runner=$1 sql=""
   shift
   for k in "$@"; do
-    sql+="${sql:+ || '/' || }sum(case when $(name_column "$runner") like '${k}\\_%' then 1 else 0 end)"
+    sql+="${sql:+, }sum(case when $(name_column "$runner") like '${k}\\_%' then 1 else 0 end)"
   done
-  "$runner" "select $sql from $(db_table "$runner")"
+  # concat_ws joins in both Postgres and MariaDB (where || is logical OR)
+  "$runner" "select concat_ws('/', $sql) from $(db_table "$runner")"
 }
 
 name_column() { [ "$1" = pg ] && echo datname || echo schema_name; }
