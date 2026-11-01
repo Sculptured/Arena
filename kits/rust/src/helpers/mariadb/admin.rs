@@ -77,21 +77,25 @@ impl Server {
     }
 
     /// Gives the server a random identity once, so a save can tell a replaced server (a new
-    /// volume behind the same name) from the one it was made on.
+    /// volume behind the same name) from the one it was made on. The table holds one row (key
+    /// `one = 1`), so two ensures at once can't make two identities.
     pub(super) async fn ensure_identity(&self) -> Result<()> {
         let db = quote_ident(META_DB);
         self.unlogged(&format!(
             "CREATE DATABASE IF NOT EXISTS {db}; \
-             CREATE TABLE IF NOT EXISTS {db}.server (id CHAR(36) NOT NULL); \
-             INSERT INTO {db}.server SELECT UUID() FROM DUAL \
-             WHERE NOT EXISTS (SELECT 1 FROM {db}.server)"
+             CREATE TABLE IF NOT EXISTS {db}.server (one TINYINT NOT NULL PRIMARY KEY \
+             CHECK (one = 1), id CHAR(36) NOT NULL); \
+             INSERT IGNORE INTO {db}.server (one, id) VALUES (1, UUID())"
         ))
         .await
     }
 
     /// The server's identity (see `ensure_identity`).
     pub async fn identity(&self) -> Result<String> {
-        let sql = format!("SELECT id FROM {}.server LIMIT 1", quote_ident(META_DB));
+        let sql = format!(
+            "SELECT id FROM {}.server WHERE one = 1",
+            quote_ident(META_DB)
+        );
         let id: Option<String> = self
             .with_conn(async |c| Ok(c.query_first(sql).await?))
             .await

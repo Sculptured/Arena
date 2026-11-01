@@ -49,9 +49,14 @@ impl Mariadb {
         Ok(Usage { bytes })
     }
 
+    /// Removes the save's folder; tidying up after it (dumps, binlog) is best effort, since the
+    /// save itself is gone either way.
     pub(crate) async fn drop_save_files(&self, save: &str) -> Result<(), PartError> {
         self.dirs.remove(save).map_err(PartError::internal_from)?;
-        self.settle().await.map(drop)
+        if let Err(e) = self.settle().await {
+            eprintln!("arena-mariadb: dropped save {save}, but tidying up failed: {e}");
+        }
+        Ok(())
     }
 
     pub(crate) async fn collect(&self, keep: &[String]) -> Result<GcResult, PartError> {
@@ -71,7 +76,14 @@ impl Mariadb {
         let freed = self.remove_unused_blobs().await?;
         let saves = self.manifests()?;
         for s in self.reachable_servers(&saves).await {
-            let here = s.reference().await?;
+            let here = match s.reference().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let name = &s.config().container;
+                    eprintln!("arena-mariadb: not purging {name}: {e:#}");
+                    continue;
+                }
+            };
             let needed = self.needed(&here, &saves);
             let (files, now) = (s.binlog_files().await?, s.position().await?);
             if let Some(file) = purge_target(&needed, &now, &files) {

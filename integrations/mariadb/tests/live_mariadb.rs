@@ -232,6 +232,10 @@ async fn check_lifecycle(p: &Mariadb, e: &Env, cfg: &Value) {
     .await
     .unwrap();
     assert!(!e.server().exists("mi_b").await.unwrap());
+    assert!(
+        e.server().logins("mi_b").await.unwrap().is_empty(),
+        "stop drops the account"
+    );
     let r = p.gc(GcParams { keep: vec![] }).await.unwrap();
     assert_eq!(r.dropped, 1, "s2 dropped; live instances stay: {r:?}");
     assert!(e.server().exists("mi_a").await.unwrap());
@@ -402,6 +406,51 @@ async fn live_mariadb_accounts_and_identity() {
     check_tools_are_confined(&p).await;
     check_qualified_ddl_fails_loudly(&p, &e, &cfg).await;
     check_replaced_server_refused(&p, &e, &cfg).await;
+    check_ddl_from_another_default_db_refuses_save(&p, &e, &cfg).await;
+}
+
+/// DDL on the instance's database with another default database selected is not in its
+/// segment: `USE` is refused in tools, and a save after such DDL from a `connect` client fails.
+async fn check_ddl_from_another_default_db_refuses_save(p: &Mariadb, e: &Env, cfg: &Value) {
+    p.start(start("d", cfg, None)).await.unwrap();
+    let u = tool_err(
+        p,
+        "d",
+        "sql_execute",
+        "USE information_schema; CREATE TABLE mi_d.z (id int)",
+    );
+    assert!(u.await.contains("USE"));
+    run_without_default_db(p, "d", "CREATE TABLE mi_d.z (id int)").await;
+    let dir = e.save_dir("sz");
+    let saved = p.save(SaveParams {
+        instance: "d".into(),
+        save: "sz".into(),
+        dir: dir.to_string_lossy().into(),
+    });
+    let err = saved.await.unwrap_err();
+    assert_eq!(err.code, -32001, "{err}");
+    assert!(
+        err.message.contains("another database was selected"),
+        "{err}"
+    );
+    assert!(!dir.join("manifest.json").exists(), "no manifest written");
+}
+
+/// Runs `sql` through the instance's `connect` account, with no default database.
+async fn run_without_default_db(p: &Mariadb, inst: &str, sql: &str) {
+    use arena_part::helpers::mariadb::mysql_async::{prelude::Queryable, Conn, Opts};
+    let info = p
+        .connect(IdParams {
+            instance: inst.into(),
+        })
+        .await
+        .unwrap();
+    let url = info["url"].as_str().unwrap();
+    assert!(url.starts_with(&format!("mysql://mi_{inst}:")), "{url}");
+    let no_db = &url[..url.rfind('/').unwrap()];
+    let mut c = Conn::new(Opts::from_url(no_db).unwrap()).await.unwrap();
+    c.query_drop(sql).await.unwrap();
+    c.disconnect().await.unwrap();
 }
 
 /// An instance's account can't leave its database, turn binlogging off or purge it.
@@ -418,18 +467,16 @@ async fn check_tools_are_confined(p: &Mariadb) {
     assert!(tool_err(p, "a", ex, "CREATE VIEW vv AS SELECT 1")
         .await
         .contains("denied"));
+    let u = tool_err(
+        p,
+        "a",
+        ex,
+        "INSERT INTO t VALUES (5, 'x'); USE information_schema",
+    )
+    .await;
+    assert!(u.contains("USE"), "{u}");
     let q = tool_err(p, "a", "sql_query", "DELETE FROM t").await;
     assert!(q.contains("use sql_execute"), "{q}");
-    let url = p
-        .connect(IdParams {
-            instance: "a".into(),
-        })
-        .await
-        .unwrap();
-    assert!(
-        url["url"].as_str().unwrap().starts_with("mysql://mi_a:"),
-        "{url}"
-    );
 }
 
 /// A statement naming its database replays as an account limited to the target: the restore

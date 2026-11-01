@@ -20,11 +20,20 @@ database.
   TABLES`. Tools, `init_sql` and `connect` use it, so they can't turn binlogging off, purge the binlog or
   reach another database. Views, triggers, routines and events are not allowed: their `DEFINER` names an
   account that would not exist under the restored name. `stop` drops the account.
-- **Start:** a fresh instance is an empty database plus the config's `init_sql`; its own changes are
-  the binlog from the position after the `CREATE DATABASE`.
+- **Start:** a fresh instance is an empty database and its account, then the config's `init_sql` run
+  by that account. Its `start` position (where its own changes begin) is read after the database and
+  account are made and before `init_sql`, so `init_sql` is part of its changes. A restored instance's
+  `start` is read after the replay (see Restore), so the replayed history is not.
 - **Save:** `$ARENA_SAVES/mariadb/<save>/manifest.json` = `{server, root, segments}`: the manifest the
   instance started from, plus the segment `{db: mi_<instance>, from: start, to: now}`. A restored
-  instance's saves are its parent's manifest plus its own segment. No dump is made.
+  instance's saves are its parent's manifest plus its own segment. Usually no dump is made; see Dumps
+  for when one is.
+- **Exactness check:** `mariadb-binlog --database` picks events by the default database they ran
+  under. `sql_execute` refuses `USE`, and each save scans the instance's new binlog range
+  (`SHOW BINLOG EVENTS`) for DDL that names `mi_<instance>` but ran under another default database (or
+  none), as a `connect` client can. If it finds any, the save fails with -32001 "changes to <instance>
+  were made while another database was selected, so this save can't be exact", and no manifest is
+  written.
 - **Restore** (`from`, either mode; restores are exact): a new database, the root dump if any, then for
   each segment `mariadb-binlog --database=<db> --rewrite-db=<db>-><target>` over the binlog files
   spanning it, piped into `mariadb` inside the server container. The replay runs as a temporary account

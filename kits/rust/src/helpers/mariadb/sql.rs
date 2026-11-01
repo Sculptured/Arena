@@ -25,3 +25,29 @@ pub fn valid_binlog_name(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
 }
+
+fn ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Whether `text` names the database `db` as a whole identifier (any case, backticked or not).
+pub fn names_db(text: &str, db: &str) -> bool {
+    let (text, db) = (text.to_ascii_lowercase(), db.to_ascii_lowercase());
+    text.match_indices(&db).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + db.len()..].chars().next();
+        !before.is_some_and(ident_char) && !after.is_some_and(ident_char)
+    })
+}
+
+/// Whether a Query event (its `SHOW BINLOG EVENTS` info: `use `x`; <sql>`, or just `<sql>` with
+/// no default database) changes `db` while another default database (or none) was selected.
+/// Such an event is not in `db`'s segment, which `mariadb-binlog --database` picks by default
+/// database.
+pub fn query_misplaced(info: &str, db: &str) -> bool {
+    let (current, text) = match info.strip_prefix("use `").and_then(|r| r.split_once("`; ")) {
+        Some((current, text)) => (Some(current), text),
+        None => (None, info),
+    };
+    current != Some(db) && names_db(text, db)
+}

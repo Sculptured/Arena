@@ -5,8 +5,8 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use arena_part::helpers::mariadb::{
-    dump_position, percent_encode, purge_target, span, span_bytes, BinlogFile, Blobs, Manifest,
-    Position, Segment, ServerRef,
+    dump_position, names_db, percent_encode, purge_target, query_misplaced, span, span_bytes,
+    BinlogFile, Blobs, Manifest, Position, Segment, ServerRef,
 };
 use arena_part::helpers::temp_dir::TempDir;
 
@@ -211,4 +211,33 @@ fn blobs_are_content_addressed_and_removed_when_unreferenced() {
     assert!(blobs.open(&a).is_ok());
     assert!(blobs.open(&b).is_err());
     assert!(blobs.open("../escape").is_err(), "ids are hex digests only");
+}
+
+#[test]
+fn names_db_matches_whole_identifiers_in_any_case() {
+    assert!(names_db("CREATE TABLE mi_a.q (id int)", "mi_a"));
+    assert!(names_db("drop table `MI_A`.`q`", "mi_a"));
+    assert!(!names_db("CREATE TABLE mi_ab.q (id int)", "mi_a"));
+    assert!(!names_db("CREATE TABLE xmi_a.q (id int)", "mi_a"));
+    assert!(!names_db("CREATE TABLE q (id int)", "mi_a"));
+}
+
+#[test]
+fn query_events_under_another_default_db_are_misplaced() {
+    let db = "mi_a";
+    assert!(!query_misplaced(
+        "use `mi_a`; CREATE TABLE mi_a.q (id int)",
+        db
+    ));
+    assert!(!query_misplaced("use `mi_a`; CREATE TABLE q (id int)", db));
+    assert!(
+        query_misplaced("CREATE TABLE mi_a.q (id int)", db),
+        "no default db"
+    );
+    assert!(query_misplaced(
+        "use `information_schema`; CREATE TABLE `mi_a`.q (id int)",
+        db
+    ));
+    assert!(!query_misplaced("use `mi_b`; CREATE TABLE q (id int)", db));
+    assert!(!query_misplaced("BEGIN", db));
 }

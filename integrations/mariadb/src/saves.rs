@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use arena_part::helpers::mariadb::{Manifest, Segment};
+use arena_part::helpers::mariadb::{Manifest, Position, Segment};
 use arena_part::proto::{valid_id, SaveParams, Saved};
 use arena_part::PartError;
 
@@ -49,6 +49,7 @@ impl Mariadb {
     pub(crate) async fn save_instance(&self, p: SaveParams) -> Result<Saved, PartError> {
         let inst = self.instance(&p.instance)?;
         let now = inst.server.position().await?;
+        self.check_segment(&p.instance, &inst, &now).await?;
         let files = inst.server.binlog_files().await?;
         let own = Segment {
             db: inst.db.clone(),
@@ -64,6 +65,32 @@ impl Mariadb {
         let m = self.rebase(&p.instance, &inst).await?;
         let blob_bytes = m.root.as_deref().map_or(0, |id| self.blobs.size(id));
         self.write_save(&p, &m, blob_bytes)
+    }
+
+    /// -32001 when, since the last check, DDL changed the instance's database while another
+    /// default database (or none) was selected, as a `connect` client can: its segment would miss
+    /// that change. Otherwise the instance is checked up to `now`.
+    async fn check_segment(
+        &self,
+        id: &str,
+        inst: &Instance,
+        now: &Position,
+    ) -> Result<(), PartError> {
+        let found = inst
+            .server
+            .misplaced_queries(&inst.db, &inst.checked, now)
+            .await?;
+        if !found.is_empty() {
+            return Err(PartError::cant_restore(format!(
+                "changes to {id} were made while another database was selected, so this save \
+                 can't be exact ({})",
+                found[0]
+            )));
+        }
+        if let Some(live) = self.live.lock().expect("instances lock").get_mut(id) {
+            live.checked.clone_from(now);
+        }
+        Ok(())
     }
 
     fn write_save(&self, p: &SaveParams, m: &Manifest, extra: u64) -> Result<Saved, PartError> {
@@ -83,6 +110,7 @@ impl Mariadb {
         let m = Manifest::rooted(inst.server_ref.clone(), dumped.blob);
         if let Some(live) = self.live.lock().expect("instances lock").get_mut(id) {
             live.base = m.clone();
+            live.checked.clone_from(&dumped.at);
             live.start = dumped.at;
         }
         Ok(m)

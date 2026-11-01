@@ -6,7 +6,7 @@ use arena_part::helpers::sql_tools::schemas;
 use arena_part::proto::ToolSchema;
 use serde_json::{json, Map, Value};
 
-use crate::keys::read_only;
+use crate::keys::{changes_default_db, read_only};
 
 pub fn tools() -> Vec<ToolSchema> {
     schemas("values for the ? placeholders, in order")
@@ -110,6 +110,13 @@ pub async fn query(c: &mut Conn, sql: &str, vals: &[Value]) -> Result<Value, Str
 /// `sql_execute`: without params any statements (several, `;`-separated, may run); with params
 /// one prepared statement.
 pub async fn execute(c: &mut Conn, sql: &str, vals: &[Value]) -> Result<Value, String> {
+    if changes_default_db(sql) {
+        return Err(
+            "sql_execute can't change the default database (USE): a save holds only the \
+                    instance's own database"
+                .into(),
+        );
+    }
     let done = if vals.is_empty() {
         c.query_drop(sql).await
     } else {

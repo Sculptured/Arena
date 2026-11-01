@@ -8,7 +8,7 @@ use super::login::Login;
 use super::manifest::Segment;
 use super::position::{span, BinlogFile, Position};
 use super::server::{check_db, Server};
-use super::sql::valid_binlog_name;
+use super::sql::{query_misplaced, valid_binlog_name};
 
 impl Server {
     /// The end of the binlog now.
@@ -47,6 +47,43 @@ impl Server {
         }
         let sql = format!("PURGE BINARY LOGS TO '{file}'");
         self.with_conn(async |c| Ok(c.query_drop(sql).await?)).await
+    }
+
+    /// The Query events (DDL) between `from` and `to` that change `db` while another default
+    /// database was selected: a segment of `db` would miss them. Their text, in order.
+    pub async fn misplaced_queries(
+        &self,
+        db: &str,
+        from: &Position,
+        to: &Position,
+    ) -> Result<Vec<String>> {
+        let files = self.binlog_files().await?;
+        let mut out = vec![];
+        for f in span(&files, from, to)? {
+            let start = if f.name == from.file { from.pos } else { 4 };
+            for (pos, info) in self.query_events(&f.name, start).await? {
+                let before_end = f.name != to.file || pos < to.pos;
+                if before_end && query_misplaced(&info, db) {
+                    out.push(info);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The Query events of binlog file `file` from offset `start`: (offset, info).
+    async fn query_events(&self, file: &str, start: u64) -> Result<Vec<(u64, String)>> {
+        if !valid_binlog_name(file) {
+            bail!("{file:?} is not a binlog file name");
+        }
+        let sql = format!("SHOW BINLOG EVENTS IN '{file}' FROM {start}");
+        let rows: Vec<Row> = self.with_conn(async |c| Ok(c.query(sql).await?)).await?;
+        let query = |r: &Row| r.get::<String, _>(2).is_some_and(|t| t == "Query");
+        Ok(rows
+            .iter()
+            .filter(|r| query(r))
+            .filter_map(|r| Some((r.get::<u64, _>(1)?, r.get::<String, _>(5)?)))
+            .collect())
     }
 
     /// The folder of the binlog files inside the container.

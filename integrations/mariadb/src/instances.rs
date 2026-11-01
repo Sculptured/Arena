@@ -20,6 +20,9 @@ pub struct Instance {
     pub login: Login,
     pub base: Manifest,
     pub start: Position,
+    /// Up to here the instance's changes are known to be all in its own segment (see
+    /// `Mariadb::check_segment`).
+    pub checked: Position,
     pub dump_after: u64,
 }
 
@@ -65,6 +68,27 @@ struct Built {
     login: Login,
 }
 
+impl Built {
+    fn into_instance(
+        self,
+        server: Server,
+        server_ref: ServerRef,
+        db: String,
+        dump_after: u64,
+    ) -> Instance {
+        Instance {
+            server,
+            server_ref,
+            db,
+            login: self.login,
+            base: self.base,
+            checked: self.start.clone(),
+            start: self.start,
+            dump_after,
+        }
+    }
+}
+
 impl Mariadb {
     pub(crate) fn instance(&self, id: &str) -> Result<Instance, PartError> {
         let live = self.live.lock().expect("instances lock");
@@ -87,15 +111,7 @@ impl Mariadb {
                 return Err(e);
             }
         };
-        let inst = Instance {
-            server,
-            server_ref,
-            db,
-            login: built.login,
-            base: built.base,
-            start: built.start,
-            dump_after: settings.dump_after_bytes,
-        };
+        let inst = built.into_instance(server, server_ref, db, settings.dump_after_bytes);
         self.live
             .lock()
             .expect("instances lock")
@@ -131,8 +147,10 @@ impl Mariadb {
         let Some(i) = inst else {
             return Ok(());
         };
-        i.server.drop_login(&i.login.user).await?;
-        Ok(i.server.drop_db(&i.db).await?)
+        // Both, even when one fails; the first error is the answer.
+        let login = i.server.drop_login(&i.login.user).await;
+        let db = i.server.drop_db(&i.db).await;
+        login.and(db).map_err(PartError::from)
     }
 
     pub(crate) async fn tool(&self, p: CallToolParams) -> Result<ToolOutput, PartError> {

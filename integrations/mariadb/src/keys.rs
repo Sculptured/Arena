@@ -294,6 +294,20 @@ fn several(toks: &[Tok]) -> bool {
         .is_some_and(|i| i + 1 < toks.len())
 }
 
+/// Whether a statement in `sql` (any of several) is `USE`, which changes the default database.
+pub fn changes_default_db(sql: &str) -> bool {
+    let toks = tokens(sql);
+    let starts = std::iter::once(0).chain(
+        toks.iter()
+            .enumerate()
+            .filter(|(_, t)| **t == Tok::Sym(';'))
+            .map(|(i, _)| i + 1),
+    );
+    starts
+        .filter_map(|i| toks.get(i))
+        .any(|t| matches!(t, Tok::Word(w) if w.eq_ignore_ascii_case("use")))
+}
+
 /// Whether `sql` is one statement that only reads (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN).
 pub fn read_only(sql: &str) -> bool {
     let toks = tokens(sql);
@@ -436,6 +450,19 @@ mod tests {
         assert_eq!(k("INSERT IGNORE INTO t (id, v) VALUES (4, 'a')"), ["t/4"]);
         assert_eq!(k("UPDATE LOW_PRIORITY t SET v = 1 WHERE id = 2"), ["t/2"]);
         assert_eq!(k("DELETE FROM t ORDER BY id LIMIT 1"), ["t/*"]);
+    }
+
+    #[test]
+    fn use_anywhere_changes_the_default_db() {
+        assert!(changes_default_db("USE information_schema"));
+        assert!(changes_default_db(
+            "INSERT INTO t VALUES (1, 'a'); use `x`; DROP TABLE t"
+        ));
+        assert!(!changes_default_db("SELECT 'use' FROM t"));
+        assert!(!changes_default_db(
+            "UPDATE t SET v = 'use x;' WHERE id = 1"
+        ));
+        assert!(!changes_default_db("CREATE TABLE used (id int)"));
     }
 
     #[test]

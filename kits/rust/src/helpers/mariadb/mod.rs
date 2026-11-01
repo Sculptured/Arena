@@ -28,4 +28,4 @@ pub use position::{
     dump_position, file_seq, purge_target, span, span_bytes, BinlogFile, Position, Purged,
 };
 pub use server::{valid_docker_name, Server, ServerConfig, IMAGE};
-pub use sql::quote_ident;
+pub use sql::{names_db, query_misplaced, quote_ident};
