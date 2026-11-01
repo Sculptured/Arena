@@ -51,7 +51,7 @@ arenad saves every part at every step (a tool call that wrote, plus any part wit
 
 A fork asks for one restore mode for the whole world. Each integration declares what it can do (`describe`):
 
-- **`exact_restore`**: the part is exactly as it was. From an exact save when the part has one (fast), or by replaying from the start with the same seed and every recorded input up to the step (slower the later the step). If a replay gives a different result than the recorded one, the fork fails with "replay diverged at step N". A replay is refused when the part's fingerprint (versions, GPU, source hashes) changed.
+- **`exact_restore`**: the part is exactly as it was. From an exact save when the part has one (fast), or by replaying from the start with the same seed and every recorded input up to the step (slower the later the step). If a replay gives a different result than the recorded one, the fork fails with "replay of <part> diverged at step N, so it can't be restored exactly". A replay is refused when the part's fingerprint (versions, GPU, source hashes) changed.
 - **`approximate_restore`**: from a save that may not capture everything (fast). Branches restored this way are labelled "approximate restore" in the run page, the branch list and compare.
 
 | Part declares | exact | approximate |
@@ -89,9 +89,10 @@ Only `postgres` (through the retail benchmark) has been used in an arenad run wi
 
 A folder with an `arena-package.toml` (`kind`, `name`, `version`, `protocol`, `run`, `needs`, `config_schema`, and `[[example]]` tool calls) and a program that speaks the protocol. The Rust kit (`kits/rust`, crate `arena-part`) and the Python kit (`kits/python`, package `arena_part`) read the lines and check the ids; you fill in `describe`, `start`, `call_tool`, `save`, `inspect`, `diff` and a few more. `integrations/README.md` walks through the counter example. Then check it:
 
+    cargo build                                    # debug build of the checker and your integration
     ARENA_BIN_DIR=core/target/debug core/target/debug/arena-part-check integrations/<name> [--config file.json]
 
-`arena-part-check` runs the program and checks describe, start, the examples, save and restore, diff, replay and `drop_save`, prints a report and exits non-zero on a failure. Install a package by putting its folder under one of the `ARENA_PACKAGES` roots. A `command` run is for programs you trust. An `image` run is boxed in a container: no network except the services it declares, no environment from arenad.
+`arena-part-check` runs the program and checks describe, start, the examples, save and restore, diff, replay and `drop_save`, prints a report and exits non-zero on a failure. Install a package by putting its folder under one of the `ARENA_PACKAGES` roots. A `command` run is for programs you trust. An `image` run is boxed in a container: no network unless the manifest asks for host networking (`needs.network = "host"`), no environment from arenad, and only its own saves folder, mounted at `/saves`.
 
 ## Forking
 
