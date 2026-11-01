@@ -2,7 +2,7 @@
 //! saves and dumps on disk.
 use std::collections::{HashMap, HashSet};
 
-use arena_part::helpers::mariadb::{Manifest, Position, Server, ServerRef};
+use arena_part::helpers::mariadb::{needed_positions, Manifest, Position, Server, ServerRef};
 use arena_part::proto::{GcResult, Usage};
 use arena_part::PartError;
 
@@ -126,15 +126,8 @@ impl Mariadb {
 
     /// The binlog positions on the server `here` that a save or a live instance still needs.
     fn needed(&self, here: &ServerRef, saves: &[(String, Manifest)]) -> Vec<Position> {
-        let mut out: Vec<Position> = saves
-            .iter()
-            .filter(|(_, m)| &m.server == here)
-            .filter_map(|(_, m)| m.oldest().cloned())
-            .collect();
         let live = self.live.lock().expect("instances lock");
-        for i in live.values().filter(|i| &i.server_ref == here) {
-            out.extend(i.tracked.needed().cloned());
-        }
-        out
+        let on_here = live.values().filter(|i| &i.server_ref == here);
+        needed_positions(here, saves, on_here.map(|i| &i.tracked))
     }
 }

@@ -40,6 +40,11 @@ fn busy_marks_last_until_dropped() {
         assert!(set.snapshot().contains("b"));
     }
     assert!(set.snapshot().contains("a") && !set.snapshot().contains("b"));
+    assert!(set.try_mark("a").is_none(), "a is busy");
     drop(a);
+    assert!(set.snapshot().is_empty());
+    let c = set.try_mark("a").expect("a is free again");
+    assert!(set.snapshot().contains("a"));
+    drop(c);
     assert!(set.snapshot().is_empty());
 }

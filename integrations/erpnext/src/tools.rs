@@ -74,7 +74,7 @@ async fn get_doc(rest: &Rest, site: &str, args: &Value) -> Result<Outcome, PartE
                 reads,
                 writes: vec![],
             }),
-            Reply::Refused(e) => Err(failed(e, reads)),
+            Reply::Refused { message: e, .. } => Err(failed(e, reads)),
         },
     )
 }
@@ -125,7 +125,7 @@ async fn list_docs(rest: &Rest, site: &str, args: &Value) -> Result<Outcome, Par
                     writes: vec![],
                 })
             }
-            Reply::Refused(e) => Err(failed(e, vec![])),
+            Reply::Refused { message: e, .. } => Err(failed(e, vec![])),
         },
     )
 }
@@ -156,7 +156,7 @@ fn written(doctype: &str, reply: Reply, known: Option<&str>) -> Outcome {
                 writes,
             })
         }
-        Reply::Refused(e) => Err(failed(
+        Reply::Refused { message: e, .. } => Err(failed(
             e,
             known.map(|n| key(doctype, n)).into_iter().collect(),
         )),
@@ -235,7 +235,15 @@ mod tests {
     fn writes_name_the_document_frappe_gave_back() {
         let out = written("ToDo", Reply::Ok(json!({"name": "abc12"})), None).unwrap();
         assert_eq!(out.writes, ["ToDo/abc12"]);
-        let out = written("Item", Reply::Refused("no".into()), Some("I-1")).unwrap_err();
+        let out = written(
+            "Item",
+            Reply::Refused {
+                status: 417,
+                message: "no".into(),
+            },
+            Some("I-1"),
+        )
+        .unwrap_err();
         assert_eq!(
             (out.error.as_deref(), out.reads),
             (Some("no"), vec!["Item/I-1".to_string()])

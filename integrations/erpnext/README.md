@@ -39,7 +39,9 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   database keys (`site_config.json`, which keeps `encryption_key`: the stored API secret needs it) and
   the key and Administrator password (`api.json`). The manifest is written last; a base without one is
   made again. Then the base site, its database and account are removed, and the install's binlog is
-  purged. First-time setup measured at about 90 s for the base (plus the stack coming up).
+  purged. When the install comes up, the base's manifest is labelled with the running server's
+  identity (it has no segments, so it restores anywhere): a recreated or reconfigured server keeps
+  working, and the saves chained from it name the server their binlog is on. First-time setup measured at about 90 s for the base (plus the stack coming up).
 - **Grants:** the install and every site run with the helper's `DB_GRANTS` (`SELECT, INSERT,
   UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, CREATE TEMPORARY TABLES, LOCK TABLES` on the site's own
   database). That was enough for `new-site` with ERPNext (758 tables and 5 sequences; no views,
@@ -51,7 +53,8 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   database and account, and `pause_scheduler: 1`. Its Redis cache keys (`eb_<instance>|*`) are
   deleted, and the start waits until the site answers an authenticated request (Frappe keeps a site's
   config in each worker for up to 60 s, so a site made again under a recent name may take that long).
-  `stop` removes the folder, account and database.
+  `stop` removes the folder, account and database. A start marks the site's database busy until the
+  instance is live, so `gc` leaves it alone; starting an id that runs or is starting is -32602.
 - **State changes only through tool calls:** there is no scheduler service, and every site has
   `pause_scheduler`. Jobs that tool calls enqueue run on the worker.
 - **Save** `$ARENA_SAVES/erpnext/<save>/`: first the site's background jobs are drained (Frappe's `RQ
@@ -75,7 +78,7 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   `view-<pid>-<n>.localhost` on database `ev_<pid>_<n>`, made from it and removed after. `inspect`
   with no keys gives every document of the target's `diff_doctypes`; `diff` lists all fields of every
   document of both targets' `diff_doctypes` and compares them by key. A target diffed with itself is
-  not read.
+  not read. In `inspect`, a key Frappe answers 404 for is null; other refusals are errors.
 - **drop_save** and **gc {keep}**: as mariadb (remove the dumps no save, live instance or the base
   needs; purge the binlog before the oldest position still needed), and when nothing needs any
   position and no site is being made, the binlog is rotated first so all of it goes. `gc` also drops
@@ -91,6 +94,6 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   (run once per program in a throwaway container).
 - **Conformance:** `check/arena-package.toml` (`erpnext-check`, the same program; its examples insert a
   ToDo and an Item and read them). `cargo test -p arena-erpnext -- --ignored live_ --nocapture` runs
-  the round trip and the check against the `arena_erpnext` project and a server of its own, and removes
-  them (`docker compose -p arena_erpnext down -v`, the server's container and volume, the saves and
-  sites) when it ends.
+  the round trip and the check against a project (`arena_erpnext_t<pid>`, on a free port) and a
+  server of its own, and removes them (`docker compose down -v`, the server's container and volume,
+  the saves and sites) when it ends.

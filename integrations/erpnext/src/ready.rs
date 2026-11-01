@@ -61,10 +61,16 @@ impl Erpnext {
         let server = Server::new(cfg.server.clone()).map_err(PartError::internal_from)?;
         let stack = Stack::new(cfg, server, self.sites_root()?)?;
         stack.up().await?;
-        let base = self.load_or_make_base(&stack).await?;
+        let server_ref = stack.server.reference().await?;
+        // The base may have been made on a server since replaced or reconfigured; it needs no
+        // binlog, so it belongs to this one, and so do the saves chained from it.
+        let base = self
+            .load_or_make_base(&stack)
+            .await?
+            .on_server(server_ref.clone())?;
         Ok(Ready {
             rest: stack.rest.with_key(&base.creds.key),
-            server_ref: stack.server.reference().await?,
+            server_ref,
             stack,
             base,
         })
@@ -77,8 +83,8 @@ impl Erpnext {
         }
         let t = Instant::now();
         let made = {
-            let _gate = self.blob_gate.lock().await;
-            base::make(stack, &self.blobs, &dir).await
+            let _gate = self.dumps.lock().await;
+            base::make(stack, self.dumps.blobs(), &dir).await
         };
         let made =
             made.map_err(|e| PartError::internal(format!("making the ERPNext base: {e:#}")))?;

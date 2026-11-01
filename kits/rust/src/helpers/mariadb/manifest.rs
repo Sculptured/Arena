@@ -56,6 +56,16 @@ impl Manifest {
         }
     }
 
+    /// The same database on the server `server`: a manifest without segments needs no binlog,
+    /// so it restores anywhere. `None` when it has segments.
+    pub fn rehomed(&self, server: ServerRef) -> Option<Manifest> {
+        self.segments.is_empty().then(|| Manifest {
+            server,
+            root: self.root.clone(),
+            segments: vec![],
+        })
+    }
+
     /// This manifest followed by `seg` (unchanged when `seg` holds no events).
     pub fn then(&self, seg: Segment) -> Manifest {
         let mut out = self.clone();

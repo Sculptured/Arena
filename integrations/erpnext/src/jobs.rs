@@ -28,7 +28,9 @@ async fn has_pending(rest: &Rest, site: &str) -> Result<bool, PartError> {
         .await?
     {
         Reply::Ok(v) => Ok(v.as_array().is_some_and(|a| !a.is_empty())),
-        Reply::Refused(e) => Err(PartError::internal(format!("listing jobs of {site}: {e}"))),
+        Reply::Refused { message: e, .. } => {
+            Err(PartError::internal(format!("listing jobs of {site}: {e}")))
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use arena_part::helpers::busy::Busy;
 use arena_part::helpers::mariadb::{check_same_server, restore_error, Manifest, Position, Tracked};
 use arena_part::proto::StartParams;
 use arena_part::PartError;
@@ -47,6 +48,8 @@ impl Erpnext {
         let site = Site::instance(&p.instance).ok_or_else(|| {
             PartError::invalid("instance ids for erpnext are at most 61 characters")
         })?;
+        // Marked until it is live, so neither `gc` nor a second start of the id takes it.
+        let _busy = self.claim(&p.instance, &site)?;
         let ready = self.ready_for(&self.cfg.with_config(&p.config)?).await?;
         let source = self.source(ready, p.from.as_ref().map(|f| f.save.as_str()))?;
         let _starting = self.starts.read().await;
@@ -62,6 +65,13 @@ impl Erpnext {
             .expect("instances lock")
             .insert(p.instance, inst);
         Ok(())
+    }
+
+    /// Marks the site of instance `id` busy; -32602 when the instance runs or is starting.
+    fn claim(&self, id: &str, site: &Site) -> Result<Busy<'_>, PartError> {
+        let running = self.live.lock().expect("instances lock").contains_key(id);
+        let busy = (!running).then(|| self.busy.try_mark(&site.db)).flatten();
+        busy.ok_or_else(|| PartError::invalid(format!("instance {id} is already running")))
     }
 
     /// The base, or the save `save` (-32002 when it has no folder, -32001 when it was made on
@@ -110,7 +120,7 @@ impl Erpnext {
     ) -> Result<Position, PartError> {
         let server = &ready.stack.server;
         let restored = server
-            .restore(&source.manifest, &self.blobs, &site.db)
+            .restore(&source.manifest, self.dumps.blobs(), &site.db)
             .await;
         let start = restored.map_err(|e| restore_error(&source.save, e))?;
         let login = server.create_login(&site.db, &site.db, "").await?;
@@ -163,7 +173,7 @@ async fn wait_site(rest: &Rest, site: &str) -> Result<(), PartError> {
             .await
         {
             Ok(Reply::Ok(_)) => return Ok(()),
-            Ok(Reply::Refused(e)) => e,
+            Ok(Reply::Refused { message: e, .. }) => e,
             Err(e) => format!("{e:#}"),
         };
         if Instant::now() > deadline {

@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use arena_part::helpers::folder;
-use arena_part::helpers::mariadb::{Blobs, Login, Manifest};
+use arena_part::helpers::mariadb::{Blobs, Login, Manifest, ServerRef};
+use arena_part::PartError;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -59,6 +60,18 @@ impl Base {
         }))
     }
 
+    /// The base labelled with the server `here` (its manifest has no segments, so it restores
+    /// anywhere); an error if it had segments.
+    pub fn on_server(mut self, here: ServerRef) -> Result<Base, PartError> {
+        self.manifest = self.manifest.rehomed(here).ok_or_else(|| {
+            PartError::internal(format!(
+                "the base in {} has binlog segments",
+                self.dir.display()
+            ))
+        })?;
+        Ok(self)
+    }
+
     /// Its files, as a save keeps them.
     pub fn files(&self) -> PathBuf {
         self.dir.join("files")
@@ -104,6 +117,9 @@ async fn install(stack: &Stack, site: &Site) -> Result<String> {
     stack.server.create_db(&site.db).await?;
     let login = stack.server.create_login(&site.db, &site.db, "").await?;
     let admin = Login::new_random("admin")?.password;
+    // The temporary account's password (and the admin password) are on the `bench new-site`
+    // command line, so they show in the host's `ps` for the minute the install takes; the
+    // account is dropped right after (`discard_site`).
     let args: [&str; 13] = [
         "new-site",
         &site.name,
@@ -158,7 +174,7 @@ async fn complete_setup(rest: &Rest, site: &str) -> Result<()> {
         .await?
     {
         Reply::Ok(_) => Ok(()),
-        Reply::Refused(e) => bail!("the setup wizard failed: {e}"),
+        Reply::Refused { message: e, .. } => bail!("the setup wizard failed: {e}"),
     }
 }
 
@@ -186,4 +202,43 @@ async fn store(
         shared,
         creds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arena_part::helpers::mariadb::{Position, Tracked};
+
+    fn server(id: &str) -> ServerRef {
+        ServerRef {
+            container: format!("db-{id}"),
+            port: 3308,
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn saves_chained_from_a_base_made_elsewhere_carry_this_server() {
+        let base = Base {
+            dir: PathBuf::from("/x/.base"),
+            manifest: Manifest::rooted(server("old"), "ab".repeat(32)),
+            shared: Map::new(),
+            creds: Credentials {
+                key: ApiKey {
+                    api_key: "k".into(),
+                    api_secret: "s".into(),
+                },
+                admin_password: "a".into(),
+            },
+        };
+        let base = base.on_server(server("new")).unwrap();
+        let t = Tracked::new(
+            "eb_i1",
+            base.manifest.clone(),
+            Position::new("binlog.000002", 4),
+        );
+        let save = t.manifest_at(Position::new("binlog.000002", 99));
+        assert_eq!(save.server, server("new"));
+        assert_eq!(save.root, Some("ab".repeat(32)));
+    }
 }

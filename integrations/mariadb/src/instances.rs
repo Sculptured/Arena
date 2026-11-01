@@ -102,7 +102,7 @@ impl Mariadb {
         };
         let m = self.manifest(&from.save)?;
         check_same_server(&from.save, &m.server, here)?;
-        let start = server.restore(&m, &self.blobs, db).await;
+        let start = server.restore(&m, self.dumps.blobs(), db).await;
         let start = start.map_err(|e| restore_error(&from.save, e))?;
         let login = server.create_login(db, db, "").await?;
         Ok(Built {

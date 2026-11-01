@@ -42,7 +42,7 @@ impl Mariadb {
         let m = self.manifest(save)?;
         let server = self.servers.for_ref(&m.server)?;
         check_same_server(save, &m.server, &server.reference().await?)?;
-        let built = server.restore(&m, &self.blobs, db).await;
+        let built = server.restore(&m, self.dumps.blobs(), db).await;
         built.map_err(|e| restore_error(save, e))?;
         Ok(Opened {
             server,

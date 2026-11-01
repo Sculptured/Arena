@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arena_part::helpers::busy::BusySet;
-use arena_part::helpers::mariadb::{percent_encode, Blobs, IMAGE};
+use arena_part::helpers::mariadb::{percent_encode, Dumps, IMAGE};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
@@ -31,15 +31,14 @@ use servers::Servers;
 
 pub struct Mariadb {
     dirs: SaveDirs,
-    blobs: Blobs,
     /// `arena-mariadb --sql-tools`: list and serve `sql_query` and `sql_execute`.
     sql_tools: bool,
     servers: Servers,
     live: Mutex<HashMap<String, Instance>>,
     /// Databases being built (starts) or read (saves for `inspect` and `diff`).
     busy: BusySet,
-    /// Held while a dump is made and while unused dumps are removed.
-    blob_gate: tokio::sync::Mutex<()>,
+    /// Dumps, and the gate held while a dump is made and while unused dumps are removed.
+    dumps: Dumps,
 }
 
 type R<T> = Result<T, PartError>;
@@ -56,13 +55,12 @@ impl Mariadb {
         let dirs = SaveDirs::under(package_folder);
         dirs.sweep_scratch();
         Mariadb {
-            blobs: Blobs::new(dirs.root().join(".blobs")),
+            dumps: Dumps::new(dirs.root().join(".blobs")),
             dirs,
             sql_tools: false,
             servers: Servers::default(),
             live: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
-            blob_gate: tokio::sync::Mutex::new(()),
         }
     }
 

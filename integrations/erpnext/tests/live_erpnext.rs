@@ -1,6 +1,7 @@
-//! Live test of the erpnext integration: the ERPNext stack (compose project `arena_erpnext`,
-//! image `frappe/erpnext:v16.53.0`, never pulled) on 127.0.0.1:8180, with a MariaDB server
-//! container and volume of the test's own. Everything it makes (the stack and its volumes, the
+//! Live test of the erpnext integration: an ERPNext stack of the test's own (compose project
+//! `arena_erpnext_t<pid>`, image `frappe/erpnext:v16.53.0`, never pulled) on a free port, with a
+//! MariaDB server container and volume of the test's own, so a real `arena_erpnext` install is
+//! never touched. Everything it makes (the stack and its volumes, the
 //! server, the saves and sites folder) is removed when the test ends, even when it fails.
 //! Run: `cargo test -p arena-erpnext -- --ignored live_ --nocapture`.
 use std::path::{Path, PathBuf};
@@ -32,6 +33,8 @@ impl Env {
         stack.server.container = format!("arena-erpnext-db-{id}");
         stack.server.volume = format!("arena-erpnext-db-{id}");
         stack.server.port = free_port();
+        stack.project = format!("arena_erpnext_t{}", std::process::id());
+        stack.port = free_port();
         let saves = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("erpnext-{id}"));
         std::fs::create_dir_all(&saves).unwrap();
         Env { stack, saves }
@@ -51,8 +54,9 @@ impl Env {
 
     /// The config that points a separate `arena-erpnext` process at the same server.
     fn check_config(&self) -> PathBuf {
-        let s = &self.stack.server;
-        let c = json!({"db_container": s.container, "db_volume": s.volume, "db_port": s.port});
+        let (st, s) = (&self.stack, &self.stack.server);
+        let c = json!({"db_container": s.container, "db_volume": s.volume, "db_port": s.port,
+                       "project": st.project, "http_port": st.port});
         let path = self.saves.join("check.json");
         std::fs::write(&path, c.to_string()).unwrap();
         path

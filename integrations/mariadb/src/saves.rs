@@ -1,8 +1,7 @@
 //! Saves as manifests in `$ARENA_SAVES/mariadb/<save>/manifest.json`, dumps in `.blobs/`.
-use std::collections::HashSet;
 use std::path::Path;
 
-use arena_part::helpers::mariadb::{chain_error, saves_in, Manifest, Tracked};
+use arena_part::helpers::mariadb::{saves_in, used_roots, Manifest, Tracked, TrackedChange};
 use arena_part::proto::{SaveParams, Saved};
 use arena_part::PartError;
 
@@ -29,19 +28,21 @@ impl Mariadb {
     /// was selected, as a `connect` client can: its segment would miss that change.
     pub(crate) async fn save_instance(&self, p: SaveParams) -> Result<Saved, PartError> {
         let inst = self.instance(&p.instance)?;
-        let chained = inst.server.chain(&inst.tracked, inst.dump_after).await;
-        let chained = chained.map_err(|e| chain_error(&p.instance, e))?;
-        self.update_tracked(&p.instance, |t| t.checked.clone_from(&chained.checked));
-        if !chained.needs_dump {
-            return self.write_save(&p, &chained.manifest, 0);
-        }
-        // Held until the manifest naming the new dump is written, so no sweep takes it.
-        let _gate = self.blob_gate.lock().await;
-        let rebased = inst.server.rebase(&inst.tracked, &self.blobs).await?;
-        let m = rebased.base.clone();
-        self.update_tracked(&p.instance, |t| *t = rebased);
-        let blob_bytes = m.root.as_deref().map_or(0, |id| self.blobs.size(id));
-        self.write_save(&p, &m, blob_bytes)
+        let dir = Path::new(&p.dir);
+        let update = |c: TrackedChange| self.update_tracked(&p.instance, |t| c.apply(t));
+        let bytes = self
+            .dumps
+            .save(
+                &inst.server,
+                &p.instance,
+                &inst.tracked,
+                inst.dump_after,
+                dir,
+                update,
+            )
+            .await?;
+        self.dirs.note(&p.save, dir);
+        Ok(Saved { bytes, exact: true })
     }
 
     /// Applies `f` to the live instance's tracking (nothing when it has stopped since).
@@ -51,25 +52,14 @@ impl Mariadb {
         }
     }
 
-    fn write_save(&self, p: &SaveParams, m: &Manifest, extra: u64) -> Result<Saved, PartError> {
-        let dir = Path::new(&p.dir);
-        let bytes = m.write(dir).map_err(PartError::internal_from)?;
-        self.dirs.note(&p.save, dir);
-        Ok(Saved {
-            bytes: bytes + extra,
-            exact: true,
-        })
-    }
-
     /// Removes dumps no save and no live instance needs; returns the bytes freed.
     pub(crate) async fn remove_unused_blobs(&self) -> Result<u64, PartError> {
-        let _gate = self.blob_gate.lock().await;
-        let saves = self.manifests()?;
-        let mut used: HashSet<String> = saves.iter().filter_map(|(_, m)| m.root.clone()).collect();
-        let live = self.live.lock().expect("instances lock");
-        used.extend(live.values().filter_map(|i| i.tracked.base.root.clone()));
-        drop(live);
-        let freed = self.blobs.remove_unreferenced(&used);
-        Ok(freed.map_err(PartError::internal_from)?.bytes)
+        self.dumps
+            .remove_unused(|| {
+                let saves = self.manifests()?;
+                let live = self.live.lock().expect("instances lock");
+                Ok(used_roots(&saves, live.values().map(|i| &i.tracked.base)))
+            })
+            .await
     }
 }

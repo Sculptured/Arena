@@ -16,7 +16,11 @@ const TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
     Ok(Value),
-    Refused(String),
+    /// Frappe's HTTP status and message.
+    Refused {
+        status: u16,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +118,8 @@ async fn reply(r: RequestBuilder) -> Result<Reply> {
     let text = resp.text().await.context("reading ERPNext's answer")?;
     let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if !(200..300).contains(&status) {
-        return Ok(Reply::Refused(error_text(status, &body)));
+        let message = error_text(status, &body);
+        return Ok(Reply::Refused { status, message });
     }
     let data = ["data", "message"]
         .iter()

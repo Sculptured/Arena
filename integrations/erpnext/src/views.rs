@@ -55,7 +55,9 @@ impl Erpnext {
         let source = self.source(ready, Some(save))?;
         self.open_site(ready, &source, &site).await?;
         let out = f(&ready.rest, &site.name).await;
-        close_site(&ready.stack, &site).await?;
+        if let Err(e) = close_site(&ready.stack, &site).await {
+            eprintln!("arena-erpnext: removing scratch site {}: {e}", site.name);
+        }
         out
     }
 
@@ -103,7 +105,7 @@ async fn dump_docs(rest: &Rest, site: &str, doctypes: &[String]) -> Result<DocMa
             Reply::Ok(other) => {
                 return Err(PartError::internal(format!("listing {doctype}: {other}")))
             }
-            Reply::Refused(e) => {
+            Reply::Refused { message: e, .. } => {
                 return Err(PartError::invalid(format!("can't list {doctype}: {e}")))
             }
         };
@@ -128,7 +130,10 @@ async fn some_docs(
             .ok_or_else(|| PartError::invalid(format!("{k:?} is not a key (<Doctype>/<name>)")))?;
         let doc = match rest.get(site, &["resource", doctype, name], &[]).await? {
             Reply::Ok(doc) => doc,
-            Reply::Refused(_) => Value::Null,
+            Reply::Refused { status: 404, .. } => Value::Null,
+            Reply::Refused { message, .. } => {
+                return Err(PartError::internal(format!("reading {k}: {message}")))
+            }
         };
         out.insert(k.clone(), doc);
     }

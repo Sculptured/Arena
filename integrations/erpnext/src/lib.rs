@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arena_part::helpers::busy::BusySet;
-use arena_part::helpers::mariadb::{Blobs, Server};
+use arena_part::helpers::mariadb::{Dumps, Server};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
@@ -43,14 +43,14 @@ pub struct Erpnext {
     /// The server of `cfg`; once the install runs, use `server()`, which gives its server.
     default_server: Server,
     dirs: SaveDirs,
-    blobs: Blobs,
     /// The stack up and the base loaded (or made), on first need.
     ready: OnceCell<Ready>,
     live: Mutex<HashMap<String, Instance>>,
     /// Scratch sites being read for `inspect` and `diff`, by database name.
     busy: BusySet,
-    /// Held while a dump is made until a manifest names it, and while unused dumps are removed.
-    blob_gate: tokio::sync::Mutex<()>,
+    /// Dumps, and the gate held while a dump is made until a manifest names it and while
+    /// unused dumps are removed.
+    dumps: Dumps,
     /// Held (shared) while a site is built until it is live; taken alone to rotate the binlog.
     starts: RwLock<()>,
     versions: OnceCell<BTreeMap<String, String>>,
@@ -75,13 +75,12 @@ impl Erpnext {
         dirs.sweep_scratch();
         Erpnext {
             default_server: Server::new(cfg.server.clone()).expect("StackConfig names are checked"),
-            blobs: Blobs::new(dirs.root().join(".blobs")),
+            dumps: Dumps::new(dirs.root().join(".blobs")),
             dirs,
             cfg,
             ready: OnceCell::new(),
             live: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
-            blob_gate: tokio::sync::Mutex::new(()),
             starts: RwLock::new(()),
             versions: OnceCell::new(),
         }
@@ -123,8 +122,8 @@ impl Part for Erpnext {
     }
 
     async fn call_tool(&self, p: CallToolParams) -> R<ToolOutput> {
-        let ready = self.ready().await?;
         let site = self.instance(&p.instance)?.site.name;
+        let ready = self.ready().await?;
         tools::call(&ready.rest, &site, &p.name, &p.args).await
     }
 
@@ -157,8 +156,8 @@ impl Part for Erpnext {
     }
 
     async fn connect(&self, p: IdParams) -> R<Value> {
-        let ready = self.ready().await?;
         let site = self.instance(&p.instance)?.site.name;
+        let ready = self.ready().await?;
         let c = &ready.base.creds;
         Ok(
             json!({"url": format!("http://127.0.0.1:{}", ready.stack.cfg.port), "site": site,

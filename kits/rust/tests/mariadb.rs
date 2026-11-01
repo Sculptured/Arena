@@ -5,9 +5,10 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use arena_part::helpers::mariadb::{
-    chain_error, check_same_server, dump_position, names_db, percent_encode, purge_target, query_misplaced,
-    restore_error, saves_in, span, span_bytes, BinlogFile, Blobs, Dumped, Manifest, Position,
-    Misplaced, Purged, Segment, ServerRef, Tracked,
+    chain_error, check_same_server, dump_position, names_db, needed_positions, percent_encode,
+    purge_target, query_misplaced, restore_error, saves_in, span, span_bytes, used_roots,
+    BinlogFile, Blobs, Dumped, Manifest, Misplaced, Position, Purged, Segment, ServerRef, Tracked,
+    TrackedChange,
 };
 use arena_part::helpers::temp_dir::TempDir;
 
@@ -323,8 +324,87 @@ fn restores_need_the_same_server_and_its_binlog() {
     let purged = restore_error("s1", Purged("binlog.000001".into()).into());
     assert_eq!(purged.code, -32001);
     assert_eq!(restore_error("s1", anyhow::anyhow!("boom")).code, -32603);
-    let e = chain_error("i1", Misplaced("ALTER TABLE mi_i1.t ADD c int".into()).into());
+    let e = chain_error(
+        "i1",
+        Misplaced("ALTER TABLE mi_i1.t ADD c int".into()).into(),
+    );
     assert_eq!(e.code, -32001);
     assert!(e.message.contains("another database was selected") && e.message.contains("i1"));
     assert_eq!(chain_error("i1", anyhow::anyhow!("down")).code, -32603);
+}
+
+fn other_server() -> ServerRef {
+    ServerRef {
+        container: "old".into(),
+        id: "an-old-identity".into(),
+        ..server()
+    }
+}
+
+#[test]
+fn a_rooted_base_is_moved_to_this_server_and_its_saves_follow() {
+    let base = Manifest::rooted(other_server(), "ab".repeat(32));
+    let here = base
+        .rehomed(server())
+        .expect("a base without segments moves");
+    assert_eq!(here.root, base.root);
+    let t = Tracked::new("eb_i1", here, pos("binlog.000003", 10));
+    let save = t.manifest_at(pos("binlog.000003", 90));
+    assert_eq!(save.server, server(), "the save carries this server");
+    let r = t.rebased(Dumped {
+        blob: "cd".repeat(32),
+        at: pos("binlog.000004", 1),
+    });
+    assert_eq!(r.base.server, server());
+    assert_eq!(
+        save.rehomed(other_server()),
+        None,
+        "a save with segments stays put"
+    );
+}
+
+#[test]
+fn tracked_changes_apply_checked_or_the_whole_tracking() {
+    let mut t = Tracked::new("mi_a", Manifest::empty(server()), pos("binlog.000003", 10));
+    TrackedChange::Checked(pos("binlog.000003", 50)).apply(&mut t);
+    assert_eq!((t.start.pos, t.checked.pos), (10, 50));
+    let r = t.rebased(Dumped {
+        blob: "cd".repeat(32),
+        at: pos("binlog.000004", 7),
+    });
+    TrackedChange::Rebased(r.clone()).apply(&mut t);
+    assert_eq!(t, r);
+}
+
+#[test]
+fn used_roots_and_needed_positions_cover_saves_and_live_databases() {
+    let rooted = |c: &str| Manifest::rooted(server(), c.repeat(64));
+    let saves = vec![
+        (
+            "s1".to_string(),
+            rooted("a").then(seg(
+                "mi_a",
+                pos("binlog.000002", 5),
+                pos("binlog.000002", 9),
+            )),
+        ),
+        (
+            "s2".to_string(),
+            Manifest::empty(other_server()).then(seg(
+                "mi_b",
+                pos("binlog.000001", 4),
+                pos("binlog.000001", 8),
+            )),
+        ),
+    ];
+    let base = rooted("b");
+    let used = used_roots(&saves, [&base]);
+    assert_eq!(used, HashSet::from(["a".repeat(64), "b".repeat(64)]));
+    let live = Tracked::new("mi_c", rooted("c"), pos("binlog.000003", 1));
+    let needed = needed_positions(&server(), &saves, [&live]);
+    assert_eq!(
+        needed,
+        [pos("binlog.000002", 5), pos("binlog.000003", 1)],
+        "other servers' saves don't count"
+    );
 }

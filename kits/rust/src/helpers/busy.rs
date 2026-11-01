@@ -20,6 +20,15 @@ impl BusySet {
         }
     }
 
+    /// Marks `db` busy, unless it is busy already (`None`).
+    pub fn try_mark(&self, db: &str) -> Option<Busy<'_>> {
+        let fresh = self.0.lock().expect("busy lock").insert(db.to_string());
+        fresh.then(|| Busy {
+            set: self,
+            db: db.to_string(),
+        })
+    }
+
     pub fn snapshot(&self) -> HashSet<String> {
         self.0.lock().expect("busy lock").clone()
     }

@@ -2,11 +2,11 @@
 //! dumps on disk.
 use std::collections::HashSet;
 
-use arena_part::helpers::mariadb::{replay_user, Position, Server};
+use arena_part::helpers::mariadb::{needed_positions, replay_user, Position, Server};
 use arena_part::proto::{valid_id, GcResult, Usage};
 use arena_part::PartError;
 
-use crate::names::{INSTANCE_PREFIX, VIEW_PREFIX};
+use crate::names::{Site, INSTANCE_PREFIX, VIEW_PREFIX};
 use crate::Erpnext;
 
 impl Erpnext {
@@ -78,58 +78,76 @@ impl Erpnext {
     /// The binlog positions on this server that a save or a live instance still needs.
     async fn needed(&self, server: &Server) -> Result<Vec<Position>, PartError> {
         let here = server.reference().await?;
-        let mut out: Vec<_> = self
-            .manifests()?
-            .into_iter()
-            .filter(|(_, m)| m.server == here)
-            .filter_map(|(_, m)| m.oldest().cloned())
-            .collect();
+        let saves = self.manifests()?;
         let live = self.live.lock().expect("instances lock");
-        out.extend(live.values().flat_map(|i| i.tracked.needed().cloned()));
-        Ok(out)
+        Ok(needed_positions(
+            &here,
+            &saves,
+            live.values().map(|i| &i.tracked),
+        ))
     }
 
-    /// The sites in use: live instances' and scratch sites being read.
-    fn busy_sites(&self) -> (HashSet<String>, HashSet<String>) {
+    /// The databases in use: live instances', starting ones' and scratch sites being read.
+    fn busy_dbs(&self) -> HashSet<String> {
         let mut dbs = self.busy.snapshot();
         let live = self.live.lock().expect("instances lock");
         dbs.extend(live.values().map(|i| i.site.db.clone()));
-        let names = live.values().map(|i| i.site.name.clone()).collect();
-        (dbs, names)
+        dbs
     }
 
     /// Drops the databases (counted), accounts (and replay accounts a crash left) and site
     /// folders of sites not in use.
     async fn drop_idle(&self) -> Result<GcResult, PartError> {
-        let (busy_dbs, live_sites) = self.busy_sites();
+        let busy = self.busy_dbs();
+        let server = self.server();
         let mut out = GcResult::default();
         for prefix in [INSTANCE_PREFIX, VIEW_PREFIX] {
-            for (db, size) in self.server().databases(prefix).await? {
-                if !busy_dbs.contains(&db) {
-                    let server = self.server();
+            for (db, size) in server.databases(prefix).await? {
+                if !busy.contains(&db) {
                     server.drop_db(&db).await?;
-                    server.drop_login(&db).await?;
-                    server.drop_login(&replay_user(&db)).await?;
                     out.dropped += 1;
                     out.bytes += size;
                 }
             }
         }
-        self.drop_idle_folders(&live_sites, &busy_dbs);
+        self.drop_idle_logins(&busy).await?;
+        self.drop_idle_folders(&busy);
         Ok(out)
     }
 
-    /// Removes the folders of instance sites not live and scratch sites not being read.
-    fn drop_idle_folders(&self, live_sites: &HashSet<String>, busy_dbs: &HashSet<String>) {
+    /// Drops the site accounts, and the replay accounts, of databases not in use.
+    async fn drop_idle_logins(&self, busy: &HashSet<String>) -> Result<(), PartError> {
+        let server = self.server();
+        let replay = replay_user("");
+        for prefix in [INSTANCE_PREFIX, VIEW_PREFIX, replay.as_str()] {
+            for user in server.logins(prefix).await? {
+                let db = user.strip_prefix(replay.as_str()).unwrap_or(&user);
+                let ours = db.starts_with(INSTANCE_PREFIX) || db.starts_with(VIEW_PREFIX);
+                if ours && !busy.contains(db) {
+                    server.drop_login(&user).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the folders of sites whose database is not in use.
+    fn drop_idle_folders(&self, busy: &HashSet<String>) {
         let sites = crate::sites::SitesDir::new(self.dirs.root().join(".sites"));
         for name in sites.names() {
-            let instance = name.strip_suffix(".localhost").is_some_and(valid_id);
-            let idle_instance = instance && !live_sites.contains(&name);
-            let idle_view = view_db(&name).is_some_and(|db| !busy_dbs.contains(&db));
-            if idle_instance || idle_view {
+            if site_db(&name).is_some_and(|db| !busy.contains(&db)) {
                 let _ = sites.remove(&name);
             }
         }
+    }
+}
+
+/// The database of a site folder this part makes: an instance's or a scratch site's.
+fn site_db(name: &str) -> Option<String> {
+    let instance = name.strip_suffix(".localhost").filter(|id| valid_id(id));
+    match instance.and_then(Site::instance) {
+        Some(site) => Some(site.db),
+        None => view_db(name),
     }
 }
 
@@ -144,7 +162,6 @@ fn view_db(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::names::Site;
 
     #[test]
     fn scratch_site_folders_name_their_database() {
@@ -152,5 +169,19 @@ mod tests {
         assert_eq!(view_db(&v.name), Some(v.db));
         assert_eq!(view_db("i1.localhost"), None);
         assert_eq!(view_db("view-x-1.localhost"), None);
+    }
+
+    #[test]
+    fn site_folders_are_idle_only_when_their_database_is() {
+        let v = Site::view(2);
+        assert_eq!(site_db("i1.localhost").as_deref(), Some("eb_i1"));
+        assert_eq!(site_db(&v.name), Some(v.db));
+        assert_eq!(
+            site_db("arena-base.localhost"),
+            None,
+            "the base site is never swept"
+        );
+        assert_eq!(site_db("Bad.localhost"), None);
+        assert_eq!(site_db("apps.txt"), None);
     }
 }
