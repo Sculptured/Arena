@@ -1,5 +1,9 @@
 # folder integration
 
+Puts a folder of files in the world: one folder per instance. Restore: exact from a save (a copy, with unchanged files
+hard-linked); approximate: no. `uses_clock`: false. Verified: `cargo test -p arena-folder` runs on local disk only (no
+Docker), including the `arena-part-check` conformance run. Nothing here needs a service, so there is no `live_` test.
+
 Each instance is a folder of files; each save is a copy of it. Saves restore exactly.
 
 - Live folders are `$ARENA_SAVES/folder/.live/<instance>`. The leading dot keeps them from being

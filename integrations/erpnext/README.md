@@ -1,5 +1,11 @@
 # erpnext integration
 
+Puts an ERPNext site in the world: one site per instance on one ERPNext install (`frappe/erpnext:v16.53.0` in Docker),
+with its own MariaDB server. Restore: exact from a save (a binary-log position plus the site's files); approximate:
+no. `uses_clock`: false. Verified live: `live_erpnext_roundtrip` ran against that real install in Docker (insert,
+save, change, restore, diff, a restarted program, and the `arena-part-check` conformance run). First start takes
+about 90 s, to build the base site.
+
 ERP is a wrapper on a database, so ERPNext saves are the mariadb integration's binlog saves plus the
 site's files. One ERPNext install runs; each instance is a site on it whose database is restored from
 a save, and a save records how to rebuild that database (see `integrations/mariadb/README.md`, whose

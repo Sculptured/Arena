@@ -1,5 +1,12 @@
 # isaac-sim
 
+Puts the Ridgeline factory plant in the world, with Isaac Sim as the physics (the `isaac` backend) or a stand-in
+double (the `standin` backend). Restore: exact by replay from the seed and inputs; approximate from a save
+(a pickle of the factory and simulation state). `uses_clock`: true. Verified on the stand-in only, by its pytest
+suite and the `arena-part-check` conformance check; **the `isaac` backend has never run on Isaac Sim** (no Isaac
+Sim image or 16 GB GPU here). Its package `isaac-sim-mirror` (see `integrations/isaac-sim-mirror/README.md`)
+only follows a live plant.
+
 The Ridgeline factory as an `arena-part/1` integration, on the arena clock. In the factory demo
 (`Sculptured-Examples/factory`, branch `isaac-plant`), Isaac Sim 6.2 **is** the plant. This integration wraps
 that demo's `isaac/factory.py` class `Factory` without editing it. Factory is plain Python and reaches the

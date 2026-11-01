@@ -1,5 +1,11 @@
 # service integration
 
+Puts any Docker Compose project in the world: one project per instance, with the volumes you list. It is the fallback
+for a system that has no save code of its own. Restore: exact from a save (stop, copy the volumes, start); approximate:
+no. `uses_clock`: false. Verified live: `live_service_roundtrip` ran once against a real Redis 6.2 project in Docker
+(save, change, restore, file owners kept, save and stop through a restarted program). It has no `arena-part-check` run:
+`check/` is empty, because the part has no tools and needs a compose file in its config.
+
 Each instance is a Docker Compose project `arena_<instance>`, run with
 `docker compose -p arena_<instance> -f <compose_file>` (`COMPOSE_PROJECT_NAME` is never passed on).
 Config: `{compose_file, volumes: [name], helper_image?, env?}`; `volumes` are the compose file's volumes

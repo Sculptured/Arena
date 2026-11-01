@@ -1,5 +1,11 @@
 # sculptured integration
 
+Puts Sculptured's approvals in the world: one `sculptured serve` per instance, with changes proposed and decided
+through tools. Restore: exact from a save (SQLite backups plus a data folder); approximate: no. `uses_clock`:
+false. Verified live: `live_sculptured_roundtrip` ran against a real `sculptured` build on this machine (propose,
+save, decide, restore, diff). `arena-part-check` passed on it once, run by hand (no test runs it). The test is
+skipped, and says so, when no Sculptured program is found. A save restores only with the same Sculptured build.
+
 Sculptured's approvals in the arena world: changes proposed to a business system and the decisions on
 them. Each instance is a `sculptured serve` of its own; the tools reach it only through Sculptured's HTTP
 API.

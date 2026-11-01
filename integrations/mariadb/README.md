@@ -1,5 +1,11 @@
 # mariadb integration
 
+Puts a MariaDB database in the world: one database per instance on a dedicated server (`mariadb:11.8` in Docker).
+Restore: exact from a save, where a save is a binary-log position and a restore rebuilds the database from the log;
+approximate: no. `uses_clock`: false. Verified live: the seven `live_mariadb_*` tests ran against real MariaDB 11.8
+servers in Docker (round trip, restore of a restore, dump threshold, neighbours and log rotation, accounts and server
+identity, identity migration, and the `arena-part-check` conformance run).
+
 Each instance is a database `mi_<instance>` (ids of at most 61 characters) on a dedicated MariaDB
 server with row-based binary logging. A save does not copy the database: it records how to rebuild
 it, so saving is a few milliseconds and the user's words hold: save the changes, apply them like a

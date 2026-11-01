@@ -1,5 +1,11 @@
 # postgres integration
 
+Puts a PostgreSQL database in the world: one database per instance, on a Postgres server you run. Restore: exact from a save
+(`CREATE DATABASE .. TEMPLATE`); approximate: no. `uses_clock`: false. Verified live: its tests (`cargo test -p
+arena-postgres`) run against the `postgres:17-alpine` server of `deploy/compose.yml`, including the `arena-part-check`
+conformance run; the retail benchmark runs on it through arenad. These tests are not marked `live_`, because the arena
+needs that Postgres anyway.
+
 Each instance is a database `pi_<instance>`; each save is a copy of it, `ps_<save>`, made with
 `CREATE DATABASE .. TEMPLATE`. Saves are kept by Postgres itself (the `dir` of `save` is ignored) and
 restore exactly. `stop` drops the instance's database, so save first. `usage` counts the sizes of

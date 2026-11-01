@@ -1,5 +1,11 @@
 # ridgeline-hub
 
+Puts the Ridgeline factory's outside companies in the world (suppliers, carriers, the insurer, customers), as the
+factory hub's `Market` running on the arena clock. Restore: exact from a save (one `state.json`); approximate: no.
+`uses_clock`: true. Verified offline only: its pytest suite (`uv run --with pytest pytest -q`) imports the real
+`market.py` from the factory demo folder and runs the `arena-part-check` conformance check. No service or
+container is involved. No arenad test or run has used it.
+
 The simulated outside companies of the Ridgeline factory demo (suppliers, carriers, the insurer and
 customers) as an `arena-part/1` integration, running on the arena clock. It wraps the factory hub's
 `ridgeline_hub.market.Market` and changes only where time comes from: `now()` returns arena seconds, not
