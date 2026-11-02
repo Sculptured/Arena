@@ -30,7 +30,7 @@ Or build the UI and let arenad serve it:
 
 `GET /api/health` shows which CLIs were found and whether OpenRouter mode is available.
 
-Control routes: `GET /api/world` lists the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered; `GET /api/usage` gives the bytes each integration keeps, their total and the disk limit; `POST /api/gc` runs the startup cleanup and returns `{removed, freed_bytes}` (it keeps every save a recorded run names, and answers 409 while agents are running).
+Control routes: `GET /api/world` lists the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`); `GET /api/usage` gives `{integrations: [{integration, parts, bytes}], total_bytes, limit_bytes}`, the bytes each integration keeps and the world parts that use it; `POST /api/gc` runs the startup cleanup and returns `{removed, freed_bytes, errors}` (it keeps every save a recorded run names; it answers 409 while agents are running, and new runs and forks answer 409 while it runs).
 
 ## The two modes
 

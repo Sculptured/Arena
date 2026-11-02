@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{
     broadcast::{self, error::RecvError},
-    mpsc,
+    mpsc, OwnedRwLockReadGuard,
 };
 
 use crate::{
@@ -121,6 +121,18 @@ async fn api_not_found() -> ApiError {
 
 fn parse_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, ApiError> {
     serde_json::from_slice(body).map_err(|e| ApiError::bad(format!("bad request body: {e}")))
+}
+
+/// The reason a run or fork is refused while saves are being cleaned up.
+const CLEANING_UP: &str = "Saves are being cleaned up; try again in a moment";
+
+/// Held while a run or fork starts; 409 while a cleanup holds the lock.
+fn not_cleaning(state: &AppState) -> Result<OwnedRwLockReadGuard<()>, ApiError> {
+    state
+        .cleanup
+        .clone()
+        .try_read_owned()
+        .map_err(|_| ApiError::conflict(CLEANING_UP))
 }
 
 fn open_check(state: &AppState) -> Result<(), ApiError> {
@@ -285,12 +297,15 @@ struct NewRun {
 }
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
+    let cleanup = not_cleaning(&state)?;
     let req: NewRun = parse_body(&body)?;
     validate_team(&state, &req.team)?;
     check_disk(&state).await?;
-    let (run_id, branch_id) =
-        detached(async move { Ok(runner::start_run(&state, &req.task_id, req.team).await?) })
-            .await?;
+    let (run_id, branch_id) = detached(async move {
+        let _cleanup = cleanup;
+        Ok(runner::start_run(&state, &req.task_id, req.team).await?)
+    })
+    .await?;
     Ok(Json(json!({"run_id": run_id, "branch_id": branch_id})))
 }
 
@@ -328,6 +343,7 @@ async fn fork_branch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> ApiResult<fork::ForkResponse> {
+    let cleanup = not_cleaning(&state)?;
     let req: ForkReq = parse_body(&body)?;
     if req
         .changes
@@ -350,7 +366,11 @@ async fn fork_branch(
         changes: req.changes,
         restore: req.restore,
     };
-    let resp = detached(async move { Ok(fork::fork_with(&state, &id, req).await?) }).await?;
+    let resp = detached(async move {
+        let _cleanup = cleanup;
+        Ok(fork::fork_with(&state, &id, req).await?)
+    })
+    .await?;
     Ok(Json(resp))
 }
 

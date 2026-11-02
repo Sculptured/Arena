@@ -165,14 +165,17 @@ fn world_marks_unanswering_part() {
 fn usage_sums_parts() {
     run(async {
         let both = vec![integration("toy-a", &[]), integration("toy-b", &[])];
-        let fx = setup("usage", both, &["x=toy-a", "y=toy-b"]).await;
+        let fx = setup("usage", both, &["x=toy-a", "y=toy-b", "z=toy-a"]).await;
         fx.save("toy-a", "s_1").await;
         fx.save("toy-a", "s_2").await;
         fx.save("toy-b", "s_3").await;
         let (st, v) = fx.get("/api/usage").await;
         assert_eq!(st, 200, "{v}");
-        let want = json!([{"name": "toy-a", "bytes": 2}, {"name": "toy-b", "bytes": 1}]);
-        assert_eq!(v["parts"], want);
+        let want = json!([
+            {"integration": "toy-a", "parts": ["x", "z"], "bytes": 2},
+            {"integration": "toy-b", "parts": ["y"], "bytes": 1},
+        ]);
+        assert_eq!(v["integrations"], want);
         assert_eq!(v["total_bytes"], 3);
         assert_eq!(v["limit_bytes"], fx.state.config.max_db_bytes);
         let (_, health) = fx.get("/api/health").await;
@@ -197,5 +200,105 @@ fn gc_keeps_referenced_saves() {
         assert!(!folder("s_orphan").exists());
         assert!(fx.save_exists("toy-a", "s_kept").await);
         assert!(folder("s_kept").is_dir());
+    })
+}
+
+#[test]
+fn world_bounds_hung_part() {
+    run(async {
+        let ok = integration("toy-ok", &[]);
+        let hung = integration("toy-hung", &["--describe-hangs"]);
+        let fx = setup("worldhung", vec![ok, hung], &["a=toy-ok", "b=toy-hung"]).await;
+        let started = std::time::Instant::now();
+        let (st, v) = fx.get("/api/world").await;
+        assert_eq!(st, 200, "{v}");
+        assert!(started.elapsed().as_secs() < 15, "{:?}", started.elapsed());
+        assert_eq!(v["parts"][0]["answered"], true);
+        assert_eq!(v["parts"][1]["answered"], false);
+        assert_eq!(v["parts"][1]["error"], "did not answer within 5 s");
+        // The timed-out call left the shared client usable: its pending call is gone.
+        let client = fx.state.hub.client("toy-hung").await.unwrap();
+        assert_eq!(client.pending_len(), 0);
+    })
+}
+
+/// A branch of the toy world, running as far as `state.live` is concerned.
+async fn make_live(fx: &Fx) {
+    let world = fx.hub.start_world("toybench", "b1").await;
+    let team = Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![],
+    };
+    let ctx = arenad::exec::BranchCtx::new("b1".into(), world, team, "t1".into());
+    fx.state
+        .live
+        .write()
+        .unwrap()
+        .insert("b1".into(), Arc::new(ctx));
+}
+
+#[test]
+fn gc_refused_while_branch_live() {
+    run(async {
+        let fx = setup(
+            "gclive",
+            vec![integration("toy-a", &["--gc"])],
+            &["box=toy-a"],
+        )
+        .await;
+        fx.save("toy-a", "s_orphan").await;
+        make_live(&fx).await;
+        let (st, v) = fx.post("/api/gc").await;
+        assert_eq!(st, 409, "{v}");
+        assert_eq!(
+            v["error"],
+            "agents are running; clean up when they have stopped"
+        );
+        assert!(
+            fx.save_exists("toy-a", "s_orphan").await,
+            "nothing was dropped"
+        );
+        fx.state.live.write().unwrap().clear();
+        assert_eq!(fx.post("/api/gc").await.0, 200);
+    })
+}
+
+#[test]
+fn run_refused_during_gc() {
+    run(async {
+        let fx = setup(
+            "gclock",
+            vec![integration("toy-a", &["--gc"])],
+            &["box=toy-a"],
+        )
+        .await;
+        let held = fx.state.cleanup.clone().write_owned().await;
+        let want = "Saves are being cleaned up; try again in a moment";
+        for path in ["/api/runs", "/api/branches/b/fork", "/api/gc"] {
+            let (st, v) = fx.post(path).await;
+            assert_eq!((st, v["error"].as_str()), (409, Some(want)), "{path}");
+        }
+        drop(held);
+        assert_eq!(fx.post("/api/gc").await.0, 200);
+    })
+}
+
+#[test]
+fn gc_reports_failing_integration() {
+    run(async {
+        let part = integration("toy-a", &["--gc", "--gc-fails"]);
+        let fx = setup("gcfails", vec![part], &["box=toy-a"]).await;
+        let (st, v) = fx.post("/api/gc").await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["removed"], json!([]));
+        let errors = v["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 1, "{v}");
+        assert_eq!(errors[0]["integration"], "toy-a");
+        let message = errors[0]["message"].as_str().unwrap();
+        assert!(
+            message.contains("the toy cannot clean up today"),
+            "{message}"
+        );
     })
 }

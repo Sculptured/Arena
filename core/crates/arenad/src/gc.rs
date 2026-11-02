@@ -8,6 +8,7 @@ use parts::{
     proto::{kept, GcResult, WorldPart},
     Hub,
 };
+use serde::Serialize;
 
 use crate::{
     model::Event,
@@ -125,6 +126,14 @@ pub struct GcReport {
     /// Ids of the saves whose folders were removed, each once. An integration may drop a save
     /// that has no folder, so this can be shorter than `result.dropped`.
     pub removed: Vec<String>,
+    /// The integrations whose gc failed, with the plain error.
+    pub errors: Vec<GcError>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GcError {
+    pub integration: String,
+    pub message: String,
 }
 
 /// Asks each integration `benchmark`'s world uses to drop the saves no event names (and its
@@ -142,7 +151,13 @@ pub async fn run_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcRepor
                 report.result.bytes += r.bytes;
             }
             Ok(None) => println!("gc: the {i} integration has no gc; skipped"),
-            Err(e) => eprintln!("gc: {e:#}"),
+            Err(e) => {
+                eprintln!("gc: {e:#}");
+                report.errors.push(GcError {
+                    integration: i.clone(),
+                    message: format!("{e:#}"),
+                });
+            }
         }
         let after = hub.save_dirs(&i);
         removed.extend(before.into_iter().filter(|s| !after.contains(s)));

@@ -100,6 +100,9 @@ pub struct AppState {
     pub drivers: OnceLock<Drivers>,
     /// Set to true when shutdown starts; SSE streams end on it.
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    /// Held for writing by a cleanup (`POST /api/gc`) and for reading while a run or fork
+    /// starts, so a cleanup never drops saves a starting branch is about to name.
+    pub cleanup: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl AppState {
@@ -122,6 +125,7 @@ impl AppState {
             http,
             drivers: OnceLock::new(),
             shutdown: tokio::sync::watch::channel(false).0,
+            cleanup: Arc::default(),
         }
     }
 
