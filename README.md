@@ -30,6 +30,8 @@ Or build the UI and let arenad serve it:
 
 `GET /api/health` shows which CLIs were found and whether OpenRouter mode is available.
 
+Control routes: `GET /api/world` lists the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered; `GET /api/usage` gives the bytes each integration keeps, their total and the disk limit; `POST /api/gc` runs the startup cleanup and returns `{removed, freed_bytes}` (it keeps every save a recorded run names, and answers 409 while agents are running).
+
 ## The two modes
 
 - **CLI mode** (Claude Code or Codex): the arena starts the CLI headless and gives it only the retail tools through an MCP endpoint of arenad. It records every tool call (arguments, result, rows read and written), the handoff note, and the tokens and cost the CLI reports. It does not see the raw model calls.

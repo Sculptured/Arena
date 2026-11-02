@@ -38,6 +38,8 @@ use crate::{
     saves::{self, part_code, part_named, part_refusal, world_of},
 };
 
+mod world;
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/health", get(health))
@@ -51,6 +53,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/branches/{id}/fork", post(fork_branch))
         .route("/api/branches/{id}/restore-plan", get(get_restore_plan))
         .route("/api/compare", get(compare_branches))
+        .route("/api/world", get(world::world))
+        .route("/api/usage", get(world::usage))
+        .route("/api/gc", post(world::gc))
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
 

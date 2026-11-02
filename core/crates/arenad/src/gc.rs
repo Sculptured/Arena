@@ -118,22 +118,43 @@ async fn keep_list(store: &Store) -> Result<Vec<String>> {
     Ok(keep.into_iter().collect())
 }
 
+/// What a cleanup dropped: the integrations' totals, and the save folders that are gone.
+#[derive(Debug, Default)]
+pub struct GcReport {
+    pub result: GcResult,
+    /// Ids of the saves whose folders were removed, each once. An integration may drop a save
+    /// that has no folder, so this can be shorter than `result.dropped`.
+    pub removed: Vec<String>,
+}
+
 /// Asks each integration `benchmark`'s world uses to drop the saves no event names (and its
-/// instances, none of which runs yet), and removes the save folders not kept. Integrations
-/// without `gc` are skipped; a failing one is logged. Logs `gc: dropped N saves (X MB)`.
-pub async fn run_startup_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcResult> {
+/// instances), and removes the save folders not kept. Integrations without `gc` are skipped; a
+/// failing one is logged.
+pub async fn run_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcReport> {
     let keep = keep_list(store).await?;
-    let mut total = GcResult::default();
+    let mut report = GcReport::default();
+    let mut removed = BTreeSet::new();
     for i in integrations(hub, benchmark).await? {
+        let before = hub.save_dirs(&i);
         match saves::gc(hub, &i, &keep).await {
             Ok(Some(r)) => {
-                total.dropped += r.dropped;
-                total.bytes += r.bytes;
+                report.result.dropped += r.dropped;
+                report.result.bytes += r.bytes;
             }
             Ok(None) => println!("gc: the {i} integration has no gc; skipped"),
             Err(e) => eprintln!("gc: {e:#}"),
         }
+        let after = hub.save_dirs(&i);
+        removed.extend(before.into_iter().filter(|s| !after.contains(s)));
     }
+    report.removed = removed.into_iter().collect();
+    Ok(report)
+}
+
+/// `run_gc` at startup (none of the world's instances runs yet). Logs
+/// `gc: dropped N saves (X MB)`.
+pub async fn run_startup_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcResult> {
+    let total = run_gc(store, hub, benchmark).await?.result;
     println!(
         "gc: dropped {} saves ({} MB)",
         total.dropped,

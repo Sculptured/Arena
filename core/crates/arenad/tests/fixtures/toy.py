@@ -2,7 +2,7 @@
 
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
               [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
-              [--save-sleep MS] [--refuse-start-if FILE]
+              [--save-sleep MS] [--refuse-start-if FILE] [--describe-fails] [--gc]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -60,6 +60,8 @@ class Part:
         self.counters, self.saves, self.clocks = {}, {}, {}
 
     def describe(self, p):
+        if "--describe-fails" in ARGS:
+            raise RpcError(-32000, "the toy cannot describe itself")
         return {"name": "toy", "version": "0.1.0", "protocol": 1,
                 "restore": {"exact": EXACT, "approximate": APPROXIMATE}, "uses_clock": "--uses-clock" in ARGS,
                 "fingerprint": {"toy": 1}, "tools": TOOLS}
@@ -152,6 +154,16 @@ class Part:
 
     def usage(self, p):
         return {"bytes": len(self.saves)}
+
+    def gc(self, p):
+        if "--gc" not in ARGS:
+            raise RpcError(-32601, "method not found: gc")
+        keep = p["keep"]
+        kept = lambda s: any(s == k or (k.endswith("*") and s.startswith(k[:-1])) for k in keep)
+        doomed = [s for s in self.saves if not kept(s)]
+        for s in doomed:
+            del self.saves[s]
+        return {"dropped": len(doomed), "bytes": len(doomed)}
 
 
 RING = {"name": "ring", "description": "Ring the bell.", "inputSchema": {"type": "object", "properties": {}}, "effect": "read"}
