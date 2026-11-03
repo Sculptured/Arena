@@ -184,7 +184,9 @@ the prefix `live_` and needs Docker or a real server. Each folder's README has t
 | `counter` (Rust), `counter-py` (Python) | Kit examples: one integer per instance | save (flavours: replay, approximate) | no (flavour) | yes | Kit and core tests (`kits/*/tests`, `core/crates/parts/tests`, arenad tests) |
 
 Only `postgres` (through the retail example) has been used in an arenad run with agents. The other
-integrations are checked on their own, not inside a team's run.
+integrations are checked on their own, not inside a team's run. Three of them need code that is not public yet:
+`sculptured` runs the Sculptured program, and `ridgeline-hub` and `isaac-sim` (with its mirror) wrap the Ridgeline
+factory example. Without those, their tests are skipped.
 
 ## Extend Arena
 

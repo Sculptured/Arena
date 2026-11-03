@@ -7,6 +7,10 @@ suite and the `arena-part-check` conformance check; **the `isaac` backend has ne
 Sim image or 16 GB GPU here). Its package `isaac-sim-mirror` (see `integrations/isaac-sim-mirror/README.md`)
 only follows a live plant.
 
+**The factory example this package wraps is not public yet.** Its default `isaac_path` points into a private
+`Sculptured-Examples` checkout next to the arena checkout; without one the package can't start and every test in
+`tests/` is skipped (pytest says why). Outside contributors can read and change the code, but can't run it.
+
 The Ridgeline factory as an `arena-part/1` integration, on the arena clock. In the factory demo
 (`Sculptured-Examples/factory`, branch `isaac-plant`), Isaac Sim 6.2 **is** the plant. This integration wraps
 that demo's `isaac/factory.py` class `Factory` without editing it. Factory is plain Python and reaches the

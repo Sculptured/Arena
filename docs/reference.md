@@ -88,8 +88,10 @@ cargo test -- --ignored live_                  # live integration tests: they st
 (cd ui && npx vitest run && npm run build)
 ```
 
-The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the factory example from
-`Sculptured-Examples/` next to the arena checkout (their READMEs say which folders); without it they fail.
+The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from
+`Sculptured-Examples/factory` next to the arena checkout (their READMEs say which folders). **That example is not
+public yet**: without it every test of those two packages is skipped, and the packages can't start. The Sculptured
+program that `integrations/sculptured` runs is not published yet either; its live test is skipped without it.
 
 Tests never call a real model unless they are `live_`. Never start arenad while tests run: the tests make
 databases that arenad's startup cleanup would drop.

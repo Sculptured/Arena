@@ -2,16 +2,18 @@
 
 Puts Sculptured's approvals in the world: one `sculptured serve` per instance, with changes proposed and decided
 through tools. Restore: exact from a save (SQLite backups plus a data folder); approximate: no. `uses_clock`:
-false. Verified live: `live_sculptured_roundtrip` ran against a real `sculptured` build on this machine (propose,
-save, decide, restore, diff). `arena-part-check` passed on it once, run by hand (no test runs it). The test is
-skipped, and says so, when no Sculptured program is found. A save restores only with the same Sculptured build.
+false. **The Sculptured program is not published yet**, so outside contributors cannot run this integration
+or its live test; the rest of the repository does not need it. Verified live: `live_sculptured_roundtrip` ran
+against a local build of `sculptured` on the maintainer's machine (propose, save, decide, restore, diff).
+`arena-part-check` passed on it once, run by hand (no test runs it). The test is skipped, and says so, when no
+Sculptured program is found. A save restores only with the same Sculptured build.
 
 Sculptured's approvals in the arena world: changes proposed to a business system and the decisions on
 them. Each instance is a `sculptured serve` of its own; the tools reach it only through Sculptured's HTTP
 API.
 
-- **Config:** `{binary?, team?}`. `binary` is the sculptured program (default
-  `~/MLSys/Sculptured/sculptured/target/release/sculptured`; it is run as it is, never built). `team`
+- **Config:** `{binary?, team?}`. `binary` is the sculptured program (default: the
+  first `sculptured` on `PATH`; it is run as it is, never built). `team`
   (default `arena`; `a-z`, `0-9` and `-`) is the team whose changes the tools propose, list and decide.
 - **Instance** `<instance>`: `binary serve --port 0 --data-dir <saves>/sculptured/.live/<instance>/data`,
   in a process group of its own, with a cleared environment (`HOME` is the instance's `home/`, `TMPDIR` a

@@ -48,7 +48,7 @@ The core never depends on an integration or a benchmark, and they never depend o
    (cd kits/python && uv run --with pytest pytest -q)
    (cd ui && npm test && npm run build)
    ```
-   The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the factory example from `Sculptured-Examples/` next to your checkout (see their READMEs); run them the same way when you change those packages. CI runs everything above except those two suites, which it only imports.
+   The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from `Sculptured-Examples/factory` next to your checkout. **That example is not public yet**, so outside contributors can't run those two suites: without it every test in them is skipped. CI runs everything above and only imports those two packages. Likewise the Sculptured program that `integrations/sculptured` runs is not published yet; its only test is `live_` and is skipped without it.
 4. If you changed a test that makes databases, run `core/scripts/leakcheck.sh` from `core/`: it fails if a test leaves databases behind.
 5. If you changed the UI, look at it in the running app and say in the pull request what you checked.
 6. Open a pull request and fill in the template.

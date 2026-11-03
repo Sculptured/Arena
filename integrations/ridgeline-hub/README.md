@@ -6,6 +6,10 @@ factory hub's `Market` running on the arena clock. Restore: exact from a save (o
 `market.py` from the factory demo folder and runs the `arena-part-check` conformance check. No service or
 container is involved. No arenad test or run has used it.
 
+**The factory example this package wraps is not public yet.** Its default `hub_path` points into a private
+`Sculptured-Examples` checkout next to the arena checkout; without one the package can't start and every test in
+`tests/` is skipped (pytest says why). Outside contributors can read and change the code, but can't run it.
+
 The simulated outside companies of the Ridgeline factory demo (suppliers, carriers, the insurer and
 customers) as an `arena-part/1` integration, running on the arena clock. It wraps the factory hub's
 `ridgeline_hub.market.Market` and changes only where time comes from: `now()` returns arena seconds, not

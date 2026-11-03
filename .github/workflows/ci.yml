@@ -77,8 +77,9 @@ jobs:
       - name: Test the Python kit
         working-directory: kits/python
         run: uv run --with pytest pytest -q
-      # Their tests read the factory example (Sculptured-Examples/factory) from next to the
-      # checkout, which CI does not have; here they are only installed, compiled and imported.
+      # Their tests read the factory example (Sculptured-Examples/factory, not public yet) from
+      # next to the checkout, which CI does not have; here they are only installed, compiled and
+      # imported.
       - name: Import ridgeline-hub
         working-directory: integrations/ridgeline-hub
         run: |
