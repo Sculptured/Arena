@@ -6,7 +6,7 @@ Claude Code and Codex runs were made before the move to integrations and have no
 
 ## Snapshot copy time
 
-Median 152 ms over 10 snapshots in the Task 4 test; three runs gave 152, 152 and 221 ms. Each snapshot is a
+Median 152 ms over 10 snapshots in one test; three runs gave 152, 152 and 221 ms. Each snapshot is a
 full copy of the 21 MB retail database. The machine was the development laptop.
 
 ## Live runs on task 27
@@ -18,8 +18,8 @@ resolver), because the steps before the fork point are copied, not rerun.
 
 | Run | Status | Seconds | Tokens | Cost |
 |---|---|---|---|---|
-| A: default team (Task 13) | passed | 23.574 | 104427 | $0.0996256 (api_equivalent_estimate) |
-| A fork: resolver prompt changed, forked at step 12 (Task 13) | passed | 8.911 | 36036 | $0.0296177 (api_equivalent_estimate) |
+| A: default team | passed | 23.574 | 104427 | $0.0996256 (api_equivalent_estimate) |
+| A fork: resolver prompt changed, forked at step 12 | passed | 8.911 | 36036 | $0.0296177 (api_equivalent_estimate) |
 | B: triage Claude Code, resolver Codex (new run, model unset) | passed | 50.708 | 166583 | $0.0407897 (api_equivalent_estimate, triage only, from its agent_end; Codex has no dollar figure, so the compare output shows no dollars for B) |
 | C1: fork of A at step 12, resolver kind changed to `codex`, model left as `sonnet` | infra_error | 1.725 | 0 | none |
 | C2: same fork, resolver kind `codex` and model `gpt-6.1-sol` | passed | 29.159 | 106955 | none (Codex reports tokens only) |
@@ -40,7 +40,7 @@ Notes:
   `{"start_seq":12,"moved_from":null,"reason":null}`, and the branch ended `infra_error`. C2 is the one retry,
   with the model set to the one in the Codex config used.
 - Compare, A against C2: `first_divergent_seq` 13, `differing_rows` empty. A against B: `first_divergent_seq`
-  13, `differing_rows` empty. A against the Task 13 prompt fork: `first_divergent_seq` 16, `differing_rows`
+  13, `differing_rows` empty. A against its prompt fork: `first_divergent_seq` 16, `differing_rows`
   empty. A against C1: `first_divergent_seq` 13, one differing row, `orders/#W7181492` (A made the exchange,
   the failed branch did not).
 - None of the forks moved (`moved_from` and `reason` were `null`): step 12 is already the start of the

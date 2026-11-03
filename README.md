@@ -13,8 +13,7 @@ world they run in. The core (`core/`) does not depend on any integration or benc
 `core/crates/parts/tests/isolation.rs` checks this.
 
 Docs: `docs/protocol.md` (the protocol), `integrations/README.md` (how to write an integration),
-`docs/specs/2026-10-31-integrations-design.md` (the design), `docs/measurements.md` (measurements made with
-the retail example benchmark).
+`docs/measurements.md` (measurements made with the retail example benchmark).
 
 ## Concepts
 

@@ -1,3 +1,4 @@
-# Both workspaces (core/ and this one) share one target directory: the disk is nearly full.
+# Both workspaces (core/ and this one) share one target directory, where arenad finds the package programs
+# (ARENA_BIN_DIR defaults to core/target/release).
 [build]
 target-dir = "core/target"
