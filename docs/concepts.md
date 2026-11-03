@@ -68,9 +68,18 @@ An agent's `kind` picks its mode:
   records every tool call (arguments, result, keys read and written), the handoff note, and the tokens and
   cost the CLI reports. It does not see the raw model calls.
 - **API mode** (`open`): arenad runs the agent loop itself and sends each model call through its gateway to
-  OpenRouter. It records everything CLI mode does, plus every model call. It needs `OPENROUTER_API_KEY`. The
-  model is an OpenRouter model id, `deepseek/deepseek-chat-v3.1` when none is set. No API-mode run has been
-  measured yet.
+  the agent's **provider**. It records everything CLI mode does, plus every model call. Each agent picks one:
+  - `openrouter` (the default, also for agents and runs made before providers): needs `OPENROUTER_API_KEY`;
+    the model is an OpenRouter model id, `deepseek/deepseek-chat-v3.1` when none is set.
+  - `openai`: OpenAI's Chat Completions API; needs `OPENAI_API_KEY` and a model.
+  - `anthropic`: Claude through Anthropic's Messages API, translated by the gateway; needs `ANTHROPIC_API_KEY`
+    and a model.
+  - `local:<name>`: any OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp's server), configured in
+    `ARENA_LOCAL_MODELS`, for example `ollama=http://127.0.0.1:11434/v1`; needs a model.
+
+  Every call is recorded in one format (OpenAI chat completions), whatever the provider, so replay, forks and
+  compare treat all providers alike. The details, and what each provider costs, are in
+  [reference.md](reference.md#model-providers). No API-mode run has been measured yet with any provider.
 
 Isolation of the CLI agents (`core/crates/arenad/src/agents/`; checked live by the `live_` tests in
 `core/crates/arenad/tests/cli.rs`):
@@ -81,13 +90,16 @@ Isolation of the CLI agents (`core/crates/arenad/src/agents/`; checked live by t
   web search off; read-only sandbox. Codex's built-in shell cannot be turned off. A probe from inside the
   sandbox could not open a socket, not even to the loopback Postgres port (`Operation not permitted`). Codex
   still listed its sub-agent tools (`collaboration.*`) in the live checks; they run under the same restrictions.
-- Both CLIs run with `PG*`, `ARENA_PG_URL`, `DATABASE_URL` and `OPENROUTER_API_KEY` removed from their
-  environment, in a fresh temporary working directory.
+- Both CLIs run in a fresh temporary working directory, with `PG*`, `ARENA_PG_URL`, `DATABASE_URL`,
+  `OPENROUTER_API_KEY`, `ARENA_LOCAL_MODELS` and every `ARENA_LOCAL_KEY_*` removed from their environment. Each
+  keeps only its own vendor's key, which it may sign in with: Claude Code keeps `ANTHROPIC_API_KEY` and loses
+  `OPENAI_API_KEY`; Codex keeps `OPENAI_API_KEY` and loses `ANTHROPIC_API_KEY`. The `provider` of API mode does
+  not apply to them.
 - A CLI session cannot be resumed in the middle, which drives the fork rules below.
 
 ## Forking
 
-You choose a step N and a change (prompt, model, or kind of one or more agents) and a restore mode.
+You choose a step N and a change (prompt, model, provider, or kind of one or more agents) and a restore mode.
 
 - Each part of the world is put back as it was just before the fork point, in the restore mode you choose.
 - Agents that finished before the fork point keep their recorded output (for example the handoff note).
@@ -101,12 +113,19 @@ You choose a step N and a change (prompt, model, or kind of one or more agents) 
   refused with an error that names the part.
 - Changing `kind` resets the agent's model to the new mode's default, unless the same change also sets a model.
   An empty model in a change clears the model.
+- Changing an API-mode agent's `provider` is a model change for these rules. It drops the old model, which
+  belongs to the old provider, unless the same change sets one; only OpenRouter has a default model, so the web UI
+  always sends a model with a provider. Naming the agent's own provider is no change.
 
 ## Cost labels
 
-- `openrouter`: the cost OpenRouter reports (API mode).
+- `openrouter`: the cost OpenRouter reports (API mode on OpenRouter).
+- `local (no API charge)`: API mode on a local server; the cost is 0 and the UI shows `no API charge`.
+- No label and no dollar figure on API mode with OpenAI or Anthropic: they report no price and arenad keeps no
+  price table, so only tokens are recorded; the UI shows the cost as `unknown`.
 - `api_equivalent_estimate`: Claude Code's own `total_cost_usd`. It is what the same tokens would cost at API
   prices, not what a subscription pays.
 - No label and no dollar figure: Codex reports tokens only.
-- Dollars are shown only when every agent in the branch has a dollar figure; otherwise only tokens are shown.
-  Tokens are always summed. When agents have different sources the label is `mixed`.
+- Dollars are shown only when every agent in the branch has a dollar figure; otherwise only tokens are shown,
+  and the UI writes the cost as `unknown` when an agent of the branch is on OpenAI or Anthropic (else `tokens
+  only`). Tokens are always summed. When agents have different sources the label is `mixed`.

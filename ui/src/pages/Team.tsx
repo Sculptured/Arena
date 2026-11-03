@@ -1,18 +1,51 @@
 import { useEffect, useState } from 'react';
 import { defaultTeam } from '../api';
-import { useHealth } from '../components';
+import { ModelHint, ModelInput, ProviderSelect } from '../ProviderFields';
+import { MODE_LABEL, providerOf, useProviderList } from '../providers';
 import { clearStoredTeam, loadTeam, saveTeam, slug, withSlugIds } from '../team';
-import { DEFAULT_OPENROUTER_MODEL } from '../types';
-import type { AgentKind, AgentSpec, Team as TeamT } from '../types';
+import type { AgentKind, AgentSpec, ProviderStatus, Team as TeamT } from '../types';
 
-const KINDS: { value: AgentKind; label: string }[] = [
-  { value: 'claude_code', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'open', label: 'OpenRouter' },
-];
+const KINDS: AgentKind[] = ['claude_code', 'codex', 'open'];
+
+/** Mode, then (API mode) provider and model; a CLI agent's model is the CLI's. */
+export function AgentFields({ agent: a, index: i, openOk, list, patch }: {
+  agent: AgentSpec;
+  index: number;
+  /** Some provider can take API-mode calls. */
+  openOk: boolean;
+  list: ProviderStatus[];
+  patch: (p: Partial<AgentSpec>) => void;
+}) {
+  const provider = a.kind === 'open' ? providerOf(a) : null;
+  return (
+    <>
+      <div className="agent-fields">
+        <label className="field mode-field">
+          <span className="label">Mode</span>
+          <select value={a.kind} onChange={(e) => patch({ kind: e.target.value as AgentKind, model: null, provider: undefined })}>
+            {KINDS.map((k) => (
+              <option key={k} value={k} disabled={k === 'open' && !openOk && a.kind !== 'open'}>
+                {MODE_LABEL[k]}{k === 'open' && !openOk ? ' (no provider available)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {provider && <ProviderSelect value={provider} list={list} onChange={(id) => patch({ provider: id, model: null })} />}
+        <ModelInput
+          listId={`team-models-${i}`}
+          provider={provider}
+          value={a.model ?? ''}
+          list={list}
+          onChange={(m) => patch({ model: m.trim() === '' ? null : m })}
+        />
+      </div>
+      {provider && <ModelHint provider={provider} model={a.model} list={list} />}
+    </>
+  );
+}
 
 export default function Team() {
-  const health = useHealth();
+  const { list } = useProviderList();
   const [team, setTeam] = useState<TeamT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -50,7 +83,8 @@ export default function Team() {
     }
   };
 
-  const openOk = health?.open_available ?? false;
+  // Any provider not known to be unavailable (a local server not checked yet counts).
+  const openOk = list.some((s) => s.available || (s.kind === 'local' && !s.checked));
 
   return (
     <>
@@ -77,27 +111,7 @@ export default function Team() {
               <button className="btn btn-sm" onClick={() => move(i)} disabled={i === 0} title="Move up">↑ Up</button>
               <button className="btn btn-sm danger" onClick={() => remove(i)} disabled={team.agents.length === 1} title="Remove">Remove</button>
             </div>
-            <div className="agent-fields">
-              <label className="field">
-                <span className="label">Mode</span>
-                <select value={a.kind} onChange={(e) => patch(i, { kind: e.target.value as AgentKind, model: null })}>
-                  {KINDS.map((k) => (
-                    <option key={k.value} value={k.value} disabled={k.value === 'open' && !openOk && a.kind !== 'open'}>
-                      {k.label}{k.value === 'open' && !openOk ? ' (needs OPENROUTER_API_KEY)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field grow">
-                <span className="label">Model</span>
-                <input
-                  className="mono"
-                  value={a.model ?? ''}
-                  onChange={(e) => patch(i, { model: e.target.value.trim() === '' ? null : e.target.value })}
-                  placeholder={a.kind === 'open' ? `${DEFAULT_OPENROUTER_MODEL} (default)` : 'default'}
-                />
-              </label>
-            </div>
+            <AgentFields agent={a} index={i} openOk={openOk} list={list} patch={(p) => patch(i, p)} />
             <label className="field">
               <span className="label">Prompt</span>
               <textarea value={a.prompt} rows={6} onChange={(e) => patch(i, { prompt: e.target.value })} />

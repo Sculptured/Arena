@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { rows } from '../api';
 import { formatCost, rowKeys } from './timeline';
 import { notComparedLine, savedLine } from '../restore';
-import type { Event } from '../types';
+import { costIsUnknown, providerId, providerName, providerOf } from '../providers';
+import type { Event, Team } from '../types';
 
 export const pretty = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? null, null, 2));
 
@@ -48,12 +49,24 @@ function RowsAtStep({ branchId, seq, keys, more, auto }: { branchId: string; seq
   );
 }
 
+/** True when the agent is on a provider that reports no price (OpenAI, Anthropic). */
+function agentCostUnknown(team: Team | undefined, agent: string | null): boolean {
+  const a = team?.agents.find((x) => x.id === agent);
+  return !!a && a.kind === 'open' && costIsUnknown(providerOf(a));
+}
+
 function messageText(m: unknown): string {
   const c = (m as { content?: unknown })?.content;
   return typeof c === 'string' ? c : pretty(c ?? m);
 }
 
-export default function Inspector({ branchId, event, autoRows }: { branchId: string; event: Event | null; autoRows?: boolean }) {
+/** "OpenAI · gpt-x": who answered a model call (absent in calls recorded before providers: OpenRouter). */
+export function modelCallLine(p: { provider?: string; request?: unknown }): string {
+  const model = (p.request as { model?: unknown } | null)?.model;
+  return `${providerName(providerId(p.provider))}${typeof model === 'string' && model ? ` · ${model}` : ''}`;
+}
+
+export default function Inspector({ branchId, event, team, autoRows }: { branchId: string; event: Event | null; team?: Team; autoRows?: boolean }) {
   const auto = autoRows;
   if (!event) return <div className="inspector empty-pane muted">Select a step. Use ↑/↓ or j/k to move.</div>;
   const p = (event.payload ?? {}) as Record<string, any>;
@@ -82,6 +95,7 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
       const msgs: unknown[] = Array.isArray(p.request?.messages) ? p.request.messages : [];
       body = (
         <>
+          <div className="small"><span className="label">Provider</span> <span className="mono">{modelCallLine(p)}</span></div>
           <div className="block">
             <div className="label">Messages ({msgs.length})</div>
             {msgs.map((m, i) => (
@@ -93,7 +107,8 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
           </div>
           <Block title="Response" value={p.response} />
           <Block title="Usage" value={p.usage} />
-          <div className="muted small">cost: {formatCost(p.cost_usd, p.cost_source)}</div>
+          <div className="muted small">cost: {formatCost(p.cost_usd, p.cost_source, costIsUnknown(providerId(p.provider)))}</div>
+          {p.provider_response !== undefined && <Block title="Provider's own response" value={p.provider_response} />}
         </>
       );
       break;
@@ -113,7 +128,7 @@ export default function Inspector({ branchId, event, autoRows }: { branchId: str
       body = (
         <>
           <div>{p.ok ? 'Finished' : 'Failed'}{p.error ? `: ${p.error}` : ''}</div>
-          <div className="muted small">{p.seconds != null ? `${Number(p.seconds).toFixed(1)} s · ` : ''}{p.tokens != null ? `${p.tokens} tokens · ` : ''}{formatCost(p.cost_usd, p.cost_source)}</div>
+          <div className="muted small">{p.seconds != null ? `${Number(p.seconds).toFixed(1)} s · ` : ''}{p.tokens != null ? `${p.tokens} tokens · ` : ''}{formatCost(p.cost_usd, p.cost_source, agentCostUnknown(team, event.agent))}</div>
         </>
       );
       break;

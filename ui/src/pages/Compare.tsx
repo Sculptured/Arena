@@ -5,7 +5,8 @@ import { ApproximateMark, StatusChip } from '../components';
 import { formatCost, jsonDiff } from '../run/timeline';
 import { pretty } from '../run/Inspector';
 import { APPROXIMATE_NOTE, isApproximate, notComparedLine } from '../restore';
-import type { CompareResponse, CompareSide, Event, RowDiff } from '../types';
+import { agentModelLine, costIsUnknown, teamProviders } from '../providers';
+import type { BranchDetail, CompareResponse, CompareSide, Event, RowDiff, Team } from '../types';
 
 function StepView({ id, ev }: { id: string; ev: Event | undefined }) {
   const p = (ev?.payload ?? {}) as Record<string, unknown>;
@@ -22,14 +23,17 @@ function StepView({ id, ev }: { id: string; ev: Event | undefined }) {
   );
 }
 
-function Side({ id, s }: { id: string; s: CompareSide }) {
+/** One branch's outcome, numbers and agents (each with its model and where it runs). */
+export function Side({ id, s, team }: { id: string; s: CompareSide; team?: Team }) {
+  const unknown = teamProviders(team).some(costIsUnknown);
   return (
     <div className="panel cmp-col">
       <div className="cmp-top"><span className="mono">{id.slice(0, 8)}</span><StatusChip status={s.status} /><ApproximateMark of={s} /></div>
       <dl className="kv">
         <dt>Seconds</dt><dd>{s.seconds != null ? s.seconds.toFixed(1) : '–'}</dd>
         <dt>Tokens</dt><dd>{s.tokens ?? '–'}</dd>
-        <dt>Cost</dt><dd>{formatCost(s.cost_usd, s.cost_source)}</dd>
+        <dt>Cost</dt><dd>{formatCost(s.cost_usd, s.cost_source, unknown)}</dd>
+        {team && <><dt>Agents</dt><dd>{team.agents.map((a) => <div key={a.id}>{a.name}: {agentModelLine(a)}</div>)}</dd></>}
       </dl>
     </div>
   );
@@ -62,12 +66,15 @@ export default function Compare() {
   const { a = '', b = '' } = useParams();
   const [data, setData] = useState<CompareResponse | null>(null);
   const [evs, setEvs] = useState<[Event[], Event[]] | null>(null);
+  const [teams, setTeams] = useState<[Team, Team] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setData(null); setEvs(null); setError(null);
+    setData(null); setEvs(null); setTeams(null); setError(null);
     Promise.all([compare(a, b), fetchBranch(a), fetchBranch(b)])
-      .then(([c, x, y]) => { if (!cancelled) { setData(c); setEvs([x.events, y.events]); } })
+      .then(([c, x, y]: [CompareResponse, BranchDetail, BranchDetail]) => {
+        if (!cancelled) { setData(c); setEvs([x.events, y.events]); setTeams([x.team, y.team]); }
+      })
       .catch((e) => { if (!cancelled) setError(String(e.message ?? e)); });
     return () => { cancelled = true; };
   }, [a, b]);
@@ -80,7 +87,7 @@ export default function Compare() {
         {!data && !error && <p className="muted">Loading…</p>}
         {data && (
           <>
-            <div className="cmp-cols"><Side id={a} s={data.a} /><Side id={b} s={data.b} /></div>
+            <div className="cmp-cols"><Side id={a} s={data.a} team={teams?.[0]} /><Side id={b} s={data.b} team={teams?.[1]} /></div>
             {(isApproximate(data.a) || isApproximate(data.b)) && <div className="notice small">{APPROXIMATE_NOTE}</div>}
             <div className="panel pane">
               {data.first_divergent_seq != null

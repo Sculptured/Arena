@@ -1,6 +1,6 @@
 import type {
   Branch, BranchDetail, Change, CompareResponse, Event, ForkResponse, Health, NewRunResponse,
-  RestoreMode, RestorePlan, RowsResponse, RunSummary, StatusEvent, TaskSummary, Team,
+  ProviderStatus, RestoreMode, RestorePlan, RowsResponse, RunSummary, StatusEvent, TaskSummary, Team,
 } from './types';
 
 export class ApiError extends Error {
@@ -31,6 +31,8 @@ const post = <T>(path: string, body: unknown) =>
 export const deleteRun = (id: string) =>
   call<{ dropped: number }>(`/api/runs/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const health = () => call<Health>('/api/health');
+/** Every model provider; asks local servers (and OpenAI/Anthropic when keyed) for their models, 3 s each. */
+export const providers = () => call<ProviderStatus[]>('/api/providers');
 export const tasks = () => call<TaskSummary[]>('/api/tasks');
 export const defaultTeam = () => call<Team>('/api/team/default');
 export const startRun = (task_id: string, team: Team) => post<NewRunResponse>('/api/runs', { task_id, team });

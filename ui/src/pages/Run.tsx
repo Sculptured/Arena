@@ -8,6 +8,7 @@ import Timeline from '../run/Timeline';
 import { formatCost, lanes, summarize } from '../run/timeline';
 import type { Branch, BranchDetail, Event } from '../types';
 import { worldLine } from '../restore';
+import { costIsUnknown, teamProviders } from '../providers';
 import { branchTree } from './Runs';
 
 export default function Run() {
@@ -95,7 +96,7 @@ export default function Run() {
         {sm.scope && <span className="muted small">{sm.scope}</span>}
         <span className="stat"><span className="label">Seconds{sm.live ? ' so far' : ''}</span>{sm.seconds != null ? sm.seconds.toFixed(1) : '–'}</span>
         <span className="stat"><span className="label">Tokens</span>{sm.tokens}</span>
-        <span className="stat"><span className="label">Cost</span>{formatCost(sm.cost_usd, sm.cost_source)}</span>
+        <span className="stat"><span className="label">Cost</span>{formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown))}</span>
       </header>
       <div className="run-body">
         <section className="run-main">
@@ -108,7 +109,7 @@ export default function Run() {
             <Timeline lanes={ls} team={detail.team} selected={selected} onSelect={(s) => { setSelected(s); }} />
           </div>
           <div className="panel pane">
-            <Inspector branchId={detail.id} event={event} autoRows={sp.get('rows') === '1'} />
+            <Inspector branchId={detail.id} event={event} team={detail.team} autoRows={sp.get('rows') === '1'} />
             {event && (
               <div className="insp-actions">
                 <button className="btn" onClick={() => setForking((f) => !f)} disabled={event.kind === 'check' || event.kind === 'run_start'}>

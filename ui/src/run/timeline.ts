@@ -1,4 +1,5 @@
 import { savedParts } from '../restore';
+import { LOCAL_COST_SOURCE, providerId } from '../providers';
 import type { AgentKind, AgentSpec, Branch, Change, Event, Team } from '../types';
 
 export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check';
@@ -60,12 +61,19 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
 export function costLabel(source: string | null | undefined): string {
   if (source === 'api_equivalent_estimate') return 'API-equivalent estimate';
   if (source === 'openrouter') return 'OpenRouter';
+  if (source === LOCAL_COST_SOURCE) return 'no API charge';
   if (source === 'mixed') return 'mixed';
   return '';
 }
 
-export function formatCost(usd: number | null | undefined, source: string | null | undefined): string {
-  if (usd == null) return 'tokens only';
+/**
+ * A cost with its source. No dollar figure reads "unknown" when an OpenAI or Anthropic call is in
+ * it (`unknown`: they report no price), else "tokens only" (Codex); a local server's cost reads
+ * "no API charge".
+ */
+export function formatCost(usd: number | null | undefined, source: string | null | undefined, unknown = false): string {
+  if (usd == null) return unknown ? 'unknown' : 'tokens only';
+  if (usd === 0 && source === LOCAL_COST_SOURCE) return 'no API charge';
   const l = costLabel(source);
   return `$${usd.toFixed(usd < 0.1 ? 4 : 2)}${l ? ` (${l})` : ''}`;
 }
@@ -132,7 +140,9 @@ export function summarize(
 /**
  * Only fields that really changed. Prompts compare trimmed. A cleared model that was set is sent as ""
  * (explicit clear); blank on an unset model is no change. A mode change resets the model server-side,
- * so a blank model box next to it sends just the mode.
+ * so a blank model box next to it sends just the mode. A provider (API mode only) is sent only when
+ * it differs from the agent's (absent is `openrouter`), never blank, and always with its model: the
+ * old model belongs to the old provider.
  */
 export function changedFields(agents: AgentSpec[], edits: Record<string, Change>): Record<string, Change> {
   const out: Record<string, Change> = {};
@@ -142,8 +152,13 @@ export function changedFields(agents: AgentSpec[], edits: Record<string, Change>
     const c: Change = {};
     if (e.prompt != null && e.prompt.trim() !== a.prompt.trim()) c.prompt = e.prompt.trim();
     const kindChanged = e.kind != null && e.kind !== (a.kind as AgentKind);
+    const open = (e.kind ?? a.kind) === 'open';
+    const providerChanged = open && e.provider != null && providerId(e.provider) !== providerId(a.provider);
     const m = e.model?.trim();
-    if (m != null && m !== (a.model ?? '') && (m !== '' || !kindChanged)) c.model = m;
+    if (providerChanged) {
+      c.provider = providerId(e.provider);
+      c.model = m ?? '';
+    } else if (m != null && m !== (a.model ?? '') && (m !== '' || !kindChanged)) c.model = m;
     if (kindChanged) c.kind = e.kind;
     if (Object.keys(c).length) out[a.id] = c;
   }

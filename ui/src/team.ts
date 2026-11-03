@@ -40,6 +40,17 @@ export async function loadTeam(): Promise<Team> {
   return readStoredTeam() ?? (await defaultTeam());
 }
 
+/** The team as a run is started with: a provider only on API-mode agents, trimmed, never blank. */
+export function teamForRun(team: Team): Team {
+  return {
+    ...team,
+    agents: team.agents.map(({ provider, ...a }) => {
+      const p = provider?.trim();
+      return a.kind === 'open' && p ? { ...a, provider: p } : a;
+    }),
+  };
+}
+
 /** Agent ids must match ^[a-z0-9_-]+$ and be unique within the team. */
 export function slug(name: string, taken: Set<string>): string {
   const base = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';

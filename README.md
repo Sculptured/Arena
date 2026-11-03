@@ -38,8 +38,11 @@ the runs.
   approximate save, or nothing. A fork that can't restore a part in the mode you asked for is refused, naming
   the part; approximately restored branches are labelled in the run page, the branch list and compare.
 - **Any harness, one team.** Run agents as headless Claude Code or Codex CLIs that see only the world's tools
-  through an MCP endpoint (CLI mode), or in arenad's own loop through OpenRouter with every model call recorded
-  (API mode). Mix them in one team and swap one for the other in a fork.
+  through an MCP endpoint (CLI mode), or in arenad's own loop with every model call recorded (API mode). Mix them
+  in one team and swap one for the other in a fork.
+- **Any model provider.** Each API-mode agent picks its provider: OpenRouter, the OpenAI API, the Claude API, or a
+  model on your own machine through any OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp's server).
+  A fork can move an agent to another provider or model.
 - **Integrations work like device drivers.** Each kind of system is a separate program, in any language, that
   speaks `arena-part/1`: JSON-RPC over stdin and stdout. Rust and Python kits do the plumbing, and
   `arena-part-check` checks a new integration against the protocol.
@@ -101,7 +104,7 @@ flowchart LR
   end
 
   PG[("Postgres<br/>run records")]
-  OR["OpenRouter"]
+  OR["Model providers<br/>OpenRouter · OpenAI · Claude API · local servers"]
 
   UI -->|HTTP| API
   SC -.->|same API| API
@@ -129,7 +132,9 @@ teams and handoffs, forking rules and cost labels.
 
 This uses the included retail example benchmark (`benchmarks/retail`, customer service from tau2-bench retail,
 on one `postgres` part), the default benchmark. You need Docker, Rust and Node; the `claude` and/or `codex`
-CLIs on your PATH for CLI agents; `OPENROUTER_API_KEY` for API agents; `uv` only for the Python integrations.
+CLIs on your PATH for CLI agents; for API agents, a key (`OPENROUTER_API_KEY`, `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`) or a local OpenAI-compatible server named in `ARENA_LOCAL_MODELS` (for example
+`ollama=http://127.0.0.1:11434/v1`); `uv` only for the Python integrations.
 
 ```bash
 git clone https://github.com/Sculptured/Arena.git && cd Arena
@@ -142,7 +147,8 @@ cargo build --release                          # the Rust integrations and bench
 arenad keeps its records in the database `arena` on that Postgres. It starts the integration and benchmark
 programs itself, from `ARENA_BIN_DIR` (default `core/target/release`), and refuses to start if the benchmark
 can't be described (package missing or not built). It listens on 127.0.0.1 only. `GET /api/health` shows the
-benchmark, which CLIs were found, whether API mode is available, and the disk use.
+benchmark, which CLIs were found, each model provider and whether API mode is available, and the disk use;
+`GET /api/providers` also asks the local servers and lists the models each provider offers.
 
 Or build the UI and let arenad serve it:
 
@@ -153,7 +159,8 @@ Or build the UI and let arenad serve it:
 
 Then:
 
-1. **Start a run:** pick a task and a team.
+1. **Start a run:** pick a task and a team. On the Team page each agent gets a mode, and an API-mode agent a
+   provider and a model.
 2. **Inspect:** click a step to see its arguments, its result, and the state it read or wrote, as it was at
    that step.
 3. **Fork:** at a step, with a change (for example a new prompt for one agent, or that agent run by another
@@ -161,7 +168,7 @@ Then:
 4. **Compare** the two branches: outcome, time, tokens, cost, the first step where they differ, and the state
    that differs at the end.
 
-Settings (port, benchmark, package folders, disk limit, clock speed, OpenRouter) are environment variables;
+Settings (port, benchmark, package folders, disk limit, clock speed, model providers) are environment variables;
 see [docs/reference.md](docs/reference.md#configuration).
 
 ## Integrations
@@ -217,7 +224,8 @@ other integration is checked on its own, and API mode has not been measured.
 - Only `postgres` has been used in an arenad run with agents; every other integration is checked on its own.
 - Only one benchmark is included, the retail example. arenad runs one benchmark at a time.
 - Teams are a fixed sequence of agents with handoff notes; only the last agent writes.
-- API mode has not been measured (no key was set).
+- API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
+  servers) are tested against fake servers only, with no real model call.
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).
 - Cross-part calls: protocol v1 has no calls between parts. `proposal_id` is accepted by the `ridgeline-hub`
   and `isaac-sim` tools and not checked.

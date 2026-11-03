@@ -11,7 +11,7 @@ Thanks for helping. Bug reports, new integrations and benchmarks, docs fixes and
 
 ## Set up
 
-You need [Rust](https://rustup.rs/) (stable), [Node.js](https://nodejs.org/) 24, Docker, Git and, for the Python kit and integrations, [uv](https://docs.astral.sh/uv/). Claude Code or Codex is only needed to run real CLI agents, and `OPENROUTER_API_KEY` only for API agents; the tests call neither.
+You need [Rust](https://rustup.rs/) (stable), [Node.js](https://nodejs.org/) 24, Docker, Git and, for the Python kit and integrations, [uv](https://docs.astral.sh/uv/). Claude Code or Codex is only needed to run real CLI agents, and a model provider (a key such as `OPENROUTER_API_KEY`, or a local server in `ARENA_LOCAL_MODELS`) only for API agents; the tests call neither.
 
 ```bash
 git clone https://github.com/Sculptured/Arena.git

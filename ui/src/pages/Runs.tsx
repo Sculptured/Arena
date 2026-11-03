@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteRun, runs as fetchRuns, startRun, tasks as fetchTasks } from '../api';
 import { ApproximateMark, DISK_CHANGED, StatusChip, formatTime } from '../components';
-import { loadTeam } from '../team';
+import { loadTeam, teamForRun } from '../team';
 import type { Branch, RunSummary, TaskSummary } from '../types';
 
 /** Branches in tree order with their depth (parent before children, oldest first). */
@@ -35,7 +35,7 @@ function NewRun({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string 
     setBusy(true);
     onError(null);
     try {
-      const team = await loadTeam();
+      const team = teamForRun(await loadTeam());
       const r = await startRun(selected, team);
       nav(`/runs/${r.run_id}/${r.branch_id}`);
     } catch (e) {

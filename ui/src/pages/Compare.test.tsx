@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Rows } from './Compare';
+import { Rows, Side } from './Compare';
 import type { CompareResponse, CompareSide } from '../types';
 
 const side: CompareSide = { status: 'passed', seconds: 1, tokens: 1, cost_usd: null, cost_source: null };
@@ -16,5 +16,20 @@ describe('compare rows', () => {
   });
   it('says identical only when every part was compared', () => {
     expect(renderToStaticMarkup(<Rows data={cmp({ not_compared: [] })} />)).toContain('The final worlds are identical.');
+  });
+});
+
+describe('compare sides', () => {
+  it('lists each agent with its model and provider; OpenAI cost is unknown', () => {
+    const team = { id: 't', name: 't', agents: [
+      { id: 'triage', name: 'Triage', kind: 'claude_code' as const, model: 'sonnet', prompt: '' },
+      { id: 'resolver', name: 'Resolver', kind: 'open' as const, provider: 'openai', model: 'gpt-x', prompt: '' },
+    ] };
+    const html = renderToStaticMarkup(<Side id="abcdef0123" s={side} team={team} />);
+    expect(html).toContain('<dd>unknown</dd>');
+    expect(html).toContain('Triage: sonnet · Claude Code');
+    expect(html).toContain('Resolver: gpt-x · OpenAI');
+    const local = { ...side, cost_usd: 0, cost_source: 'local (no API charge)' };
+    expect(renderToStaticMarkup(<Side id="b" s={local} />)).toContain('<dd>no API charge</dd>');
   });
 });

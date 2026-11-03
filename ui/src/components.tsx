@@ -56,13 +56,11 @@ export function diskLine(h: Health | null): string {
   return `Saves ${gb(h.disk.bytes)} / ${gb(h.disk.limit_bytes)} GB`;
 }
 
+/** The CLI modes found on this machine; API mode's providers have their own line. */
 export function modesLine(h: Health | null): string {
   if (!h) return '';
-  return [
-    h.claude && 'Claude Code',
-    h.codex && 'Codex',
-    h.open_available ? 'OpenRouter' : 'OpenRouter (needs key)',
-  ].filter(Boolean).join(' · ');
+  const found = [h.claude && 'Claude Code', h.codex && 'Codex'].filter(Boolean).join(' · ');
+  return found || 'No agent CLI on PATH';
 }
 
 export function formatTime(iso: string): string {

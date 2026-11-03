@@ -9,16 +9,17 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 
 | Route | What it does |
 |---|---|
-| `GET /api/health` | `{open_available, claude, codex, benchmark, disk: {bytes, limit_bytes}}` |
+| `GET /api/health` | `{open_available, providers, claude, codex, benchmark, disk: {bytes, limit_bytes}}`. `providers` is each model provider as the configuration alone tells it, in the shape of `/api/providers` without `models`; a local server is not asked, so it is `available: false, checked: false` with why `not checked (GET /api/providers asks the server)`. `open_available` is true when some provider can take calls, judged from the configuration (a configured local server counts, up or not) |
+| `GET /api/providers` | `[{id, kind, label, available, checked, why?, models?}]`, one per model provider; see [Model providers](#model-providers) |
 | `GET /api/tasks` | the benchmark's tasks, `[{id, reason}]` |
 | `GET /api/team/default` | the default team |
 | `GET /api/runs` | the runs with their branches |
-| `POST /api/runs` | `{task_id, team}`: start a run; returns `{run_id, branch_id}` |
+| `POST /api/runs` | `{task_id, team}`: start a run; returns `{run_id, branch_id}`. Each agent is `{id, name, kind, model, prompt, provider?}`; 400 when an API-mode agent's provider is unknown or unavailable, or has no default model and the agent names none |
 | `DELETE /api/runs/{id}` | delete a run and what it saved (409 while a branch runs) |
 | `GET /api/branches/{id}` | a branch with its events |
 | `GET /api/branches/{id}/stream` | Server-Sent Events: each `event`, then the final `status` |
 | `GET /api/branches/{id}/rows?seq=N&keys=<kind>/<id>,...[&part=]` | the state of those keys just after step N (at most 50 keys) |
-| `POST /api/branches/{id}/fork` | `{at_seq, changes: {<agent id>: {prompt?, model?, kind?}}, restore: "exact"\|"approximate"}` (default exact); returns `{branch_id, start_seq, moved_from, reason}` |
+| `POST /api/branches/{id}/fork` | `{at_seq, changes: {<agent id>: {prompt?, model?, kind?, provider?}}, restore: "exact"\|"approximate"}` (default exact); returns `{branch_id, start_seq, moved_from, reason}`. The changes are checked on the team the fork would run, as `POST /api/runs` checks a team |
 | `GET /api/branches/{id}/restore-plan?at_seq=N&restore=exact\|approximate` | `{parts: [{part, how, estimate_seconds?}]}`, or 409 with the refusal |
 | `GET /api/compare?a=<branch>&b=<branch>` | `{a, b, first_divergent_seq, differing_rows, not_compared}` |
 | `GET /api/world` | the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`) |
@@ -45,13 +46,82 @@ Environment variables, read once at startup by arenad:
   on their own servers also keep data elsewhere.
 - `ARENA_MAX_DB_BYTES`: disk limit, see [Disk](#disk) (default 5 GiB, `5368709120`).
 - `ARENA_CLOCK_SPEED`: speed of the world clock (default 1, real time).
-- `OPENROUTER_API_KEY`: turns on API mode. Pick the model per agent on the Team page (or per fork in "Change and
-  rerun") by typing an OpenRouter model id.
+- `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`: the keys of the OpenRouter, OpenAI and Anthropic
+  providers of API mode. Each key turns its provider on. Pick the provider and model per agent on the Team page
+  (or per fork in "Change and rerun").
+- `ARENA_LOCAL_MODELS`: OpenAI-compatible servers to use as providers, `name=url[,name=url…]`, each the provider
+  `local:<name>`. The name matches `^[a-z0-9_-]+$` and the URL is `http` or `https`. A bad entry, or a name
+  given twice after its first, is skipped with a warning on stderr that never shows the URL.
+- `ARENA_LOCAL_KEY_<NAME>`: an optional key for `local:<name>`, sent as a bearer token (`<NAME>` is the name
+  upper-cased, with `-` as `_`).
+- `ARENA_ANTHROPIC_MAX_TOKENS`: the `max_tokens` of a Claude call whose request names none (default 16000). A
+  value that isn't a positive whole number is reported at startup and the default is used.
 - `ARENA_UI_DIST`: a built UI folder for arenad to serve at `/`.
+
+A blank key counts as unset. A key a header can't carry is reported at startup (by its variable's name) and
+ignored. arenad never logs, records or returns a key. The CLI agents don't get them: each CLI keeps only its own
+vendor's key (see [concepts.md](concepts.md#teams-and-agents)).
 
 Default paths are relative to the repository root, fixed when arenad is built, so they hold wherever arenad is started
 from. The retail example reads its data from `data/retail` (relative to its package folder, `../../data/retail`);
 `ARENA_RETAIL_DATA` overrides that when you run its program directly, but arenad does not pass it on.
+
+## Model providers
+
+An API-mode agent (`kind: "open"`) names its provider in `provider`; without one it uses `openrouter`, so teams
+and runs made before providers keep their meaning. The agent loop speaks OpenAI chat completions to arenad's
+gateway, and the gateway talks to the provider:
+
+| Provider | Endpoint | Key | Models listed by `/api/providers` | Default model |
+|---|---|---|---|---|
+| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | `OPENROUTER_API_KEY`, bearer | not asked (type an OpenRouter model id) | `deepseek/deepseek-chat-v3.1` |
+| `openai` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY`, bearer | `GET /v1/models`, without embedding, audio, image, moderation and other non-chat models | none: name one |
+| `anthropic` | `https://api.anthropic.com/v1/messages` (the Messages API, translated) | `ANTHROPIC_API_KEY`, `x-api-key` | `GET /v1/models` | none: name one |
+| `local:<name>` | `<url>/chat/completions` of the `ARENA_LOCAL_MODELS` entry | `ARENA_LOCAL_KEY_<NAME>`, bearer, if set | `GET <url>/models` | none: name one |
+
+A local provider is any server that speaks the OpenAI chat-completions API, such as Ollama, vLLM, LM Studio or
+llama.cpp's server. For example:
+
+```bash
+cd core && ARENA_LOCAL_MODELS="ollama=http://127.0.0.1:11434/v1,vllm=http://127.0.0.1:8000/v1" cargo run -p arenad
+```
+
+Then pick `local:ollama` or `local:vllm` as an agent's provider and name a model the server serves (for Ollama, a
+model you pulled, such as `llama3.3`).
+
+**`GET /api/providers`** asks each local server, and OpenAI and Anthropic when their key is set, for its models,
+all at once, each within 3 s; a list over 1 MB is given up. `available` is false, with a plain `why`, when a key
+is not set (`OPENAI_API_KEY is not set`), when a list was refused for its key (`the key was rejected`), or when a
+local server doesn't answer (`<host:port> did not answer within 3 s`). When OpenAI's or Anthropic's list fails
+otherwise, the provider stays available with the reason, and the model is typed in. `checked` is true when the
+provider itself was asked. `why` names a host and port, never a URL's credentials. The web UI shows one entry per
+provider under the top bar (glyph, state and reason), and its Check button asks this route.
+
+What the gateway does per provider:
+
+- **OpenRouter:** the request goes out as the agent sent it, plus `usage: {include: true}` so OpenRouter
+  reports the cost. Only OpenRouter gets that field.
+- **OpenAI and local servers:** the request goes out as the agent sent it.
+- **Anthropic:** the request is translated to the Messages API (`anthropic-version: 2026-10-21`): system
+  messages become `system`, tools get `input_schema`, tool calls and tool results become `tool_use` and
+  `tool_result` blocks, and `max_tokens` is the request's own or `ARENA_ANTHROPIC_MAX_TOKENS`. Nothing else is
+  carried over, so sampling fields such as `temperature` are dropped, and a forced tool choice becomes `auto`. The
+  answer is translated back: `stop_reason` `end_turn` is `stop`, `tool_use` is `tool_calls`, `max_tokens` is
+  `length` and `refusal` is `content_filter`; usage becomes prompt, completion and total tokens.
+- Every call is recorded in the canonical (OpenAI) form, with `provider` (the id that answered) and, when the
+  provider's own answer differs from the canonical one (Anthropic), `provider_response`. A 401 or 403 answer is
+  recorded without its error message, which may quote the key.
+- A provider's error status is passed on to the agent loop; no answer is a 502. The loop tries a call that got
+  429, 503 or 529 again, up to 3 times, after the provider's `retry-after` or else 1 s, doubling each time, at
+  most 20 s; every try is recorded. A call that still fails, or fails another way, ends the agent with the
+  provider's message.
+- A model that refuses (`content_filter`, Claude's `refusal`) ends the agent as failed: `the model refused`,
+  with the category when Claude gives one.
+
+Cost per provider: OpenRouter's is the cost it reports (`cost_source: "openrouter"`). OpenAI and Anthropic
+report no price and arenad keeps no price table, so their tokens are recorded and the cost is unknown
+(`cost_usd: null`); the UI shows `unknown`. A local server's cost is 0 with
+`cost_source: "local (no API charge)"`; the UI shows `no API charge`.
 
 ## Disk
 

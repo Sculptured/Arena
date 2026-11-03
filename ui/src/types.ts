@@ -2,8 +2,27 @@
 
 export type AgentKind = 'claude_code' | 'codex' | 'open';
 
-/** Model arenad uses for an OpenRouter agent with no model set (`agents/open.rs`). */
+/** Model arenad uses for an OpenRouter agent with no model set (`providers/mod.rs`). */
 export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-chat-v3.1';
+
+/** The provider of an open agent that names none (and of calls recorded before providers). */
+export const DEFAULT_PROVIDER = 'openrouter';
+
+/** `providers/mod.rs` `ProviderKind`. */
+export type ProviderKind = 'openrouter' | 'openai' | 'anthropic' | 'local';
+
+/** One entry of `GET /api/providers`, or of `/api/health`'s `providers` (`providers/status.rs`). */
+export interface ProviderStatus {
+  /** `openrouter`, `openai`, `anthropic` or `local:<name>`. */
+  id: string;
+  kind: ProviderKind;
+  label: string;
+  available: boolean;
+  /** True when the provider itself was asked (its model list), not only the configuration. */
+  checked: boolean;
+  why?: string;
+  models?: string[];
+}
 export type BranchStatus = 'running' | 'passed' | 'failed' | 'infra_error' | 'interrupted';
 export type EventKind =
   | 'run_start'
@@ -61,6 +80,8 @@ export interface AgentSpec {
   name: string;
   kind: AgentKind;
   model: string | null;
+  /** Open agents only: `openrouter` (the default when absent), `openai`, `anthropic` or `local:<name>`. */
+  provider?: string | null;
   prompt: string;
 }
 
@@ -74,6 +95,8 @@ export interface Change {
   prompt?: string | null;
   model?: string | null;
   kind?: AgentKind | null;
+  /** A new provider; a model change for the fork rules. Sent with `model`. */
+  provider?: string | null;
 }
 
 export interface Event {
@@ -111,6 +134,10 @@ export interface ModelCallPayload {
   usage: unknown;
   cost_usd: number | null;
   cost_source: string | null;
+  /** The provider that answered (absent in calls recorded before providers: OpenRouter). */
+  provider?: string;
+  /** The provider's own response, when it differs from the canonical `response`. */
+  provider_response?: unknown;
 }
 
 export interface AgentEndPayload {
@@ -174,7 +201,10 @@ export interface ForkResponse {
 }
 
 export interface Health {
+  /** Some provider can take API-mode calls, judged from the configuration. */
   open_available: boolean;
+  /** Each provider from the configuration alone: local servers are `checked: false` (not asked). */
+  providers?: ProviderStatus[];
   claude: boolean;
   codex: boolean;
   disk?: DiskUsage;

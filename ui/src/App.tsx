@@ -1,5 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { diskLine, modesLine, useHealth } from './components';
+import { ProviderStatusLine } from './ProviderFields';
+import { bestProviders, checkProviders, useCheckedProviders } from './providers';
 import Compare from './pages/Compare';
 import Run from './pages/Run';
 import Runs from './pages/Runs';
@@ -16,6 +18,8 @@ function Placeholder({ title }: { title: string }) {
 
 export default function App() {
   const h = useHealth();
+  const checked = useCheckedProviders();
+  const statuses = bestProviders(checked.list, h?.providers);
   return (
     <div className="app">
       <div className="topbar">
@@ -31,8 +35,19 @@ export default function App() {
         >
           {diskLine(h)}
         </span>
-        <span className="modes" title="Agent modes available on this machine">{modesLine(h)}</span>
       </div>
+      {h && (
+        <div className="status-line">
+          <span className="modes" title="Agent CLIs found on this machine">{modesLine(h)}</span>
+          <span className="label">API mode</span>
+          <ProviderStatusLine
+            statuses={statuses}
+            loading={checked.loading}
+            error={checked.error}
+            onCheck={() => { checkProviders().catch(() => {}); }}
+          />
+        </div>
+      )}
       <Routes>
         <Route path="/" element={<Runs />} />
         <Route path="/team" element={<Team />} />
