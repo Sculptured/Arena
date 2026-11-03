@@ -17,6 +17,7 @@ use arenad::{
     app::{self, AppState, Config},
     exec::BranchCtx,
     model::*,
+    providers::{ProviderConfig, Secret},
 };
 use fake_upstream::FakeUpstream;
 use packages::TestHub;
@@ -37,6 +38,7 @@ fn agent(id: &str, prompt: &str) -> AgentSpec {
         kind: AgentKind::Open,
         model: Some("fake/model".into()),
         prompt: prompt.into(),
+        provider: None,
     }
 }
 
@@ -64,8 +66,8 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut config = Config::new();
-    config.upstream_base = upstream.base_url.clone();
-    config.openrouter_key = Some("sk-secret".into());
+    config.providers = ProviderConfig::with_upstream(&upstream.base_url);
+    config.providers.openrouter.key = Some(Secret::new("sk-secret"));
     config.self_base = format!("http://127.0.0.1:{port}");
     let state = Arc::new(AppState::new(store, hub.hub.clone(), config));
     let ctx = Arc::new(BranchCtx::new(branch.clone(), world, team, "task".into()));
@@ -151,8 +153,9 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
             r.tokens,
             json!({"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45})
         );
-        assert!((r.cost_usd.unwrap() - 0.003).abs() < 1e-9);
-        assert_eq!(r.cost_source.as_deref(), Some("openrouter"));
+        // The upstream override is the local provider `local:custom`: no API charge.
+        assert_eq!(r.cost_usd, Some(0.0));
+        assert_eq!(r.cost_source.as_deref(), Some("local (no API charge)"));
         assert_eq!(
             kinds(&fx).await,
             vec![
@@ -165,8 +168,10 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
         );
         let evs = fx.state.store.events(&fx.ctx.branch_id).await.unwrap();
         let mc: ModelCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
-        assert_eq!(mc.cost_usd, Some(0.001));
-        assert_eq!(mc.cost_source.as_deref(), Some("openrouter"));
+        assert_eq!(mc.cost_usd, Some(0.0));
+        assert_eq!(mc.cost_source.as_deref(), Some("local (no API charge)"));
+        assert_eq!(mc.provider.as_deref(), Some("local:custom"));
+        assert_eq!(mc.provider_response, None);
         assert_eq!(mc.request["model"], "fake/model");
         assert_eq!(
             mc.request["messages"][0],
@@ -291,7 +296,8 @@ fn handoff_stops_loop_and_resume_replaces_system_prompt() {
             .unwrap()
             .iter()
             .any(|t| t["function"]["name"] == "handoff"));
-        assert_eq!(reqs[0]["usage"], json!({"include": true}));
+        // OpenRouter's usage flag goes to OpenRouter alone.
+        assert_eq!(reqs[0].get("usage"), None);
         teardown(fx).await;
     })
 }
@@ -338,6 +344,7 @@ fn truncated_final_message_fails_the_agent() {
     })
 }
 
+/// The OpenRouter key `setup` sets never reaches the custom upstream either.
 #[test]
 fn gateway_never_forwards_authorization_to_non_openrouter_upstream() {
     run(async {
@@ -391,16 +398,23 @@ fn upstream_error_is_an_infra_failure() {
     })
 }
 
+/// Only OpenRouter has a default model (`tests/providers.rs` checks it is sent): an agent on
+/// another provider that names none fails before any call.
 #[test]
-fn missing_model_sends_the_default_open_model() {
+fn missing_model_without_a_provider_default_fails_before_calling() {
     run(async {
         let up = FakeUpstream::start(vec![text_msg("hi")]).await;
         let mut a = agent("solo", "p");
         a.model = None;
         let fx = setup("defmodel", vec![a], &up).await;
         let r = driver(&fx).run(agent_run(&fx, 0, None)).await;
-        assert!(r.ok, "{:?}", r.error);
-        assert_eq!(up.requests()[0]["model"], "deepseek/deepseek-chat-v3.1");
+        assert!(!r.ok);
+        let error = r.error.unwrap();
+        assert!(
+            error.contains("names no model") && error.contains("local:custom"),
+            "{error}"
+        );
+        assert!(up.requests().is_empty());
         teardown(fx).await;
     })
 }

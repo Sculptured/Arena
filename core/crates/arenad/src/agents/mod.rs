@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use serde_json::Value;
 
-use crate::{exec::BranchCtx, model::AgentSpec};
+use crate::{exec::BranchCtx, model::AgentSpec, providers::LOCAL_KEY_PREFIX};
 
 pub mod claude;
 pub mod codex;
@@ -206,32 +206,54 @@ pub(crate) fn fail(error: String) -> AgentResult {
     failed(error, 0.0)
 }
 
+/// The secrets a CLI child never gets: database credentials and every model provider's key.
+const SECRET_ENV: [&str; 6] = [
+    "ARENA_PG_URL",
+    "DATABASE_URL",
+    "PGPASSWORD",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+];
+
+/// True for the name of an env var a CLI child must not see.
+fn is_secret_env(name: &str) -> bool {
+    name.starts_with("PG") || name.starts_with(LOCAL_KEY_PREFIX) || SECRET_ENV.contains(&name)
+}
+
 /// Remove database/API secrets from a CLI child's environment.
 pub(crate) fn scrub_env(c: &mut std::process::Command) {
     for (k, _) in std::env::vars_os() {
-        let name = k.to_string_lossy();
-        if name.starts_with("PG")
-            || matches!(
-                name.as_ref(),
-                "ARENA_PG_URL" | "DATABASE_URL" | "OPENROUTER_API_KEY"
-            )
-        {
+        if is_secret_env(&k.to_string_lossy()) {
             c.env_remove(&k);
         }
     }
-    for k in [
-        "ARENA_PG_URL",
-        "DATABASE_URL",
-        "PGPASSWORD",
-        "OPENROUTER_API_KEY",
-    ] {
+    for k in SECRET_ENV {
         c.env_remove(k);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::server_name;
+    use super::{is_secret_env, server_name};
+
+    #[test]
+    fn provider_keys_and_database_secrets_are_scrubbed() {
+        for k in [
+            "OPENROUTER_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ARENA_LOCAL_KEY_OLLAMA",
+            "PGPASSWORD",
+            "ARENA_PG_URL",
+            "DATABASE_URL",
+        ] {
+            assert!(is_secret_env(k), "{k}");
+        }
+        for k in ["PATH", "HOME", "ARENA_LOCAL_MODELS", "ARENA_PORT"] {
+            assert!(!is_secret_env(k), "{k}");
+        }
+    }
 
     #[test]
     fn the_server_is_named_after_the_benchmark() {

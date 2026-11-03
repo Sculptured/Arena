@@ -10,17 +10,16 @@ use crate::{
     agents::{claude::ClaudeDriver, codex::CodexDriver, open::OpenDriver, Driver},
     exec::BranchCtx,
     model::AgentKind,
+    providers::ProviderConfig,
     store::Store,
 };
 
 pub type Drivers = HashMap<AgentKind, Arc<dyn Driver>>;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// OpenAI-compatible base the gateway forwards to.
-    pub upstream_base: String,
-    /// Never logged or recorded.
-    pub openrouter_key: Option<String>,
+    /// The model providers open agents can use, and their keys (redacted in `Debug`).
+    pub providers: ProviderConfig,
     /// This service's own base URL (e.g. `http://127.0.0.1:8787`), used by the open agent loop.
     pub self_base: String,
     /// New runs and forks are refused (507) once the arena's saves use at least this many bytes.
@@ -29,27 +28,7 @@ pub struct Config {
 
 pub const DEFAULT_MAX_DB_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
-pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
-
-/// True only for `https` URLs whose host is exactly `openrouter.ai`.
-pub fn is_openrouter_url(base: &str) -> bool {
-    reqwest::Url::parse(base)
-        .is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("openrouter.ai"))
-}
-
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("upstream_base", &self.upstream_base)
-            .field(
-                "openrouter_key",
-                &self.openrouter_key.as_ref().map(|_| "<redacted>"),
-            )
-            .field("self_base", &self.self_base)
-            .field("max_db_bytes", &self.max_db_bytes)
-            .finish()
-    }
-}
+pub use crate::providers::{is_openrouter_url, OPENROUTER_BASE};
 
 impl Default for Config {
     fn default() -> Config {
@@ -58,13 +37,10 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Defaults plus `OPENROUTER_API_KEY` from the environment.
+    /// Defaults plus the providers' keys and local servers from the environment.
     pub fn new() -> Config {
         Config {
-            upstream_base: OPENROUTER_BASE.to_string(),
-            openrouter_key: std::env::var("OPENROUTER_API_KEY")
-                .ok()
-                .filter(|k| !k.is_empty()),
+            providers: ProviderConfig::from_env(),
             self_base: String::new(),
             max_db_bytes: std::env::var("ARENA_MAX_DB_BYTES")
                 .ok()
@@ -73,13 +49,9 @@ impl Config {
         }
     }
 
-    pub fn upstream_is_openrouter(&self) -> bool {
-        is_openrouter_url(&self.upstream_base)
-    }
-
-    /// Open-mode agents can run: a key is set, or the upstream is not OpenRouter.
+    /// Open-mode agents can run: some provider has what it needs.
     pub fn open_available(&self) -> bool {
-        self.openrouter_key.is_some() || !self.upstream_is_openrouter()
+        self.providers.any_available()
     }
 }
 
@@ -231,17 +203,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::is_openrouter_url;
-
-    #[test]
-    fn openrouter_detection_is_exact() {
-        assert!(is_openrouter_url("https://openrouter.ai/api/v1"));
-        assert!(!is_openrouter_url("https://openrouter.ai.evil.com/api/v1"));
-        assert!(!is_openrouter_url("http://openrouter.ai"));
-        assert!(!is_openrouter_url("https://evil.com/openrouter.ai"));
-        assert!(!is_openrouter_url("not a url"));
-    }
-
     #[test]
     fn loopback_hosts() {
         use super::is_loopback_host as ok;

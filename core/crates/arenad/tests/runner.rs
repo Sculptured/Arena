@@ -20,6 +20,7 @@ use arenad::{
     app::{AppState, Config},
     exec::{BranchCtx, ToolExec},
     model::*,
+    providers::ProviderConfig,
     runner::{self, StartPoint},
 };
 use fake_upstream::FakeUpstream;
@@ -41,6 +42,7 @@ fn agent(id: &str) -> AgentSpec {
         kind: AgentKind::Open,
         model: Some("fake/model".into()),
         prompt: format!("You are {id}."),
+        provider: None,
     }
 }
 
@@ -91,10 +93,10 @@ async fn setup(tag: &str, upstream: Option<&FakeUpstream>, failing: bool) -> Fx 
 
 fn config(upstream: Option<&FakeUpstream>, base: String) -> Config {
     let mut config = Config::new();
+    config.providers = ProviderConfig::default();
     if let Some(u) = upstream {
-        config.upstream_base = u.base_url.clone();
+        config.providers.set_upstream(&u.base_url);
     }
-    config.openrouter_key = Some("sk-secret".into());
     config.self_base = base;
     config
 }

@@ -44,6 +44,7 @@ fn spec(model: Option<&str>) -> AgentSpec {
         kind: AgentKind::ClaudeCode,
         model: model.map(Into::into),
         prompt: "p".into(),
+        provider: None,
     }
 }
 
@@ -89,7 +90,9 @@ fn claude_command_has_only_the_world_mcp() {
     assert_eq!(a[0], "-p");
     assert_eq!(a[a.len() - 2..], ["--", "do it"]);
     assert!(a.contains(&"--no-session-persistence".to_string()));
-    assert!(c.get_envs().any(|(k, v)| k == "PGPASSWORD" && v.is_none()));
+    for key in ["PGPASSWORD", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+        assert!(c.get_envs().any(|(k, v)| k == key && v.is_none()), "{key}");
+    }
     let c = claude::command(&spec(Some("opus")), &mcp(), "x");
     assert!(args(&c).contains(&"opus".to_string()));
 }
@@ -159,6 +162,8 @@ fn codex_command_sets_mcp_url() {
         "DATABASE_URL",
         "PGPASSWORD",
         "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
     ] {
         assert!(removed.contains(&k.to_string()), "{k} not scrubbed");
     }
@@ -313,6 +318,7 @@ async fn live_setup(
         kind: AgentKind::ClaudeCode,
         model: None,
         prompt: "p".into(),
+        provider: None,
     };
     let team = Team {
         id: "t".into(),
@@ -376,6 +382,7 @@ async fn live_with(
                 kind: AgentKind::ClaudeCode,
                 model: None,
                 prompt: "You are a test agent. Use the retail MCP tools.".into(),
+                provider: None,
             },
             input: input.into(),
             resume: None,
@@ -421,6 +428,7 @@ fn live_codex_isolation_probe() {
             kind: AgentKind::Codex,
             model: None,
             prompt: "".into(),
+            provider: None,
         };
         let wd = std::env::temp_dir().join(format!("probe-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&wd).unwrap();

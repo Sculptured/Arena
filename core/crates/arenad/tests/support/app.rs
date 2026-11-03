@@ -8,6 +8,7 @@ use arenad::{
     agents::{open::OpenDriver, Driver},
     app::{self, AppState, Config},
     model::AgentKind,
+    providers::ProviderConfig,
     store::Store,
 };
 use parts::Hub;
@@ -47,8 +48,7 @@ pub async fn open_app(
 ) -> (Arc<AppState>, String) {
     let (listener, base) = bind().await;
     let mut config = Config::new();
-    config.upstream_base = upstream.to_string();
-    config.openrouter_key = Some("sk-secret".into());
+    config.providers = ProviderConfig::with_upstream(upstream);
     config.self_base = base.clone();
     tweak(&mut config);
     let state = Arc::new(AppState::new(store, hub, config));

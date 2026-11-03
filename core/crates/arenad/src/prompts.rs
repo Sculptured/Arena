@@ -57,6 +57,7 @@ fn agent(role: &TeamRole) -> AgentSpec {
         kind: AgentKind::ClaudeCode,
         model: Some(MODEL.into()),
         prompt: role.prompt.clone(),
+        provider: None,
     }
 }
 

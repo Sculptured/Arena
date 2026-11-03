@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod model;
 pub mod pg;
 pub mod prompts;
+pub mod providers;
 pub mod recorded;
 pub mod replay;
 pub mod restore;

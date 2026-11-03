@@ -3,12 +3,19 @@
 //! records every request body it received. A script entry of the form
 //! `{"_status": 500}` makes that call fail with that HTTP status; a message with
 //! `_finish_reason` is served with that finish_reason (the key is removed); one with `_delay_ms`
-//! is served after that many milliseconds (the key is removed).
+//! is served after that many milliseconds (the key is removed). `GET /models` lists
+//! `fake/model` and `fake/other`.
 #![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde_json::{json, Value};
 
 pub struct FakeUpstream {
@@ -20,6 +27,7 @@ struct St {
     script: Vec<Value>,
     seen: Mutex<Vec<Value>>,
     headers: Mutex<Vec<Option<String>>>,
+    list_headers: Mutex<Vec<Option<String>>>,
 }
 
 impl FakeUpstream {
@@ -28,9 +36,11 @@ impl FakeUpstream {
             script,
             seen: Mutex::new(vec![]),
             headers: Mutex::new(vec![]),
+            list_headers: Mutex::new(vec![]),
         });
         let app = Router::new()
             .route("/chat/completions", post(handle))
+            .route("/models", get(models))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -50,6 +60,28 @@ impl FakeUpstream {
     pub fn auth_headers(&self) -> Vec<Option<String>> {
         self.state.headers.lock().unwrap().clone()
     }
+
+    /// The Authorization header of each `GET /models`, sorted (None first).
+    pub fn list_auth_headers(&self) -> Vec<Option<String>> {
+        let mut h = self.state.list_headers.lock().unwrap().clone();
+        h.sort();
+        h
+    }
+}
+
+fn authorization(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
+async fn models(State(st): State<Arc<St>>, headers: axum::http::HeaderMap) -> Json<Value> {
+    st.list_headers
+        .lock()
+        .unwrap()
+        .push(authorization(&headers));
+    Json(json!({"object": "list", "data": [{"id": "fake/other"}, {"id": "fake/model"}]}))
 }
 
 async fn handle(
@@ -62,12 +94,7 @@ async fn handle(
         seen.push(body);
         seen.len()
     };
-    st.headers.lock().unwrap().push(
-        headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string),
-    );
+    st.headers.lock().unwrap().push(authorization(&headers));
     let Some(msg) = st.script.get(n - 1).or(st.script.last()) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

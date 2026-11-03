@@ -12,11 +12,11 @@ use crate::{
     app::AppState,
     exec::{tool_schemas, ToolExec},
     model::add_cost,
+    providers::Provider,
     world::World,
 };
 
 pub const MAX_MODEL_CALLS: usize = 40;
-const DEFAULT_OPEN_MODEL: &str = "deepseek/deepseek-chat-v3.1";
 
 /// How the loop ended badly: the model misbehaved, or something broke around it.
 enum Fault {
@@ -81,8 +81,10 @@ impl Driver for OpenDriver {
 /// Token and cost totals over a run's model calls.
 struct Totals {
     tokens: [i64; 3],
-    /// `None` once a call reports no cost.
+    /// `None` once a call's cost is unknown.
     cost: Option<f64>,
+    /// The label of the cost: the provider's, once it is known.
+    source: Option<&'static str>,
 }
 
 impl Totals {
@@ -90,10 +92,11 @@ impl Totals {
         Totals {
             tokens: [0; 3],
             cost: Some(0.0),
+            source: None,
         }
     }
 
-    fn add(&mut self, usage: &Value) {
+    fn add(&mut self, provider: &Provider, usage: &Value) {
         for (total, k) in
             self.tokens
                 .iter_mut()
@@ -101,7 +104,8 @@ impl Totals {
         {
             *total += usage[k].as_i64().unwrap_or(0);
         }
-        self.cost = add_cost(self.cost, usage["cost"].as_f64());
+        self.cost = add_cost(self.cost, provider.cost(usage));
+        self.source = provider.cost_source();
     }
 }
 
@@ -164,7 +168,7 @@ impl OpenDriver {
             error,
             failure,
             tokens: super::tokens_json(prompt, completion, total),
-            cost_source: totals.cost.map(|_| "openrouter".to_string()),
+            cost_source: totals.cost.and(totals.source).map(str::to_string),
             cost_usd: totals.cost,
             seconds: start.elapsed().as_secs_f64(),
         }
@@ -172,15 +176,15 @@ impl OpenDriver {
 
     async fn drive(&self, run: &AgentRun, totals: &mut Totals) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
+        let (provider, model) = provider_and_model(&state, run)?;
         let url = gateway_url(&state, run);
         let tools = openai_tools(&run.branch.world, !run.branch.is_last(&run.spec.id));
-        let model = run.spec.model.as_deref().unwrap_or(DEFAULT_OPEN_MODEL);
         let mut messages = initial_messages(run);
         let exec = ToolExec::new(state.store.clone());
         for _ in 0..MAX_MODEL_CALLS {
             let body = json!({"messages": messages, "tools": tools, "model": model});
             let v = model_call(&state.http, &url, &body).await?;
-            totals.add(&v["usage"]);
+            totals.add(&provider, &v["usage"]);
             let msg = v["choices"][0]["message"].clone();
             if !msg.is_object() {
                 return Err("model response has no message".into());
@@ -198,6 +202,26 @@ impl OpenDriver {
             "agent exceeded {MAX_MODEL_CALLS} model calls"
         )))
     }
+}
+
+/// The agent's provider, and its model, else the provider's default; an error when the
+/// provider is unknown or has no default.
+fn provider_and_model<'a>(
+    state: &AppState,
+    run: &'a AgentRun,
+) -> Result<(Provider, &'a str), Fault> {
+    let provider = state
+        .config
+        .providers
+        .resolve(run.spec.provider.as_deref())?;
+    let named = run.spec.model.as_deref().filter(|m| !m.trim().is_empty());
+    let model = named.or(provider.default_model()).ok_or_else(|| {
+        Fault::Infra(format!(
+            "agent {} names no model, and provider {} has no default one",
+            run.spec.id, provider.id
+        ))
+    })?;
+    Ok((provider, model))
 }
 
 /// The model answered with no tool calls: done, unless its output was cut off.

@@ -18,6 +18,7 @@ use arenad::{
     agents::{open::OpenDriver, Driver},
     app::{AppState, Config},
     model::*,
+    providers::ProviderConfig,
 };
 use fake_upstream::FakeUpstream;
 use packages::{Package, TestHub, ToyRoot};
@@ -72,8 +73,7 @@ async fn setup_with(
     let (listener, base) = app_support::bind().await;
     let mut config = Config::new();
     if let Some(url) = upstream {
-        config.upstream_base = url.to_string();
-        config.openrouter_key = Some("sk-secret".into());
+        config.providers = ProviderConfig::with_upstream(url);
         config.self_base = base.clone();
     }
     let state = AppState::new(store, hub.hub.clone(), config).with_benchmark("toybench");

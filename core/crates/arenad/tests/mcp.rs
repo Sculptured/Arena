@@ -36,6 +36,7 @@ fn agent(id: &str) -> AgentSpec {
         kind: AgentKind::Open,
         model: None,
         prompt: "p".into(),
+        provider: None,
     }
 }
 

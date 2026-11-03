@@ -75,6 +75,16 @@ impl BranchCtx {
         self.team.agents.iter().any(|a| a.id == agent)
     }
 
+    /// The provider `agent`'s model calls go to (`Some(None)`: it names none, so the default
+    /// one); `None` when the team has no such agent.
+    pub fn provider_of(&self, agent: &str) -> Option<Option<&str>> {
+        self.team
+            .agents
+            .iter()
+            .find(|a| a.id == agent)
+            .map(|a| a.provider.as_deref())
+    }
+
     pub fn handoff_note(&self, agent: &str) -> Option<String> {
         self.handoffs.lock().unwrap().get(agent).cloned()
     }

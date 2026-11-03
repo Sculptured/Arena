@@ -18,6 +18,7 @@ use crate::{
     clock::BranchClock,
     exec::BranchCtx,
     model::*,
+    providers,
     recorded::{run_info, saves_at_except},
     restore::{restored, Refused},
     runner::{self, StartPoint},
@@ -125,12 +126,17 @@ fn changes_kind(c: &Change, spec: &AgentSpec) -> bool {
     c.kind.is_some_and(|k| k != spec.kind)
 }
 
-/// The model a change sets: `Some(None)` clears it (empty or blank text), `Some(Some(m))` sets it.
-fn new_model(c: &Change) -> Option<Option<String>> {
-    c.model.as_ref().map(|m| {
-        let m = m.trim();
-        (!m.is_empty()).then(|| m.to_string())
+/// A text a change sets: `Some(None)` clears it (empty or blank text), `Some(Some(t))` sets it.
+fn new_text(text: Option<&String>) -> Option<Option<String>> {
+    text.map(|t| {
+        let t = t.trim();
+        (!t.is_empty()).then(|| t.to_string())
     })
+}
+
+/// The model a change sets (see `new_text`).
+fn new_model(c: &Change) -> Option<Option<String>> {
+    new_text(c.model.as_ref())
 }
 
 /// True when `c` changes the agent's model (the same model, or clearing an unset one, is no change).
@@ -138,8 +144,24 @@ fn changes_model(c: &Change, spec: &AgentSpec) -> bool {
     new_model(c).is_some_and(|m| m != spec.model)
 }
 
+/// The provider a change sets (see `new_text`; cleared is back to `openrouter`).
+fn new_provider(c: &Change) -> Option<Option<String>> {
+    new_text(c.provider.as_ref())
+}
+
+/// True when `c` moves the agent to another provider (an absent one is `openrouter`).
+fn changes_provider(c: &Change, spec: &AgentSpec) -> bool {
+    new_provider(c).is_some_and(|p| {
+        providers::effective_id(p.as_deref()) != providers::effective_id(spec.provider.as_deref())
+    })
+}
+
+/// A provider change is a model change: the fork rules treat both alike.
 fn is_change(c: &Change, spec: &AgentSpec) -> bool {
-    c.prompt.is_some() || changes_model(c, spec) || changes_kind(c, spec)
+    c.prompt.is_some()
+        || changes_model(c, spec)
+        || changes_provider(c, spec)
+        || changes_kind(c, spec)
 }
 
 /// Where the new branch starts, and the resume messages it carries (open agents only).
@@ -376,27 +398,34 @@ fn finish_plan(start: Start, at_seq: i64, restore: Saves, notes: Vec<String>) ->
     }
 }
 
-/// `team` with each agent's prompt/model/kind replaced where `changes` sets them.
+/// `team` with each agent's prompt/model/kind/provider replaced where `changes` sets them.
 pub fn apply_changes(team: &Team, changes: &HashMap<String, Change>) -> Team {
     let mut t = team.clone();
     for spec in &mut t.agents {
         if let Some(c) = changes.get(&spec.id) {
-            if let Some(p) = &c.prompt {
-                spec.prompt = p.clone();
-            }
-            if changes_kind(c, spec) {
-                // The old model belongs to the old driver: the new driver's default applies.
-                spec.model = None;
-            }
-            if let Some(m) = new_model(c) {
-                spec.model = m;
-            }
-            if let Some(k) = c.kind {
-                spec.kind = k;
-            }
+            apply_change(spec, c);
         }
     }
     t
+}
+
+fn apply_change(spec: &mut AgentSpec, c: &Change) {
+    if let Some(p) = &c.prompt {
+        spec.prompt = p.clone();
+    }
+    if changes_kind(c, spec) || changes_provider(c, spec) {
+        // The old model belongs to the old driver or provider: the new one's default applies.
+        spec.model = None;
+    }
+    if let Some(m) = new_model(c) {
+        spec.model = m;
+    }
+    if let Some(p) = new_provider(c) {
+        spec.provider = p;
+    }
+    if let Some(k) = c.kind {
+        spec.kind = k;
+    }
 }
 
 /// Forks `branch_id` at `at_seq` with `changes`, restoring exactly, and starts the new branch.
@@ -571,6 +600,7 @@ mod tests {
             kind,
             model: None,
             prompt: format!("You are {id}."),
+            provider: None,
         }
     }
 
@@ -742,6 +772,68 @@ mod tests {
         assert_eq!(p.resume, None);
         assert_eq!(p.restore, base());
         assert!(p.notes.is_empty());
+    }
+
+    fn provider(agent: &str, p: &str) -> HashMap<String, Change> {
+        change(
+            agent,
+            Change {
+                provider: Some(p.into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn provider_change_is_a_model_change() {
+        let t = team(AgentKind::Open);
+        // Like a model change, it resumes the active open agent from the model call ...
+        let p = plan_fork(&events(), &t, 11, &provider("resolver", "local:box")).unwrap();
+        assert_eq!((p.start_seq, p.moved_from, p.agent_index), (11, None, 1));
+        assert_eq!(p.resume, Some(msgs("m11")));
+        // ... and moves back to a finished agent it targets.
+        let p = plan_fork(&events(), &t, 12, &provider("triage", "openai")).unwrap();
+        assert_eq!((p.start_seq, p.agent_index), (2, 0));
+        assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
+        // An absent provider is openrouter: naming it, or clearing it, is no change.
+        for same in ["openrouter", " "] {
+            let p = plan_fork(&events(), &t, 12, &provider("triage", same)).unwrap();
+            assert_eq!((p.start_seq, p.moved_from), (11, Some(12)), "{same:?}");
+        }
+    }
+
+    #[test]
+    fn apply_changes_provider_rules() {
+        let mut t = team(AgentKind::Open);
+        t.agents[0].model = Some("old/model".into());
+        let ap = |c: Change| apply_changes(&t, &change("triage", c)).agents[0].clone();
+        // A new provider drops the old provider's model ...
+        let a = ap(Change {
+            provider: Some("local:box".into()),
+            ..Default::default()
+        });
+        assert_eq!((a.provider.as_deref(), a.model), (Some("local:box"), None));
+        // ... unless the change names one.
+        let a = ap(Change {
+            provider: Some("openai".into()),
+            model: Some("gpt-x".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            (a.provider.as_deref(), a.model.as_deref()),
+            (Some("openai"), Some("gpt-x"))
+        );
+        // The same provider keeps the model; blank is back to openrouter.
+        let a = ap(Change {
+            provider: Some("openrouter".into()),
+            ..Default::default()
+        });
+        assert_eq!(a.model.as_deref(), Some("old/model"));
+        let a = ap(Change {
+            provider: Some("".into()),
+            ..Default::default()
+        });
+        assert_eq!((a.provider, a.model.as_deref()), (None, Some("old/model")));
     }
 
     #[test]

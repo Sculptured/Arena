@@ -253,7 +253,10 @@ async fn run_agent(
     let spec = ctx.team.agents[idx].clone();
     let input = agent_input(ctx, idx, brief)?;
     let driver = driver_for(state, spec.kind)?;
-    let start = json!({"name": spec.name, "kind": spec.kind, "model": spec.model});
+    let mut start = json!({"name": spec.name, "kind": spec.kind, "model": spec.model});
+    if let Some(p) = &spec.provider {
+        start["provider"] = json!(p);
+    }
     let id = Some(spec.id.as_str());
     state
         .store

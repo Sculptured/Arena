@@ -20,6 +20,7 @@ use arenad::{
     agents::{open::OpenDriver, Driver},
     app::{AppState, Config},
     model::*,
+    providers::ProviderConfig,
     runner,
     store::Store,
 };
@@ -46,6 +47,7 @@ fn solo() -> Team {
             kind: AgentKind::Open,
             model: Some("fake/model".into()),
             prompt: "You are solo.".into(),
+            provider: None,
         }],
     }
 }
@@ -108,8 +110,7 @@ struct Fx {
 async fn serve_app(store: Arc<Store>, hub: Arc<Hub>, up: &FakeUpstream) -> (Arc<AppState>, String) {
     let (listener, base) = app_support::bind().await;
     let mut config = Config::new();
-    config.upstream_base = up.base_url.clone();
-    config.openrouter_key = Some("sk-secret".into());
+    config.providers = ProviderConfig::with_upstream(&up.base_url);
     config.self_base = base.clone();
     let state = Arc::new(AppState::new(store, hub, config).with_benchmark("toybench"));
     let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));

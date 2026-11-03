@@ -33,6 +33,7 @@ use crate::{
     gc,
     model::*,
     prompts,
+    providers::{self, ProviderStatus},
     recorded::{final_saves, run_info, saves_at},
     runner,
     saves::{self, part_code, part_named, part_refusal, world_of},
@@ -43,6 +44,7 @@ mod world;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/providers", get(list_providers))
         .route("/api/tasks", get(tasks))
         .route("/api/team/default", get(default_team))
         .route("/api/runs", get(list_runs).post(create_run))
@@ -135,12 +137,31 @@ fn not_cleaning(state: &AppState) -> Result<OwnedRwLockReadGuard<()>, ApiError> 
         .map_err(|_| ApiError::conflict(CLEANING_UP))
 }
 
-fn open_check(state: &AppState) -> Result<(), ApiError> {
-    if state.config.open_available() {
-        Ok(())
-    } else {
-        Err(ApiError::bad("open mode needs OPENROUTER_API_KEY"))
+/// 400 unless an open agent can run on `provider` with `model`.
+fn open_check(
+    state: &AppState,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(), ApiError> {
+    match state.config.providers.refusal(provider, model) {
+        None => Ok(()),
+        Some(why) => Err(ApiError::bad(why)),
     }
+}
+
+/// 400 when a fork change would put an agent on a provider that can't run it: one that names a
+/// provider, or makes the agent open (on the default provider unless it names one). A real
+/// mode or provider change drops the old model, so only the change's own model counts.
+fn fork_change_check(state: &AppState, c: &Change) -> Result<(), ApiError> {
+    let provider = c
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    if provider.is_some() || c.kind == Some(AgentKind::Open) {
+        open_check(state, provider, c.model.as_deref())?;
+    }
+    Ok(())
 }
 
 fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
@@ -163,7 +184,7 @@ fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
             return Err(ApiError::bad(format!("duplicate agent id {:?}", a.id)));
         }
         if a.kind == AgentKind::Open {
-            open_check(state)?;
+            open_check(state, a.provider.as_deref(), a.model.as_deref())?;
         }
     }
     Ok(())
@@ -211,11 +232,18 @@ async fn health(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
     };
     Ok(Json(json!({
         "open_available": state.config.open_available(),
+        "providers": providers::summary(&state.config.providers),
         "claude": on_path("claude"),
         "codex": on_path("codex"),
         "benchmark": benchmark,
         "disk": {"bytes": bytes, "limit_bytes": state.config.max_db_bytes},
     })))
+}
+
+/// `[{id, kind, label, available, why?, models?}]`: each provider, asking the ones that list
+/// their models (each bounded by `providers::LIST_TIMEOUT`, all at once).
+async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderStatus>> {
+    Json(providers::statuses(&state.config.providers, &state.http).await)
 }
 
 /// 507 when the arena's saves already use at least the configured limit.
@@ -357,12 +385,8 @@ async fn fork_branch(
 ) -> ApiResult<fork::ForkResponse> {
     let cleanup = not_cleaning(&state)?;
     let req: ForkReq = parse_body(&body)?;
-    if req
-        .changes
-        .values()
-        .any(|c| c.kind == Some(AgentKind::Open))
-    {
-        open_check(&state)?;
+    for c in req.changes.values() {
+        fork_change_check(&state, c)?;
     }
     ensure_forkable(&state, &id).await?;
     check_disk(&state).await?;

@@ -14,8 +14,9 @@ use std::{
 };
 
 use arenad::{
-    app::{self, AppState, Config},
+    app::{AppState, Config},
     model::*,
+    providers::ProviderConfig,
 };
 use fake_upstream::FakeUpstream;
 use packages::{gold_action_args, TestHub};
@@ -36,6 +37,7 @@ fn agent(id: &str) -> AgentSpec {
         kind: AgentKind::Open,
         model: Some("fake/model".into()),
         prompt: format!("You are {id}."),
+        provider: None,
     }
 }
 
@@ -517,8 +519,7 @@ fn open_mode_is_rejected_without_a_key() {
     run(async {
         let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let fx = setup_with("nokey", &up, |c| {
-            c.openrouter_key = None;
-            c.upstream_base = app::OPENROUTER_BASE.to_string();
+            c.providers = ProviderConfig::default();
         })
         .await;
         let (_, h) = fx.get("/api/health").await;

@@ -9,7 +9,11 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::{app::AppState, model::*};
+use crate::{
+    app::AppState,
+    model::*,
+    providers::{Provider, Upstream},
+};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route(
@@ -22,62 +26,63 @@ fn error_response(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({"error": msg.into()}))).into_response()
 }
 
-/// What the upstream answered: `Err(message)` for transport failures, `Ok((status, json))`
-/// otherwise.
-async fn send_upstream(state: &AppState, body: &Value) -> Result<(u16, Value), String> {
-    let cfg = &state.config;
-    let url = format!(
-        "{}/chat/completions",
-        cfg.upstream_base.trim_end_matches('/')
-    );
-    let mut req = state.http.post(&url).json(body);
-    if cfg.upstream_is_openrouter() {
-        if let Some(key) = &cfg.openrouter_key {
-            req = req.bearer_auth(key);
-        }
+/// What the agent's provider answered: `Err(message)` when it can't be reached (or isn't known).
+async fn send_upstream(
+    state: &AppState,
+    provider: &Result<Provider, String>,
+    body: &Value,
+) -> Result<Upstream, String> {
+    match provider {
+        Ok(p) => p.send(&state.http, body).await,
+        Err(e) => Err(e.clone()),
     }
-    let r = req
-        .send()
-        .await
-        .map_err(|e| format!("upstream request failed: {}", e.without_url()))?;
-    let status = r.status().as_u16();
-    let t = r
-        .text()
-        .await
-        .map_err(|e| format!("upstream response unreadable: {}", e.without_url()))?;
-    Ok((
-        status,
-        serde_json::from_str(&t).unwrap_or_else(|_| json!({"raw": t})),
-    ))
 }
 
 /// The status to answer with, the response body, and whether the call succeeded.
-fn answer_for(upstream: Result<(u16, Value), String>) -> (u16, Value, bool) {
+fn answer_for(upstream: &Result<Upstream, String>) -> (u16, Value, bool) {
     match upstream {
         Err(msg) => (502, json!({"error": msg}), false),
-        Ok((s, v)) if (200..300).contains(&s) => (s, v, true),
-        Ok((s, v)) => (
+        Ok(u) if (200..300).contains(&u.status) => (u.status, u.response.clone(), true),
+        Ok(u) => (
             502,
-            json!({"error": format!("upstream returned {s}"), "status": s, "body": v}),
+            json!({"error": format!("upstream returned {}", u.status), "status": u.status, "body": u.response}),
             false,
         ),
     }
 }
 
-fn model_call_payload(request: Value, response: &Value, ok: bool) -> ModelCallPayload {
+/// The provider's own response, kept when it isn't the canonical one already recorded.
+fn raw_evidence(upstream: &Result<Upstream, String>) -> Option<Value> {
+    upstream
+        .as_ref()
+        .ok()
+        .filter(|u| u.raw != u.response)
+        .map(|u| u.raw.clone())
+}
+
+/// The event of one model call: the canonical request and response, the provider's own
+/// response when it differs, and the cost the provider makes known.
+fn model_call_payload(
+    request: Value,
+    provider: &Result<Provider, String>,
+    upstream: &Result<Upstream, String>,
+) -> (u16, ModelCallPayload) {
+    let (status, response, ok) = answer_for(upstream);
     let usage = response.get("usage").cloned().unwrap_or(Value::Null);
-    let cost_usd = if ok {
-        usage.get("cost").and_then(Value::as_f64)
-    } else {
-        None
-    };
-    ModelCallPayload {
+    let known = provider.as_ref().ok().filter(|_| ok);
+    let cost_usd = known.and_then(|p| p.cost(&usage));
+    let payload = ModelCallPayload {
         request,
-        response: response.clone(),
         usage,
-        cost_source: cost_usd.map(|_| "openrouter".to_string()),
+        cost_source: cost_usd
+            .and(known.and_then(Provider::cost_source))
+            .map(str::to_string),
         cost_usd,
-    }
+        provider: provider.as_ref().ok().map(|p| p.id.clone()),
+        provider_response: raw_evidence(upstream),
+        response,
+    };
+    (status, payload)
 }
 
 async fn record(
@@ -95,33 +100,32 @@ async fn record(
         .map_err(|e| format!("{e:#}"))
 }
 
-/// True when the branch is live and has the agent.
-fn is_live(state: &AppState, branch: &str, agent: &str) -> bool {
-    state
-        .live
-        .read()
-        .unwrap()
-        .get(branch)
-        .is_some_and(|c| c.has_agent(agent))
+/// The provider of `agent` on the live `branch` (`Some(None)`: the default one); `None` when the
+/// branch isn't live or has no such agent.
+fn live_provider(state: &AppState, branch: &str, agent: &str) -> Option<Option<String>> {
+    let live = state.live.read().unwrap();
+    live.get(branch)?
+        .provider_of(agent)
+        .map(|p| p.map(str::to_string))
 }
 
 async fn handle(
     State(state): State<Arc<AppState>>,
     Path((branch, agent)): Path<(String, String)>,
-    Json(mut body): Json<Value>,
+    Json(body): Json<Value>,
 ) -> Response {
-    if !is_live(&state, &branch, &agent) {
+    let Some(provider) = live_provider(&state, &branch, &agent) else {
         return error_response(StatusCode::NOT_FOUND, "unknown branch or agent");
-    }
+    };
     if !body.is_object() {
         return error_response(
             StatusCode::BAD_REQUEST,
             "request body must be a JSON object",
         );
     }
-    body["usage"] = json!({"include": true});
-    let (status, response, ok) = answer_for(send_upstream(&state, &body).await);
-    let payload = model_call_payload(body, &response, ok);
+    let provider = state.config.providers.resolve(provider.as_deref());
+    let upstream = send_upstream(&state, &provider, &body).await;
+    let (status, payload) = model_call_payload(body, &provider, &upstream);
     if let Err(e) = record(&state, &branch, &agent, &payload).await {
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -130,7 +134,7 @@ async fn handle(
     }
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-        Json(response),
+        Json(payload.response),
     )
         .into_response()
 }

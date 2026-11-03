@@ -23,6 +23,7 @@ fn team() -> Team {
             kind: AgentKind::Open,
             model: None,
             prompt: "p".into(),
+            provider: None,
         }],
     }
 }

@@ -18,6 +18,10 @@ pub struct AgentSpec {
     pub kind: AgentKind,
     pub model: Option<String>,
     pub prompt: String,
+    /// Where an open agent's model calls go: `openrouter`, `openai`, `anthropic` or
+    /// `local:<name>`. Absent means `openrouter`, as in runs and teams made before providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// A chain of agents; the last agent writes.
@@ -33,6 +37,10 @@ pub struct Change {
     pub prompt: Option<String>,
     pub model: Option<String>,
     pub kind: Option<AgentKind>,
+    /// A new provider (empty or blank text: back to `openrouter`); a model change for the fork
+    /// rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +181,13 @@ pub struct ModelCallPayload {
     pub usage: Value,
     pub cost_usd: Option<f64>,
     pub cost_source: Option<String>,
+    /// The provider that answered (absent in calls recorded before providers: OpenRouter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// The provider's own response, when it differs from the canonical `response` (a provider
+    /// that doesn't speak chat completions); absent when `response` is what it sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_response: Option<Value>,
 }
 
 /// Payload of `EventKind::AgentEnd`.

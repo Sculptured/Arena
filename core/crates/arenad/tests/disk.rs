@@ -35,6 +35,7 @@ fn agent(id: &str) -> AgentSpec {
         kind: AgentKind::Open,
         model: Some("fake/model".into()),
         prompt: format!("You are {id}."),
+        provider: None,
     }
 }
 
