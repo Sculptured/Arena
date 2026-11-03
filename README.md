@@ -78,7 +78,7 @@ the runs.
 flowchart LR
   subgraph clients["Clients"]
     UI["Web UI<br/>ui/"]
-    SC["Sculptured<br/>Tests page"]
+    SC["Sculptured<br/>Arena control"]
   end
 
   subgraph team["Team of agents"]
@@ -120,7 +120,7 @@ instances, runs tool calls, saves an instance's state, starts from a save, shows
 states. A **benchmark** names the world it runs in (its **parts**) and brings the tasks, the tools, the data and
 the gold actions. When a branch ends, arenad diffs its world with the task's gold world; it passes when no key
 differs and at least one part could be checked. The web UI is one client of arenad's HTTP API; Sculptured's
-Tests page, in development, is another.
+Arena control workspace is another.
 
 Read [docs/concepts.md](docs/concepts.md) for the full model: runs, branches, steps, saves, the restore table,
 teams and handoffs, forking rules and cost labels.
