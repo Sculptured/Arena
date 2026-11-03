@@ -12,6 +12,7 @@ mod pg;
 use std::{
     future::Future,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use arenad::{
@@ -320,6 +321,35 @@ fn run_refused_during_gc() {
     })
 }
 
+/// A gc the integration is slow to finish keeps the cleanup lock until the integration answers,
+/// even after the HTTP client has given up; then the lock is free again.
+#[test]
+fn gc_holds_the_lock_until_the_integration_answers() {
+    run(async {
+        let go = packages::toy_dir("gcwait").join("go");
+        let part = integration("toy-a", &["--gc", "--gc-waits-for", go.to_str().unwrap()]);
+        let fx = setup("gcwait", vec![part], &["box=toy-a"]).await;
+        fx.save("toy-a", "s_orphan").await;
+        let impatient = reqwest::Client::builder().timeout(Duration::from_secs(1));
+        let request = impatient
+            .build()
+            .unwrap()
+            .post(format!("{}/api/gc", fx.base));
+        assert!(request.send().await.is_err_and(|e| e.is_timeout()));
+        assert!(fx.state.cleanup.try_read().is_err(), "gc gave up the lock");
+        assert_eq!(fx.post("/api/runs").await.0, 409);
+        std::fs::write(&go, "").unwrap();
+        for _ in 0..100 {
+            if fx.state.cleanup.try_read().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(fx.state.cleanup.try_read().is_ok(), "gc kept the lock");
+        assert!(!fx.save_exists("toy-a", "s_orphan").await);
+    })
+}
+
 #[test]
 fn gc_reports_failing_integration() {
     run(async {
@@ -361,7 +391,7 @@ fn gc_refused_right_after_run_starts() {
             if fx.state.live.read().unwrap().is_empty() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     })
 }

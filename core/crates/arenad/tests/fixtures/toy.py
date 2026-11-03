@@ -3,6 +3,7 @@
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
               [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
               [--save-sleep MS] [--refuse-start-if FILE] [--describe-fails] [--describe-hangs] [--gc] [--gc-fails]
+              [--gc-waits-for FILE]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -14,7 +15,7 @@
       reports a change whenever the clock moved, and an `alarm` event on an instance's first
       advance (on every advance with --event-every). --save-sleep makes every `save` take MS
       milliseconds. With --refuse-start-if, `start` answers -32003 (fingerprint mismatch) while
-      FILE exists.
+      FILE exists. With --gc-waits-for, `gc` answers only once FILE exists.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
@@ -162,6 +163,9 @@ class Part:
             raise RpcError(-32601, "method not found: gc")
         if "--gc-fails" in ARGS:
             raise RpcError(-32000, "the toy cannot clean up today")
+        wait_for = opt("--gc-waits-for", None)
+        while wait_for and not os.path.exists(wait_for):
+            time.sleep(0.05)
         keep = p["keep"]
         kept = lambda s: any(s == k or (k.endswith("*") and s.startswith(k[:-1])) for k in keep)
         doomed = [s for s in self.saves if not kept(s)]

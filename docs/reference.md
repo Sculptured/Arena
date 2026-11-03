@@ -23,7 +23,7 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 | `GET /api/compare?a=<branch>&b=<branch>` | `{a, b, first_divergent_seq, differing_rows, not_compared}` |
 | `GET /api/world` | the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`) |
 | `GET /api/usage` | `{integrations: [{integration, parts, bytes}], total_bytes, limit_bytes}`: the bytes each integration keeps and the world parts that use it |
-| `POST /api/gc` | runs the startup cleanup and returns `{removed, freed_bytes, errors}`; it keeps every save a recorded run names and the shared base and gold saves; 409 while agents are running, and new runs and forks answer 409 while it runs |
+| `POST /api/gc` | runs the startup cleanup and returns `{removed, freed_bytes, errors}`; it keeps every save a recorded run names and the shared base and gold saves; 409 while agents are running, and new runs and forks answer 409 while it runs. It has no deadline: it answers when every integration's `gc` has (an integration that never answers keeps the cleanup on until it exits), and a client that stops waiting does not end it |
 
 New runs and forks answer 507 once the saves reach the disk limit. The `/api` routes answer only
 requests whose `Host` is a loopback address. The agents' MCP endpoints (`/mcp/{branch}/{agent}`) and the
@@ -69,8 +69,9 @@ delete the run. The Rust build directory `core/target` also grows; `cd core && c
   deleted.
 - At startup arenad asks each integration of the benchmark's world to drop saves that no recorded event names
   (left by crashes), and logs `gc: dropped N saves (X MB)`. An integration without `gc` is skipped.
-  `POST /api/gc` runs the same cleanup. Start arenad only when no test is running, since tests make
-  unreferenced saves.
+  `POST /api/gc` runs the same cleanup. Neither has a deadline: an integration's `gc` may stop instances, so
+  new runs and forks wait (409) until every integration has answered, however long that takes. Start arenad
+  only when no test is running, since tests make unreferenced saves.
 - The tests drop what they create, even when an assertion fails. `core/scripts/leakcheck.sh` (run from `core`)
   runs each of the core's test binaries and fails if one leaves databases behind: Postgres `pi_`, `ps_`,
   `branch_`, `snap_` and `arena_test` databases, and MariaDB `mi_` and `mx_` ones when `LEAKCHECK_MARIADB` names

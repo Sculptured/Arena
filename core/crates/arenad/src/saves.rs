@@ -21,10 +21,27 @@ async fn call<T: DeserializeOwned>(
     params: Value,
 ) -> Result<T> {
     let client = hub.client(integration).await?;
-    client
-        .call(method, params)
-        .await
-        .map_err(anyhow::Error::from)
+    in_context(client.call(method, params).await, integration, method)
+}
+
+/// `call` without the client's deadline: waits until the integration answers or exits.
+async fn call_until_done<T: DeserializeOwned>(
+    hub: &Hub,
+    integration: &str,
+    method: &str,
+    params: Value,
+) -> Result<T> {
+    let client = hub.client(integration).await?;
+    in_context(
+        client.call_until_done(method, params).await,
+        integration,
+        method,
+    )
+}
+
+/// A call's result, its error saying which integration and method failed.
+fn in_context<T>(r: Result<T, CallError>, integration: &str, method: &str) -> Result<T> {
+    r.map_err(anyhow::Error::from)
         .with_context(|| format!("the {integration} integration: {method}"))
 }
 
@@ -99,9 +116,10 @@ pub async fn usage(hub: &Hub, integration: &str) -> Result<u64> {
 
 /// Drops the integration's saves not in `keep` (an entry ending in `*` is a prefix) and its
 /// instances not running, then the save folders `keep` doesn't keep; None when the integration
-/// has no `gc`.
+/// has no `gc`. Waits as long as the integration's gc takes: it may stop instances, so it must
+/// be over before anything starts new ones.
 pub async fn gc(hub: &Hub, integration: &str, keep: &[String]) -> Result<Option<GcResult>> {
-    let r = match call(hub, integration, "gc", json!({"keep": keep})).await {
+    let r = match call_until_done(hub, integration, "gc", json!({"keep": keep})).await {
         Ok(r) => r,
         Err(e) if part_code(&e) == Some(-32601) => return Ok(None),
         Err(e) => return Err(e),

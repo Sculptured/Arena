@@ -329,11 +329,31 @@ impl Client {
         Ok((id, rx))
     }
 
-    /// One request; concurrent calls are matched to replies by id.
+    /// One request; concurrent calls are matched to replies by id. Gives up (`Timeout`) after the
+    /// client's timeout, though the program may still be working on it.
     pub async fn call<T: DeserializeOwned>(
         &self,
         method: &str,
         params: Value,
+    ) -> Result<T, CallError> {
+        self.call_within(method, params, Some(self.timeout)).await
+    }
+
+    /// `call` without a deadline: waits until the program answers or exits. For work that must be
+    /// over before the caller goes on.
+    pub async fn call_until_done<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<T, CallError> {
+        self.call_within(method, params, None).await
+    }
+
+    async fn call_within<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        limit: Option<Duration>,
     ) -> Result<T, CallError> {
         let (id, rx) = self.register()?;
         let _guard = PendingGuard {
@@ -345,12 +365,7 @@ impl Client {
         line.push('\n');
         // A dead program is reported by the waiter task, with the stderr tail.
         let _ = self.lines.send(line);
-        let reply = match tokio::time::timeout(self.timeout, rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => Err(CallError::Stopped(String::new())),
-            Err(_) => Err(CallError::Timeout),
-        };
-        let v = reply?;
+        let v = wait_for(rx, limit).await?;
         serde_json::from_value(v).map_err(|e| CallError::Part {
             code: -32603,
             message: format!("bad result: {e}"),
@@ -361,6 +376,18 @@ impl Client {
     pub fn pending_len(&self) -> usize {
         self.state.lock().unwrap().pending.len()
     }
+}
+
+/// The reply on `rx`, waiting at most `limit` (None: until the program answers or exits).
+async fn wait_for(rx: oneshot::Receiver<Reply>, limit: Option<Duration>) -> Reply {
+    let answered = match limit {
+        Some(limit) => match tokio::time::timeout(limit, rx).await {
+            Ok(answered) => answered,
+            Err(_) => return Err(CallError::Timeout),
+        },
+        None => rx.await,
+    };
+    answered.unwrap_or_else(|_| Err(CallError::Stopped(String::new())))
 }
 
 impl Drop for Client {
