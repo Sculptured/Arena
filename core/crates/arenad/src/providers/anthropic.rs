@@ -13,7 +13,7 @@ mod response;
 use reqwest::header::HeaderValue;
 use serde_json::Value;
 
-use super::{openai, Provider, Upstream};
+use super::{transport, Provider, Upstream};
 
 /// The `anthropic-version` every request sends.
 pub(super) const VERSION: &str = "2026-10-21";
@@ -30,9 +30,8 @@ pub(super) fn request(
     method: reqwest::Method,
     path: &str,
 ) -> reqwest::RequestBuilder {
-    let url = format!("{}/{path}", p.endpoint.base.trim_end_matches('/'));
     let req = http
-        .request(method, url)
+        .request(method, transport::url(&p.endpoint.base, path))
         .header("anthropic-version", VERSION);
     let key = p.endpoint.key.as_ref().and_then(|k| {
         let mut v = HeaderValue::from_str(k.expose()).ok()?;
@@ -53,20 +52,21 @@ pub(super) async fn send(
     http: &reqwest::Client,
     chat: &Value,
 ) -> Result<Upstream, String> {
-    let body = request::translate(chat);
-    let context = request::context_of(&body);
+    let (body, context) = request::translate(chat, p.max_tokens);
     let req = request(p, http, reqwest::Method::POST, "messages").json(&body);
-    let (status, raw) = openai::exchange(req).await?;
-    let is_message = (200..300).contains(&status) && raw["type"] == "message";
+    let answer = transport::exchange(req).await?;
+    let raw = answer.body;
+    let is_message = (200..300).contains(&answer.status) && raw["type"] == "message";
     let response = if is_message {
         response::translate(&raw, &context)
     } else {
         raw.clone()
     };
     Ok(Upstream {
-        status,
+        status: answer.status,
         response,
         raw,
+        retry_after: answer.retry_after,
     })
 }
 

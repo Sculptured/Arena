@@ -97,6 +97,8 @@ async fn setup(tag: &str, providers: ProviderConfig) -> Fx {
     let (store, clean) = app_support::meta_store("prov", tag).await;
     let (state, base) = app_support::open_app(store, hub.hub.clone(), "http://127.0.0.1:9", |c| {
         c.providers = providers;
+        // Retries of overloaded calls wait 10 ms, 20 ms, … instead of seconds.
+        c.retry_base = Duration::from_millis(10);
     })
     .await;
     Fx {
@@ -766,5 +768,70 @@ fn a_rejected_keys_message_is_not_recorded() {
             call["response"]["body"]["error"]["message"],
             REJECTED_MESSAGE
         );
+    })
+}
+
+/// A Messages API error answer of `status`, its type, and its `retry-after` seconds.
+fn claude_error(status: u16, kind: &str, retry_after: Option<u64>) -> Value {
+    let mut e = json!({"_status": status, "error": {"type": kind, "message": "Overloaded"}});
+    if let Some(secs) = retry_after {
+        e["_retry_after"] = json!(secs);
+    }
+    e
+}
+
+/// The status and error type of each recorded model call of `solo`.
+fn call_statuses(b: &Value) -> Vec<(Value, Value)> {
+    let calls = payloads(b, "model_call", "solo");
+    let status = |c: &Value| {
+        (
+            c["response"]["status"].clone(),
+            c["response"]["body"]["error"]["type"].clone(),
+        )
+    };
+    calls.iter().map(status).collect()
+}
+
+#[test]
+fn a_claude_error_is_recorded_and_ends_the_agent_plainly() {
+    run(async {
+        let up = FakeAnthropic::start(vec![claude_error(529, "overloaded_error", None)]).await;
+        let fx = setup("claude-error", on_claude(&up)).await;
+        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
+        let b = fx.run_to_end(&team(vec![solo])).await;
+        // The first try and three retries, each recorded with the API's own error.
+        assert_eq!(up.requests().len(), 4);
+        let overloaded = (json!(529), json!("overloaded_error"));
+        assert_eq!(call_statuses(&b), vec![overloaded; 4]);
+        let end = &payloads(&b, "agent_end", "solo")[0];
+        assert_eq!(
+            (&end["ok"], &end["error"]),
+            (&json!(false), &json!("model call failed (529): Overloaded"))
+        );
+        assert!(!b.to_string().contains(ANT_KEY), "key recorded");
+    })
+}
+
+#[test]
+fn overloaded_and_rate_limited_calls_are_retried() {
+    run(async {
+        let script = vec![
+            claude_error(529, "overloaded_error", None),
+            claude_error(429, "rate_limit_error", Some(0)),
+            claude_done(),
+        ];
+        let up = FakeAnthropic::start(script).await;
+        let fx = setup("claude-retry", on_claude(&up)).await;
+        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
+        let b = fx.run_to_end(&team(vec![solo])).await;
+        let end = &payloads(&b, "agent_end", "solo")[0];
+        assert_eq!(end["ok"], true, "{b}");
+        let statuses = call_statuses(&b);
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(statuses[0], (json!(529), json!("overloaded_error")));
+        assert_eq!(statuses[1], (json!(429), json!("rate_limit_error")));
+        // Every try went out the same.
+        let reqs = up.requests();
+        assert!(reqs.iter().all(|(r, _)| r == &reqs[0].0));
     })
 }

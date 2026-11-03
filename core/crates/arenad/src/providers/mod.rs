@@ -9,13 +9,15 @@ mod config;
 mod listing;
 mod openai;
 mod status;
+mod transport;
 
 use serde::Serialize;
 use serde_json::Value;
 
 pub use config::{
     is_openrouter_url, local_key_env, Endpoint, LocalEndpoint, ProviderConfig, Secret,
-    ANTHROPIC_BASE, LOCAL_KEY_PREFIX, LOCAL_MODELS_ENV, OPENAI_BASE, OPENROUTER_BASE,
+    ANTHROPIC_BASE, ANTHROPIC_MAX_TOKENS_ENV, DEFAULT_ANTHROPIC_MAX_TOKENS, LOCAL_KEY_PREFIX,
+    LOCAL_MODELS_ENV, OPENAI_BASE, OPENROUTER_BASE,
 };
 pub use listing::LIST_TIMEOUT;
 pub use status::{statuses, summary, ProviderStatus, KEY_REJECTED, NOT_CHECKED};
@@ -69,6 +71,8 @@ pub struct Upstream {
     pub status: u16,
     pub response: Value,
     pub raw: Value,
+    /// The seconds the provider asked to wait before trying again (its `retry-after`).
+    pub retry_after: Option<u64>,
 }
 
 /// One provider, resolved from the configuration.
@@ -78,6 +82,8 @@ pub struct Provider {
     pub id: String,
     pub kind: ProviderKind,
     pub endpoint: Endpoint,
+    /// The `max_tokens` of a call that names none, for an API that requires one (Claude's).
+    pub max_tokens: u64,
 }
 
 impl Provider {
@@ -86,6 +92,7 @@ impl Provider {
             id: id.into(),
             kind,
             endpoint: endpoint.clone(),
+            max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
         }
     }
 
@@ -149,7 +156,7 @@ impl ProviderConfig {
                 &self.openrouter,
             )),
             OPENAI => Some(Provider::new(id, ProviderKind::OpenAi, &self.openai)),
-            ANTHROPIC => Some(Provider::new(id, ProviderKind::Anthropic, &self.anthropic)),
+            ANTHROPIC => Some(self.anthropic()),
             _ => id
                 .strip_prefix(LOCAL_PREFIX)
                 .and_then(|name| self.local(name))
@@ -159,6 +166,13 @@ impl ProviderConfig {
             let known: Vec<String> = self.all().into_iter().map(|p| p.id).collect();
             format!("unknown provider {id:?} (known: {})", known.join(", "))
         })
+    }
+
+    fn anthropic(&self) -> Provider {
+        Provider {
+            max_tokens: self.anthropic_max_tokens,
+            ..Provider::new(ANTHROPIC, ProviderKind::Anthropic, &self.anthropic)
+        }
     }
 
     /// The id `provider` stands for: itself, or the default provider when absent (what
@@ -172,7 +186,7 @@ impl ProviderConfig {
         let mut out = vec![
             Provider::new(OPENROUTER, ProviderKind::OpenRouter, &self.openrouter),
             Provider::new(OPENAI, ProviderKind::OpenAi, &self.openai),
-            Provider::new(ANTHROPIC, ProviderKind::Anthropic, &self.anthropic),
+            self.anthropic(),
         ];
         out.extend(self.locals.iter().map(|l| {
             Provider::new(
@@ -268,5 +282,15 @@ mod tests {
         let source = |id| c.resolve(Some(id)).unwrap().cost_source();
         assert_eq!(source("local:box"), Some(LOCAL_COST_SOURCE));
         assert_eq!(source("openai"), None);
+    }
+
+    #[test]
+    fn claude_calls_take_the_configured_budget() {
+        let c = ProviderConfig {
+            anthropic_max_tokens: 64_000,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(c.resolve(Some("anthropic")).unwrap().max_tokens, 64_000);
+        assert_eq!(c.all()[2].max_tokens, 64_000);
     }
 }

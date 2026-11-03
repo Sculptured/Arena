@@ -2,7 +2,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Weak},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use serde_json::{json, Value};
@@ -17,6 +17,12 @@ use crate::{
 };
 
 pub const MAX_MODEL_CALLS: usize = 40;
+/// How many times a model call is tried again when its provider is overloaded or
+/// rate-limiting (statuses 429, 503 and 529); every try is recorded.
+pub const MAX_RETRIES: u32 = 3;
+const RETRYABLE: [u16; 3] = [429, 503, 529];
+/// The longest wait before a retry, whatever the provider asks.
+pub const MAX_RETRY_WAIT: Duration = Duration::from_secs(20);
 
 /// How the loop ended badly: the model misbehaved, or something broke around it.
 enum Fault {
@@ -122,8 +128,14 @@ fn tool_message(id: &str, content: String) -> Value {
     json!({"role": "tool", "tool_call_id": id, "content": content})
 }
 
-/// One model call through the gateway; the parsed response.
-async fn model_call(http: &reqwest::Client, url: &str, body: &Value) -> Result<Value, Fault> {
+/// What the gateway answered: its status, the `retry-after` seconds it passed on, its body.
+struct Answer {
+    status: reqwest::StatusCode,
+    retry_after: Option<u64>,
+    text: String,
+}
+
+async fn post(http: &reqwest::Client, url: &str, body: &Value) -> Result<Answer, Fault> {
     let resp = http
         .post(url)
         .json(body)
@@ -131,14 +143,61 @@ async fn model_call(http: &reqwest::Client, url: &str, body: &Value) -> Result<V
         .await
         .map_err(|e| format!("gateway request failed: {e}"))?;
     let status = resp.status();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok()?.parse().ok());
     let text = resp
         .text()
         .await
         .map_err(|e| format!("gateway response unreadable: {e}"))?;
-    if !status.is_success() {
-        return Err(format!("model call failed ({status}): {text}").into());
+    Ok(Answer {
+        status,
+        retry_after,
+        text,
+    })
+}
+
+/// One model call through the gateway, tried again (up to [`MAX_RETRIES`] times, after
+/// [`retry_wait`]) while the provider is overloaded or rate-limiting; the parsed response.
+async fn model_call(
+    http: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    retry_base: Duration,
+) -> Result<Value, Fault> {
+    let mut retries = 0;
+    loop {
+        let a = post(http, url, body).await?;
+        if a.status.is_success() {
+            return Ok(
+                serde_json::from_str(&a.text).map_err(|e| format!("bad model response: {e}"))?
+            );
+        }
+        if retries == MAX_RETRIES || !RETRYABLE.contains(&a.status.as_u16()) {
+            return Err(failure(a.status, &a.text).into());
+        }
+        tokio::time::sleep(retry_wait(retry_base, retries, a.retry_after)).await;
+        retries += 1;
     }
-    Ok(serde_json::from_str(&text).map_err(|e| format!("bad model response: {e}"))?)
+}
+
+/// The wait before retry number `retries + 1`: what the provider asked, else `base` doubled
+/// for each retry already made; at most [`MAX_RETRY_WAIT`].
+fn retry_wait(base: Duration, retries: u32, asked: Option<u64>) -> Duration {
+    let wait = asked.map_or_else(|| base.saturating_mul(1 << retries), Duration::from_secs);
+    wait.min(MAX_RETRY_WAIT)
+}
+
+/// Why a model call failed, in plain words: the provider's own error message when it gave one.
+fn failure(status: reqwest::StatusCode, text: &str) -> String {
+    let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let error = &v["body"]["error"];
+    let detail = [&error["message"], error, &v["error"]]
+        .into_iter()
+        .find_map(Value::as_str)
+        .unwrap_or(text);
+    format!("model call failed ({}): {detail}", status.as_u16())
 }
 
 /// The recording gateway's address for this agent.
@@ -183,7 +242,7 @@ impl OpenDriver {
         let exec = ToolExec::new(state.store.clone());
         for _ in 0..MAX_MODEL_CALLS {
             let body = json!({"messages": messages, "tools": tools, "model": model});
-            let v = model_call(&state.http, &url, &body).await?;
+            let v = model_call(&state.http, &url, &body, state.config.retry_base).await?;
             totals.add(&provider, &v["usage"]);
             let msg = v["choices"][0]["message"].clone();
             if !msg.is_object() {
@@ -277,4 +336,43 @@ async fn run_calls(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_wait_as_asked_else_twice_as_long_each_time() {
+        let base = Duration::from_secs(1);
+        let waits: Vec<u64> = (0..3)
+            .map(|n| retry_wait(base, n, None).as_secs())
+            .collect();
+        assert_eq!(waits, [1, 2, 4]);
+        assert_eq!(retry_wait(base, 2, Some(0)), Duration::ZERO);
+        assert_eq!(retry_wait(base, 0, Some(7)).as_secs(), 7);
+        assert_eq!(retry_wait(base, 0, Some(600)), MAX_RETRY_WAIT);
+        assert_eq!(retry_wait(base, 30, None), MAX_RETRY_WAIT);
+    }
+
+    #[test]
+    fn failures_say_what_the_provider_said() {
+        let claude = json!({"error": "upstream returned 529", "status": 529, "body":
+            {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}});
+        let status = reqwest::StatusCode::from_u16(529).unwrap();
+        assert_eq!(
+            failure(status, &claude.to_string()),
+            "model call failed (529): Overloaded"
+        );
+        let unknown = json!({"error": "unknown provider \"x\""}).to_string();
+        let bad = reqwest::StatusCode::BAD_GATEWAY;
+        assert_eq!(
+            failure(bad, &unknown),
+            "model call failed (502): unknown provider \"x\""
+        );
+        assert_eq!(
+            failure(bad, "not json"),
+            "model call failed (502): not json"
+        );
+    }
 }

@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::{anthropic, Provider, ProviderKind, Upstream};
+use super::{anthropic, transport, Provider, ProviderKind, Upstream};
 
 /// The request as this provider takes it: canonical fields only (an agent moved here by a fork
 /// may carry Claude's own content), and OpenRouter alone is asked to report its cost.
@@ -24,28 +24,11 @@ pub(super) fn request(
     method: reqwest::Method,
     path: &str,
 ) -> reqwest::RequestBuilder {
-    let url = format!("{}/{path}", p.endpoint.base.trim_end_matches('/'));
-    let req = http.request(method, url);
+    let req = http.request(method, transport::url(&p.endpoint.base, path));
     match &p.endpoint.key {
         Some(key) => req.bearer_auth(key.expose()),
         None => req,
     }
-}
-
-/// Sends `req`: the answer's HTTP status and its JSON body (`{"raw": text}` when it isn't JSON);
-/// `Err` when no answer came. Messages never carry the URL, so never a credential in it.
-pub(super) async fn exchange(req: reqwest::RequestBuilder) -> Result<(u16, Value), String> {
-    let r = req
-        .send()
-        .await
-        .map_err(|e| format!("upstream request failed: {}", e.without_url()))?;
-    let status = r.status().as_u16();
-    let text = r
-        .text()
-        .await
-        .map_err(|e| format!("upstream response unreadable: {}", e.without_url()))?;
-    let body = serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}));
-    Ok((status, body))
 }
 
 pub(super) async fn send(
@@ -55,11 +38,12 @@ pub(super) async fn send(
 ) -> Result<Upstream, String> {
     let req = request(p, http, reqwest::Method::POST, "chat/completions")
         .json(&outgoing(p.kind, request_body));
-    let (status, response) = exchange(req).await?;
+    let answer = transport::exchange(req).await?;
     Ok(Upstream {
-        status,
-        raw: response.clone(),
-        response,
+        status: answer.status,
+        raw: answer.body.clone(),
+        response: answer.body,
+        retry_after: answer.retry_after,
     })
 }
 

@@ -2,7 +2,8 @@
 //!
 //! Environment: `ARENA_PG_URL`, `ARENA_PORT` (4510),
 //! the model providers of open agents (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
-//! `ANTHROPIC_API_KEY`, `ARENA_LOCAL_MODELS="name=url,…"`, `ARENA_LOCAL_KEY_<NAME>`; see
+//! `ANTHROPIC_API_KEY`, `ARENA_LOCAL_MODELS="name=url,…"`, `ARENA_LOCAL_KEY_<NAME>`,
+//! `ARENA_ANTHROPIC_MAX_TOKENS` (16000); see
 //! `providers::ProviderConfig`),
 //! `ARENA_UI_DIST` (serve the built UI at `/`),
 //! `ARENA_MAX_DB_BYTES` (default 5 GiB: new runs and forks are refused above it),

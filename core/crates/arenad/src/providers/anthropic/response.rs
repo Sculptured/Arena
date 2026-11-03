@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::{CONTENT_KEY, CONTEXT_KEY};
 
 /// The canonical response for Messages API message `raw`, answered to a request made under
-/// `context` (see [`super::request::context_of`]).
+/// `context` (the fingerprint [`super::request::translate`] gave).
 pub(super) fn translate(raw: &Value, context: &str) -> Value {
     let blocks = raw["content"].as_array().map_or(&[][..], Vec::as_slice);
     let finish = finish_reason(raw["stop_reason"].as_str());
@@ -59,13 +59,14 @@ fn message(blocks: &[Value], finish: &str, context: &str) -> Value {
     m
 }
 
-/// The text blocks' text, `null` when there is none.
+/// The text blocks' text, one per line; `null` when there is none.
 fn text_of(blocks: &[Value]) -> Value {
-    let text: String = blocks
+    let text = blocks
         .iter()
         .filter(|b| b["type"] == "text")
         .filter_map(|b| b["text"].as_str())
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n");
     if text.is_empty() {
         Value::Null
     } else {
@@ -175,6 +176,14 @@ mod tests {
             let v = translate(&raw(json!([{"type": "text", "text": "x"}]), stop), "c");
             assert_eq!(v["choices"][0]["finish_reason"], finish, "{stop}");
         }
+    }
+
+    #[test]
+    fn text_blocks_are_joined_by_lines() {
+        let blocks = json!([{"type": "text", "text": "One."}, thinking(),
+                            {"type": "text", "text": "Two."}]);
+        let v = translate(&raw(blocks, "end_turn"), "c");
+        assert_eq!(v["choices"][0]["message"]["content"], "One.\nTwo.");
     }
 
     #[test]

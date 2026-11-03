@@ -10,14 +10,13 @@ use serde_json::{json, Value};
 
 use super::{CONTENT_KEY, CONTEXT_KEY};
 
-/// The `max_tokens` of a request that names none: the Messages API requires one.
-pub(super) const DEFAULT_MAX_TOKENS: u64 = 16_000;
-
-/// The Messages API request for canonical `chat`. Only the fields below are carried over:
-/// on API version 2026-10-21, sending `temperature`, `top_p` or `top_k` is a 400 on every
-/// model, so those (and the other chat-completions sampling fields) are dropped.
-pub(super) fn translate(chat: &Value) -> Value {
-    let mut out = json!({"model": chat["model"], "max_tokens": max_tokens(chat)});
+/// The Messages API request for canonical `chat` (with `max_tokens` when it names none), and
+/// the context its thinking will be bound to (see [`context_of`]). Only the fields below are
+/// carried over: on API version 2026-10-21, sending `temperature`, `top_p` or `top_k` is a 400
+/// on every model, so those (and the other chat-completions sampling fields) are dropped.
+pub(super) fn translate(chat: &Value, max_tokens: u64) -> (Value, String) {
+    let max_tokens = named_max_tokens(chat).unwrap_or(max_tokens);
+    let mut out = json!({"model": chat["model"], "max_tokens": max_tokens});
     if let Some(system) = system(chat) {
         out["system"] = json!(system);
     }
@@ -29,24 +28,26 @@ pub(super) fn translate(chat: &Value) -> Value {
     }
     let context = context_of(&out);
     out["messages"] = Value::Array(turns(chat, &context));
-    out
+    (out, context)
 }
 
 /// A fingerprint of what a thinking block is bound to besides the messages before it: the
-/// system prompt and the tools of `request` (FNV-1a over their JSON, stable across builds).
-pub(super) fn context_of(request: &Value) -> String {
-    let bound = json!([request.get("system"), request.get("tools")]).to_string();
+/// system prompt and the tools of `request`, whatever their order (FNV-1a over their JSON,
+/// stable across builds).
+fn context_of(request: &Value) -> String {
+    let mut tools = request["tools"].as_array().cloned().unwrap_or_default();
+    tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    let bound = json!([request.get("system"), tools]).to_string();
     let hash = bound.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
 }
 
-fn max_tokens(chat: &Value) -> u64 {
+fn named_max_tokens(chat: &Value) -> Option<u64> {
     ["max_completion_tokens", "max_tokens"]
         .iter()
         .find_map(|k| chat[*k].as_u64())
-        .unwrap_or(DEFAULT_MAX_TOKENS)
 }
 
 fn messages(chat: &Value) -> impl Iterator<Item = &Value> {
@@ -57,17 +58,28 @@ fn is_system(m: &Value) -> bool {
     matches!(m["role"].as_str(), Some("system" | "developer"))
 }
 
-/// The text of a message's content: a string, or the text of its text parts.
+/// The text of a message's content: a string, or its parts' text (see [`part_text`]).
 fn text_of(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|p| p["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Value::Array(parts) => parts.iter().map(part_text).collect::<Vec<_>>().join("\n"),
         _ => String::new(),
     }
+}
+
+/// A content part's text; a part that isn't text (an image, audio, a file) is not sent, and a
+/// placeholder says so where it was, so its absence shows.
+fn part_text(part: &Value) -> String {
+    if let Some(text) = part["text"].as_str() {
+        return text.to_string();
+    }
+    let kind = match part["type"].as_str() {
+        Some("image_url" | "image") => "image",
+        Some("input_audio") => "audio",
+        Some(other) => other,
+        None => "content",
+    };
+    format!("[{kind} omitted: Arena sends text only]")
 }
 
 /// The system and developer messages, in order, as one prompt.
@@ -146,25 +158,32 @@ fn text_block(text: &str) -> Option<Value> {
     (!text.trim().is_empty()).then(|| json!({"type": "text", "text": text}))
 }
 
-/// A user message's text, as text blocks (only text parts are carried over).
+/// A user message's text, as text blocks (one per part, see [`part_text`]).
 fn user_blocks(content: &Value) -> Vec<Value> {
     match content {
         Value::Array(parts) => parts
             .iter()
-            .filter(|p| p["type"] == "text")
-            .filter_map(|p| text_block(p["text"].as_str()?))
+            .filter_map(|p| text_block(&part_text(p)))
             .collect(),
         other => text_block(&text_of(other)).into_iter().collect(),
     }
 }
 
+/// A tool message as a `tool_result`, marked `is_error` when the tool answered `{"error": …}`.
 fn tool_result(m: &Value) -> Value {
     let mut block = json!({"type": "tool_result", "tool_use_id": m["tool_call_id"]});
     let content = text_of(&m["content"]);
+    if is_error(&content) {
+        block["is_error"] = json!(true);
+    }
     if !content.is_empty() {
         block["content"] = json!(content);
     }
     block
+}
+
+fn is_error(content: &str) -> bool {
+    serde_json::from_str::<Value>(content).is_ok_and(|v| v.get("error").is_some())
 }
 
 /// Claude's own blocks when the message carries them, unchanged; without their thinking when
@@ -220,19 +239,26 @@ mod tests {
         json!({"role": "tool", "tool_call_id": id, "content": content})
     }
 
+    const BUDGET: u64 = 16_000;
+
+    /// The request for `chat`, with the default budget.
+    fn body(chat: &Value) -> Value {
+        translate(chat, BUDGET).0
+    }
+
     fn chat(messages: Value) -> Value {
         json!({"model": "claude-opus-5-5", "messages": messages})
     }
 
     #[test]
     fn system_messages_merge_and_max_tokens_defaults() {
-        let req = translate(&chat(json!([
+        let req = body(&chat(json!([
             {"role": "system", "content": "You are a."},
             {"role": "developer", "content": [{"type": "text", "text": "Be brief."}]},
             {"role": "user", "content": "Hi"},
         ])));
         assert_eq!(req["system"], "You are a.\n\nBe brief.");
-        assert_eq!(req["max_tokens"], DEFAULT_MAX_TOKENS);
+        assert_eq!(req["max_tokens"], BUDGET);
         assert_eq!(req["model"], "claude-opus-5-5");
         assert_eq!(
             req["messages"],
@@ -240,10 +266,12 @@ mod tests {
         );
         let mut named = chat(json!([]));
         named["max_completion_tokens"] = json!(512);
-        assert_eq!(translate(&named)["max_tokens"], 512);
+        assert_eq!(body(&named)["max_tokens"], 512);
         named["max_tokens"] = json!(64);
-        assert_eq!(translate(&named)["max_tokens"], 512, "the newer field wins");
-        assert_eq!(translate(&chat(json!([]))).get("system"), None);
+        assert_eq!(body(&named)["max_tokens"], 512, "the newer field wins");
+        let configured = translate(&chat(json!([])), 64_000).0;
+        assert_eq!(configured["max_tokens"], 64_000);
+        assert_eq!(body(&chat(json!([]))).get("system"), None);
     }
 
     #[test]
@@ -253,7 +281,7 @@ mod tests {
             c[k] = json!(v);
         }
         c["frequency_penalty"] = json!(0.5);
-        let req = translate(&c);
+        let req = body(&c);
         let mut keys: Vec<&String> = req.as_object().unwrap().keys().collect();
         keys.sort();
         assert_eq!(keys, ["max_tokens", "messages", "model"]);
@@ -267,7 +295,7 @@ mod tests {
              "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}},
             {"type": "function", "function": {"name": "bare"}},
         ]);
-        let req = translate(&c);
+        let req = body(&c);
         assert_eq!(
             req["tools"],
             json!([
@@ -285,13 +313,13 @@ mod tests {
             (json!("none"), "none"),
         ] {
             c["tool_choice"] = choice;
-            assert_eq!(translate(&c)["tool_choice"], json!({"type": kind}));
+            assert_eq!(body(&c)["tool_choice"], json!({"type": kind}));
         }
     }
 
     #[test]
     fn tool_calls_and_parallel_results_round_trip() {
-        let req = translate(&chat(json!([
+        let req = body(&chat(json!([
             {"role": "user", "content": "Look both up."},
             {"role": "assistant", "content": "Checking.",
              "tool_calls": [call("t1", "get", r#"{"id":"a"}"#), call("t2", "get", "{bad")]},
@@ -319,7 +347,7 @@ mod tests {
 
     #[test]
     fn empty_text_is_not_sent() {
-        let req = translate(&chat(json!([
+        let req = body(&chat(json!([
             {"role": "user", "content": "Go."},
             {"role": "assistant", "content": null, "tool_calls": [call("t1", "get", "")]},
             tool_msg("t1", "ok"),
@@ -346,8 +374,7 @@ mod tests {
     fn claude_blocks_go_back_unchanged_in_the_same_context() {
         let system = json!({"role": "system", "content": "You are a."});
         let user = json!({"role": "user", "content": "Go."});
-        let first = translate(&chat(json!([system, user])));
-        let context = context_of(&first);
+        let (_, context) = translate(&chat(json!([system, user])), BUDGET);
         let next = |sys: &Value| {
             let msgs = json!([
                 sys,
@@ -355,7 +382,7 @@ mod tests {
                 with_claude_blocks(&context),
                 tool_msg("t1", "ok")
             ]);
-            translate(&chat(msgs))["messages"][1]["content"].clone()
+            body(&chat(msgs))["messages"][1]["content"].clone()
         };
         assert_eq!(next(&system), with_claude_blocks(&context)[CONTENT_KEY]);
         // Under another system prompt the thinking would be refused: it is left out.
@@ -364,5 +391,43 @@ mod tests {
             next(&changed),
             json!([{"type": "tool_use", "id": "t1", "name": "get", "input": {}}])
         );
+    }
+
+    #[test]
+    fn parts_that_are_not_text_leave_a_placeholder() {
+        let image = json!({"type": "image_url", "image_url": {"url": "data:..."}});
+        let req = body(&chat(json!([
+            {"role": "user", "content": [{"type": "text", "text": "Look:"}, image]},
+            {"role": "tool", "tool_call_id": "t1", "content": [{"type": "input_audio"}]},
+        ])));
+        let user = &req["messages"][0]["content"];
+        assert_eq!(user[1]["text"], "[image omitted: Arena sends text only]");
+        assert_eq!(user[2]["content"], "[audio omitted: Arena sends text only]");
+    }
+
+    #[test]
+    fn error_results_are_marked() {
+        let req = body(&chat(json!([
+            {"role": "user", "content": "Go."},
+            {"role": "assistant", "content": null,
+             "tool_calls": [call("t1", "get", "{}"), call("t2", "get", "{}")]},
+            tool_msg("t1", r#"{"error":"no such order"}"#),
+            tool_msg("t2", r#"{"status":"ok"}"#),
+        ])));
+        let results = &req["messages"][2]["content"];
+        assert_eq!(results[0]["is_error"], true);
+        assert_eq!(results[1].get("is_error"), None);
+    }
+
+    #[test]
+    fn the_context_ignores_the_order_of_tools() {
+        let tool = |name: &str| json!({"type": "function", "function": {"name": name}});
+        let mut c = chat(json!([{"role": "user", "content": "Hi"}]));
+        c["tools"] = json!([tool("a"), tool("b")]);
+        let (_, ab) = translate(&c, BUDGET);
+        c["tools"] = json!([tool("b"), tool("a")]);
+        assert_eq!(translate(&c, BUDGET).1, ab);
+        c["tools"] = json!([tool("a")]);
+        assert_ne!(translate(&c, BUDGET).1, ab);
     }
 }

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock, RwLock},
+    time::Duration,
 };
 
 use axum::Router;
@@ -24,9 +25,13 @@ pub struct Config {
     pub self_base: String,
     /// New runs and forks are refused (507) once the arena's saves use at least this many bytes.
     pub max_db_bytes: u64,
+    /// The wait before an open agent retries a model call its provider turned down as
+    /// overloaded or rate-limited, doubling for each further retry (unless it says how long).
+    pub retry_base: Duration,
 }
 
 pub const DEFAULT_MAX_DB_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+pub const DEFAULT_RETRY_BASE: Duration = Duration::from_secs(1);
 
 pub use crate::providers::{is_openrouter_url, OPENROUTER_BASE};
 
@@ -46,6 +51,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(DEFAULT_MAX_DB_BYTES),
+            retry_base: DEFAULT_RETRY_BASE,
         }
     }
 

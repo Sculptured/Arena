@@ -4,7 +4,8 @@
 //! - `ARENA_LOCAL_MODELS="name=url[,name=url…]"`: OpenAI-compatible servers (Ollama, vLLM, LM
 //!   Studio, llama.cpp server), each the provider `local:<name>`;
 //! - `ARENA_LOCAL_KEY_<NAME>`: an optional key for `local:<name>` (`<NAME>` upper-cased, `-` as
-//!   `_`).
+//!   `_`);
+//! - `ARENA_ANTHROPIC_MAX_TOKENS`: the output budget of a Claude call that names none (16000).
 //!
 //! Keys are held as [`Secret`]s: never logged, printed, serialized or recorded.
 
@@ -15,6 +16,9 @@ pub const OPENAI_BASE: &str = "https://api.openai.com/v1";
 pub const ANTHROPIC_BASE: &str = "https://api.anthropic.com/v1";
 pub const LOCAL_MODELS_ENV: &str = "ARENA_LOCAL_MODELS";
 pub const LOCAL_KEY_PREFIX: &str = "ARENA_LOCAL_KEY_";
+pub const ANTHROPIC_MAX_TOKENS_ENV: &str = "ARENA_ANTHROPIC_MAX_TOKENS";
+/// The `max_tokens` of a Claude call that names none (the Messages API requires one).
+pub const DEFAULT_ANTHROPIC_MAX_TOKENS: u64 = 16_000;
 
 /// A credential. Its `Debug` is `<redacted>` and it has no `Display` or `Serialize`.
 #[derive(Clone, PartialEq, Eq)]
@@ -67,6 +71,8 @@ pub struct ProviderConfig {
     pub openai: Endpoint,
     pub anthropic: Endpoint,
     pub locals: Vec<LocalEndpoint>,
+    /// The `max_tokens` of a Claude call that names none.
+    pub anthropic_max_tokens: u64,
     /// The provider of agents that name none: `openrouter`, or `local:custom` after
     /// [`ProviderConfig::set_upstream`].
     pub default: String,
@@ -80,6 +86,7 @@ impl Default for ProviderConfig {
             openai: Endpoint::new(OPENAI_BASE, None),
             anthropic: Endpoint::new(ANTHROPIC_BASE, None),
             locals: vec![],
+            anthropic_max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
             default: OPENROUTER.to_string(),
         }
     }
@@ -111,26 +118,33 @@ fn valid_base(url: &str) -> bool {
 }
 
 impl ProviderConfig {
-    /// The configuration in the process environment; problems with `ARENA_LOCAL_MODELS` entries
-    /// are printed (by name, never with their URL) and the entries skipped.
+    /// The configuration in the process environment; its problems are printed (never with a
+    /// key or a URL) and the setting they concern is skipped.
     pub fn from_env() -> ProviderConfig {
         let (config, problems) = ProviderConfig::from_lookup(|k| std::env::var(k).ok());
         for p in problems {
-            eprintln!("arenad: {LOCAL_MODELS_ENV}: {p}");
+            eprintln!("arenad: {p}");
         }
         config
     }
 
-    /// The configuration `get` describes (it reads one env var), and the problems found.
+    /// The configuration `get` describes (it reads one env var), and the problems found, each
+    /// naming its env var.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> (ProviderConfig, Vec<String>) {
-        let key = |k: &str| get(k).filter(|v| !v.trim().is_empty()).map(Secret::new);
+        let mut problems = vec![];
+        let mut key = |k: &str| secret(k, get(k), &mut problems);
         let mut config = ProviderConfig::default();
         config.openrouter.key = key("OPENROUTER_API_KEY");
         config.openai.key = key("OPENAI_API_KEY");
         config.anthropic.key = key("ANTHROPIC_API_KEY");
         let list = get(LOCAL_MODELS_ENV).unwrap_or_default();
-        let (locals, problems) = parse_locals(&list, |name| key(&local_key_env(name)));
+        let (locals, bad) = parse_locals(&list, |name| key(&local_key_env(name)));
         config.locals = locals;
+        problems.extend(bad.into_iter().map(|p| format!("{LOCAL_MODELS_ENV}: {p}")));
+        match max_tokens(get(ANTHROPIC_MAX_TOKENS_ENV)) {
+            Ok(n) => config.anthropic_max_tokens = n,
+            Err(p) => problems.push(p),
+        }
         (config, problems)
     }
 
@@ -162,11 +176,38 @@ impl ProviderConfig {
     }
 }
 
+/// The key in env var `name` (its `value`), unless blank; one that can't be sent as a header
+/// is a problem (named by its env var, never shown) and is not used.
+fn secret(name: &str, value: Option<String>, problems: &mut Vec<String>) -> Option<Secret> {
+    let value = value.filter(|v| !v.trim().is_empty())?;
+    if reqwest::header::HeaderValue::from_str(&value).is_err() {
+        problems.push(format!(
+            "{name} has characters a header can't carry; it was ignored"
+        ));
+        return None;
+    }
+    Some(Secret::new(value))
+}
+
+/// The `ARENA_ANTHROPIC_MAX_TOKENS` setting: the default when unset; `Err` (with the default
+/// kept) when it isn't a positive whole number.
+fn max_tokens(value: Option<String>) -> Result<u64, String> {
+    let Some(v) = value.filter(|v| !v.trim().is_empty()) else {
+        return Ok(DEFAULT_ANTHROPIC_MAX_TOKENS);
+    };
+    v.trim().parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+        format!(
+            "{ANTHROPIC_MAX_TOKENS_ENV} must be a positive whole number; \
+             {DEFAULT_ANTHROPIC_MAX_TOKENS} is used"
+        )
+    })
+}
+
 /// The local servers in `list` (`name=url,…`), each with the key `key_of(name)` finds; and why
 /// any entry was skipped.
 fn parse_locals(
     list: &str,
-    key_of: impl Fn(&str) -> Option<Secret>,
+    mut key_of: impl FnMut(&str) -> Option<Secret>,
 ) -> (Vec<LocalEndpoint>, Vec<String>) {
     let mut locals: Vec<LocalEndpoint> = vec![];
     let mut problems = vec![];
@@ -246,6 +287,34 @@ mod tests {
         assert_eq!(c.locals[0].endpoint.base, "http://a");
         assert_eq!(problems.len(), 4, "{problems:?}");
         assert!(problems.iter().all(|p| !p.contains("pw")));
+    }
+
+    #[test]
+    fn bad_keys_and_budgets_are_reported_without_their_value() {
+        let (c, problems) = config_of(&[
+            ("ANTHROPIC_API_KEY", "sk-ant-bad\nkey"),
+            (ANTHROPIC_MAX_TOKENS_ENV, "lots"),
+        ]);
+        assert_eq!(c.anthropic.key, None);
+        assert_eq!(c.anthropic_max_tokens, DEFAULT_ANTHROPIC_MAX_TOKENS);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems[0].starts_with("ANTHROPIC_API_KEY "),
+            "{problems:?}"
+        );
+        assert!(
+            problems[1].starts_with(ANTHROPIC_MAX_TOKENS_ENV),
+            "{problems:?}"
+        );
+        assert!(problems.iter().all(|p| !p.contains("sk-ant")));
+        for bad in ["0", "-5", "1.5"] {
+            assert!(
+                config_of(&[(ANTHROPIC_MAX_TOKENS_ENV, bad)]).1.len() == 1,
+                "{bad}"
+            );
+        }
+        let (c, problems) = config_of(&[(ANTHROPIC_MAX_TOKENS_ENV, " 64000 ")]);
+        assert_eq!((c.anthropic_max_tokens, problems.len()), (64_000, 0));
     }
 
     #[test]
