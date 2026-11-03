@@ -1,6 +1,7 @@
 //! A scripted Claude Messages API for tests. `POST /messages` serves the script's content
 //! blocks in order (repeating the last entry when exhausted) as messages with fixed usage; an
-//! entry is `{"content": [...], "stop_reason": "..."}`. Every request body is recorded with its
+//! entry is `{"content": [...], "stop_reason": "..."}`, with `stop_details` passed on when it
+//! has them. Every request body is recorded with its
 //! `x-api-key`, `anthropic-version` and `authorization` headers. `GET /models` lists
 //! `claude-b` and `claude-a`, and records the same headers.
 
@@ -83,7 +84,7 @@ async fn message(
         seen.len()
     };
     let entry = st.script.get(n - 1).or(st.script.last()).unwrap();
-    Json(json!({
+    let mut message = json!({
         "id": format!("msg_{n}"),
         "type": "message",
         "role": "assistant",
@@ -91,5 +92,9 @@ async fn message(
         "content": entry["content"],
         "stop_reason": entry["stop_reason"],
         "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 2},
-    }))
+    });
+    if let Some(details) = entry.get("stop_details") {
+        message["stop_details"] = details.clone();
+    }
+    Json(message)
 }

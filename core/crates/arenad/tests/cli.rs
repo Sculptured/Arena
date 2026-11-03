@@ -90,9 +90,11 @@ fn claude_command_has_only_the_world_mcp() {
     assert_eq!(a[0], "-p");
     assert_eq!(a[a.len() - 2..], ["--", "do it"]);
     assert!(a.contains(&"--no-session-persistence".to_string()));
-    for key in ["PGPASSWORD", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+    // Claude Code keeps its own vendor's key, and loses the others.
+    for key in ["PGPASSWORD", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] {
         assert!(c.get_envs().any(|(k, v)| k == key && v.is_none()), "{key}");
     }
+    assert!(!c.get_envs().any(|(k, _)| k == "ANTHROPIC_API_KEY"));
     let c = claude::command(&spec(Some("opus")), &mcp(), "x");
     assert!(args(&c).contains(&"opus".to_string()));
 }
@@ -162,11 +164,13 @@ fn codex_command_sets_mcp_url() {
         "DATABASE_URL",
         "PGPASSWORD",
         "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "ARENA_LOCAL_MODELS",
     ] {
         assert!(removed.contains(&k.to_string()), "{k} not scrubbed");
     }
+    // Codex keeps its own vendor's key.
+    assert!(!c.get_envs().any(|(k, _)| k == "OPENAI_API_KEY"));
     assert!(a.windows(2).any(|w| w == ["-C", "/tmp/w"]));
     assert_eq!(a.last().unwrap(), "do it");
 }

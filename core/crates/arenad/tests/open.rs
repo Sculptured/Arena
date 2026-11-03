@@ -444,3 +444,34 @@ fn gateway_refuses_unknown_branch_or_agent_without_calling_upstream() {
         teardown(fx).await;
     })
 }
+
+/// A provider the configuration doesn't know is recorded as a failed call, with no provider.
+#[test]
+fn an_unknown_provider_is_recorded_as_a_failed_call() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("hi")]).await;
+        let mut a = agent("solo", "p");
+        a.provider = Some("local:gone".into());
+        let fx = setup("gone", vec![a], &up).await;
+        let url = format!(
+            "{}/gateway/{}/solo/v1/chat/completions",
+            fx.state.config.self_base, fx.ctx.branch_id
+        );
+        let body = json!({"model": "m", "messages": [{"role": "user", "content": "x"}]});
+        let r = reqwest::Client::new()
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 502);
+        let evs = fx.state.store.events(&fx.ctx.branch_id).await.unwrap();
+        assert_eq!(evs.len(), 1);
+        let mc: ModelCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
+        let error = mc.response["error"].as_str().unwrap();
+        assert!(error.contains("unknown provider \"local:gone\""), "{error}");
+        assert_eq!((mc.provider, mc.cost_usd), (None, None));
+        assert!(up.requests().is_empty());
+        teardown(fx).await;
+    })
+}

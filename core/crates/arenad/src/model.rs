@@ -19,7 +19,8 @@ pub struct AgentSpec {
     pub model: Option<String>,
     pub prompt: String,
     /// Where an open agent's model calls go: `openrouter`, `openai`, `anthropic` or
-    /// `local:<name>`. Absent means `openrouter`, as in runs and teams made before providers.
+    /// `local:<name>`. Absent (or blank) means the default provider, `openrouter`, as in runs and
+    /// teams made before providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
 }
@@ -51,6 +52,12 @@ pub enum BranchStatus {
     Failed,
     InfraError,
     Interrupted,
+}
+
+/// `text` trimmed, `None` when that leaves nothing: what a blank provider or model means.
+pub fn trimmed(text: &str) -> Option<String> {
+    let t = text.trim();
+    (!t.is_empty()).then(|| t.to_string())
 }
 
 /// A running cost total: unknown (`None`) as soon as any part of it is unknown.

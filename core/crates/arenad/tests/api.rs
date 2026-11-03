@@ -531,16 +531,15 @@ fn open_mode_is_rejected_without_a_key() {
             (st, v["error"].as_str()),
             (400, Some("open mode needs OPENROUTER_API_KEY"))
         );
-        let (st, v) = fx
+        // A fork's changes are judged on the team it would run, so an unknown branch is 404
+        // first (tests/providers.rs checks the refusals of a fork).
+        let (st, _) = fx
             .post(
                 "/api/branches/whatever/fork",
                 json!({"at_seq": 1, "changes": {"resolver": {"kind": "open"}}}),
             )
             .await;
-        assert_eq!(
-            (st, v["error"].as_str()),
-            (400, Some("open mode needs OPENROUTER_API_KEY"))
-        );
+        assert_eq!(st, 404);
         assert!(
             fx.state.store.runs().await.unwrap().is_empty(),
             "no run was created"

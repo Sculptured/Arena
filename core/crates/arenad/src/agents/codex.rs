@@ -86,7 +86,7 @@ fn command_with(
     }
     // The prompt is positional and may start with "-": keep it apart from the flags.
     c.args(["--", prompt]);
-    super::scrub_env(&mut c);
+    super::scrub_env(&mut c, "OPENAI_API_KEY");
     c
 }
 

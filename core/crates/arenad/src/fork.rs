@@ -18,7 +18,7 @@ use crate::{
     clock::BranchClock,
     exec::BranchCtx,
     model::*,
-    providers,
+    providers::ProviderConfig,
     recorded::{run_info, saves_at_except},
     restore::{restored, Refused},
     runner::{self, StartPoint},
@@ -128,10 +128,7 @@ fn changes_kind(c: &Change, spec: &AgentSpec) -> bool {
 
 /// A text a change sets: `Some(None)` clears it (empty or blank text), `Some(Some(t))` sets it.
 fn new_text(text: Option<&String>) -> Option<Option<String>> {
-    text.map(|t| {
-        let t = t.trim();
-        (!t.is_empty()).then(|| t.to_string())
-    })
+    text.map(|t| trimmed(t))
 }
 
 /// The model a change sets (see `new_text`).
@@ -144,16 +141,35 @@ fn changes_model(c: &Change, spec: &AgentSpec) -> bool {
     new_model(c).is_some_and(|m| m != spec.model)
 }
 
-/// The provider a change sets (see `new_text`; cleared is back to `openrouter`).
+/// The provider a change sets (see `new_text`; cleared is back to the default one).
 fn new_provider(c: &Change) -> Option<Option<String>> {
     new_text(c.provider.as_ref())
 }
 
-/// True when `c` moves the agent to another provider (an absent one is `openrouter`).
+/// True when `c` names another provider than the agent's. Changes are settled first
+/// ([`settle_changes`]), so a name for the agent's own provider is no longer there.
 fn changes_provider(c: &Change, spec: &AgentSpec) -> bool {
-    new_provider(c).is_some_and(|p| {
-        providers::effective_id(p.as_deref()) != providers::effective_id(spec.provider.as_deref())
-    })
+    new_provider(c).is_some_and(|p| p != spec.provider)
+}
+
+/// Drops each provider change that names the agent's own provider (as `providers` resolves
+/// both: absent is the default one), so the fork rules see only real ones.
+pub fn settle_changes(
+    team: &Team,
+    changes: &mut HashMap<String, Change>,
+    providers: &ProviderConfig,
+) {
+    for spec in &team.agents {
+        let Some(c) = changes.get_mut(&spec.id) else {
+            continue;
+        };
+        let same = new_provider(c).is_some_and(|p| {
+            providers.id_of(p.as_deref()) == providers.id_of(spec.provider.as_deref())
+        });
+        if same {
+            c.provider = None;
+        }
+    }
 }
 
 /// A provider change is a model change: the fork rules treat both alike.
@@ -449,9 +465,10 @@ pub async fn fork(
 pub async fn fork_with(
     state: &Arc<AppState>,
     branch_id: &str,
-    req: ForkRequest,
+    mut req: ForkRequest,
 ) -> Result<ForkResponse, ForkError> {
     let parent = finished_branch(state, branch_id).await?;
+    settle_changes(&parent.team, &mut req.changes, &state.config.providers);
     let events = state.store.events(branch_id).await?;
     let mut rerun = prepare(state, &parent, &events, &req).await?;
     let task_id = task_of(state, &events, &parent).await?;
@@ -795,45 +812,65 @@ mod tests {
         let p = plan_fork(&events(), &t, 12, &provider("triage", "openai")).unwrap();
         assert_eq!((p.start_seq, p.agent_index), (2, 0));
         assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
-        // An absent provider is openrouter: naming it, or clearing it, is no change.
-        for same in ["openrouter", " "] {
-            let p = plan_fork(&events(), &t, 12, &provider("triage", same)).unwrap();
-            assert_eq!((p.start_seq, p.moved_from), (11, Some(12)), "{same:?}");
-        }
+        // Clearing an absent provider is no change.
+        let p = plan_fork(&events(), &t, 12, &provider("triage", " ")).unwrap();
+        assert_eq!((p.start_seq, p.moved_from), (11, Some(12)));
+    }
+
+    #[test]
+    fn settling_drops_changes_to_the_agents_own_provider() {
+        let t = team(AgentKind::Open);
+        let both = |a: &str, b: &str| {
+            let mut c = provider("triage", a);
+            c.extend(provider("resolver", b));
+            c
+        };
+        // Absent is the configured default: openrouter, or local:custom after the override.
+        let mut c = both("openrouter", "local:custom");
+        settle_changes(&t, &mut c, &ProviderConfig::default());
+        assert_eq!(
+            (&c["triage"].provider, c["resolver"].provider.as_deref()),
+            (&None, Some("local:custom"))
+        );
+        let mut c = both("openrouter", "local:custom");
+        let custom = ProviderConfig::with_upstream("http://127.0.0.1:9");
+        settle_changes(&t, &mut c, &custom);
+        assert_eq!(
+            (c["triage"].provider.as_deref(), &c["resolver"].provider),
+            (Some("openrouter"), &None)
+        );
+        // A blank provider is the default one too.
+        let mut c = both(" ", "");
+        settle_changes(&t, &mut c, &custom);
+        assert_eq!(
+            (&c["triage"].provider, &c["resolver"].provider),
+            (&None, &None)
+        );
     }
 
     #[test]
     fn apply_changes_provider_rules() {
         let mut t = team(AgentKind::Open);
         t.agents[0].model = Some("old/model".into());
+        t.agents[0].provider = Some("local:box".into());
         let ap = |c: Change| apply_changes(&t, &change("triage", c)).agents[0].clone();
-        // A new provider drops the old provider's model ...
-        let a = ap(Change {
-            provider: Some("local:box".into()),
+        let to = |p: &str| Change {
+            provider: Some(p.into()),
             ..Default::default()
-        });
-        assert_eq!((a.provider.as_deref(), a.model), (Some("local:box"), None));
+        };
+        // A new provider drops the old provider's model ...
+        let a = ap(to("openai"));
+        assert_eq!((a.provider.as_deref(), a.model), (Some("openai"), None));
         // ... unless the change names one.
         let a = ap(Change {
-            provider: Some("openai".into()),
             model: Some("gpt-x".into()),
-            ..Default::default()
+            ..to("openai")
         });
-        assert_eq!(
-            (a.provider.as_deref(), a.model.as_deref()),
-            (Some("openai"), Some("gpt-x"))
-        );
-        // The same provider keeps the model; blank is back to openrouter.
-        let a = ap(Change {
-            provider: Some("openrouter".into()),
-            ..Default::default()
-        });
-        assert_eq!(a.model.as_deref(), Some("old/model"));
-        let a = ap(Change {
-            provider: Some("".into()),
-            ..Default::default()
-        });
-        assert_eq!((a.provider, a.model.as_deref()), (None, Some("old/model")));
+        assert_eq!(a.model.as_deref(), Some("gpt-x"));
+        // The same provider keeps the model; blank is back to the default provider.
+        assert_eq!(ap(to("local:box")).model.as_deref(), Some("old/model"));
+        let a = ap(to(""));
+        assert_eq!((a.provider, a.model), (None, None));
     }
 
     #[test]

@@ -21,8 +21,11 @@ use std::{
 
 use arenad::{
     app::AppState,
+    gateway::REJECTED_MESSAGE,
     model::*,
-    providers::{Endpoint, LocalEndpoint, ProviderConfig, ProviderKind, Secret},
+    providers::{
+        Endpoint, LocalEndpoint, ProviderConfig, ProviderKind, Secret, KEY_REJECTED, NOT_CHECKED,
+    },
 };
 use fake_anthropic::FakeAnthropic;
 use fake_upstream::FakeUpstream;
@@ -279,16 +282,41 @@ fn each_agent_calls_its_own_provider() {
     })
 }
 
-/// A server that accepts connections and never answers.
-async fn slow_server() -> String {
+/// A test server on a free port, stopped when dropped.
+struct Server {
+    base: String,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Serves `app` until dropped.
+async fn serve(app: axum::Router) -> Server {
     let (listener, base) = app_support::bind().await;
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Server {
+        base,
+        task: task.abort_handle(),
+    }
+}
+
+/// A server that accepts connections and never answers.
+async fn slow_server() -> Server {
+    let (listener, base) = app_support::bind().await;
+    let task = tokio::spawn(async move {
         let mut held = vec![];
         while let Ok((sock, _)) = listener.accept().await {
             held.push(sock);
         }
     });
-    base
+    Server {
+        base,
+        task: task.abort_handle(),
+    }
 }
 
 /// The base of a port nothing listens on.
@@ -298,17 +326,20 @@ async fn down_server() -> String {
     base
 }
 
-async fn listing_providers(up: &FakeUpstream) -> ProviderConfig {
-    ProviderConfig {
+/// Providers to list, and the slow servers behind two of them.
+async fn listing_providers(up: &FakeUpstream) -> (ProviderConfig, [Server; 2]) {
+    let slow = [slow_server().await, slow_server().await];
+    let config = ProviderConfig {
         openai: Endpoint::new(&up.base_url, Some(Secret::new(OAI_KEY))),
         locals: vec![
             local("up", &up.base_url, None),
-            local("slow1", &slow_server().await, None),
-            local("slow2", &slow_server().await, None),
+            local("slow1", &slow[0].base, None),
+            local("slow2", &slow[1].base, None),
             local("down", &down_server().await, None),
         ],
         ..ProviderConfig::default()
-    }
+    };
+    (config, slow)
 }
 
 fn by_id<'a>(list: &'a Value, id: &str) -> &'a Value {
@@ -323,7 +354,16 @@ fn assert_listing(list: &Value) {
         (&up["available"], &up["models"], &up["kind"]),
         (&json!(true), &models, &json!("local"))
     );
+    assert_eq!(
+        (&up["checked"], &by_id(list, "openrouter")["checked"]),
+        (&json!(true), &json!(false))
+    );
     assert_eq!(by_id(list, "openai")["models"], models);
+    assert_unavailable(list);
+}
+
+/// No key, or a server that didn't answer: each unavailable, with the reason.
+fn assert_unavailable(list: &Value) {
     let or = by_id(list, "openrouter");
     assert_eq!(
         (&or["available"], &or["why"]),
@@ -351,7 +391,8 @@ fn assert_listing(list: &Value) {
 fn providers_route_reports_availability_and_models_within_the_bound() {
     run(async {
         let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup("list", listing_providers(&up).await).await;
+        let (providers, _slow) = listing_providers(&up).await;
+        let fx = setup("list", providers).await;
         let t = Instant::now();
         let (st, list) = fx.get("/api/providers").await;
         let took = t.elapsed();
@@ -366,11 +407,11 @@ fn providers_route_reports_availability_and_models_within_the_bound() {
         let (_, h) = fx.get("/api/health").await;
         assert!(t.elapsed() < Duration::from_secs(2));
         assert_eq!(h["open_available"], true);
-        let summary = by_id(&h["providers"], "local:slow1");
-        assert_eq!(
-            (&summary["available"], summary.get("models")),
-            (&json!(true), None)
-        );
+        // A local server it doesn't ask is not reported available.
+        let summary = by_id(&h["providers"], "local:up");
+        let seen = (&summary["available"], &summary["checked"], &summary["why"]);
+        assert_eq!(seen, (&json!(false), &json!(false), &json!(NOT_CHECKED)));
+        assert_eq!(summary.get("models"), None);
         assert_eq!(by_id(&h["providers"], "openrouter")["available"], false);
     })
 }
@@ -431,18 +472,31 @@ fn fork_body(at: i64, changes: Value) -> Value {
     json!({"at_seq": at, "changes": {"solo": changes}})
 }
 
-/// Refused before anything starts: no key, or no model on a provider without a default.
+/// Refused before anything starts, judged on the team the fork would run.
 async fn assert_fork_refusals(fx: &Fx, url: &str, at: i64) {
-    let no_key = fork_body(at, json!({"provider": "openai", "model": "x"}));
-    let (st, v) = fx.post(url, no_key).await;
-    assert_eq!(
-        (st, v["error"].as_str()),
-        (400, Some("open mode needs OPENAI_API_KEY"))
-    );
-    let (st, _) = fx
-        .post(url, fork_body(at, json!({"provider": "local:box"})))
-        .await;
-    assert_eq!(st, 400);
+    let no_default = |p: &str| format!("provider {p} has no default model: name one");
+    let refused = [
+        (
+            json!({"provider": "openai", "model": "x"}),
+            "open mode needs OPENAI_API_KEY".to_string(),
+        ),
+        (
+            json!({"provider": "openrouter"}),
+            "open mode needs OPENROUTER_API_KEY".to_string(),
+        ),
+        // A new provider drops the old model: the change must name one.
+        (json!({"provider": "local:box"}), no_default("local:box")),
+        // Clearing the model leaves the agent's own provider without one.
+        (json!({"model": " "}), no_default("local:custom")),
+    ];
+    for (change, why) in refused {
+        let (st, v) = fx.post(url, fork_body(at, change.clone())).await;
+        assert_eq!(
+            (st, v["error"].as_str()),
+            (400, Some(why.as_str())),
+            "{change}"
+        );
+    }
 }
 
 /// The child ran on `local:box` with model `m2`, from the fork point on.
@@ -485,6 +539,13 @@ fn a_fork_moves_an_agent_to_another_provider() {
         let child = fx.wait(v["branch_id"].as_str().unwrap()).await;
         assert_child_on_box(&child, &other);
         assert_eq!(first.requests().len(), 2, "the parent's calls only");
+        // Naming the agent's own provider is no change: its model stays, and it may fork.
+        let same = fork_body(at, json!({"provider": "local:custom", "prompt": "Again."}));
+        let (st, v) = fx.post(&url, same).await;
+        assert_eq!(st, 200, "{v}");
+        let child = fx.wait(v["branch_id"].as_str().unwrap()).await;
+        let spec = &child["team"]["agents"][0];
+        assert_eq!((spec.get("provider"), &spec["model"]), (None, &json!("m1")));
     })
 }
 
@@ -614,5 +675,96 @@ fn claude_models_are_listed_with_the_key() {
         );
         let want = [Some(ANT_KEY.to_string()), Some("2026-10-21".into()), None];
         assert_eq!(up.list_headers(), vec![want]);
+    })
+}
+
+/// A server whose model list answers 401, and one whose list is over the 1 MB bound.
+async fn bad_list_servers() -> (Server, Server) {
+    use axum::{http::StatusCode, routing::get, Json};
+    let rejecting = axum::Router::new().route(
+        "/models",
+        get(|| async {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": {"message": "no"}})),
+            )
+        }),
+    );
+    let huge = axum::Router::new().route(
+        "/models",
+        get(|| async {
+            let ids: Vec<Value> = (0..40_000)
+                .map(|i| json!({"id": format!("model-{i:06}-with-a-long-padded-name")}))
+                .collect();
+            Json(json!({"data": ids}))
+        }),
+    );
+    (serve(rejecting).await, serve(huge).await)
+}
+
+#[test]
+fn a_rejected_key_or_an_oversized_list_is_reported() {
+    run(async {
+        let (rejecting, huge) = bad_list_servers().await;
+        let providers = ProviderConfig {
+            openai: Endpoint::new(&rejecting.base, Some(Secret::new(OAI_KEY))),
+            locals: vec![local("huge", &huge.base, None)],
+            ..ProviderConfig::default()
+        };
+        let fx = setup("badlist", providers).await;
+        let (_, list) = fx.get("/api/providers").await;
+        let openai = by_id(&list, "openai");
+        assert_eq!(
+            (&openai["available"], &openai["why"]),
+            (&json!(false), &json!(KEY_REJECTED))
+        );
+        let huge = by_id(&list, "local:huge");
+        assert_eq!(
+            (&huge["available"], huge.get("models")),
+            (&json!(false), None)
+        );
+        assert!(
+            huge["why"].as_str().unwrap().contains("over 1024 KB"),
+            "{huge}"
+        );
+    })
+}
+
+#[test]
+fn a_claude_refusal_is_a_model_failure() {
+    run(async {
+        let refusal = json!({"stop_reason": "refusal", "content": [],
+                             "stop_details": {"type": "refusal", "category": "cyber"}});
+        let up = FakeAnthropic::start(vec![refusal]).await;
+        let fx = setup("refusal", on_claude(&up)).await;
+        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
+        let b = fx.run_to_end(&team(vec![solo])).await;
+        assert_eq!(b["status"], "failed", "{b}");
+        let end = &payloads(&b, "agent_end", "solo")[0];
+        let seen = (&end["ok"], &end["error"]);
+        assert_eq!(
+            seen,
+            (&json!(false), &json!("the model refused (category cyber)"))
+        );
+    })
+}
+
+#[test]
+fn a_rejected_keys_message_is_not_recorded() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"_status": 401})]).await;
+        let providers = ProviderConfig {
+            locals: vec![local("keyed", &up.base_url, Some(LOCAL_KEY))],
+            ..ProviderConfig::default()
+        };
+        let fx = setup("reject", providers).await;
+        let a = agent("solo", Some("local:keyed"), Some("m"));
+        let b = fx.run_to_end(&team(vec![a])).await;
+        let call = &payloads(&b, "model_call", "solo")[0];
+        assert_eq!(call["response"]["status"], 401, "{call}");
+        assert_eq!(
+            call["response"]["body"]["error"]["message"],
+            REJECTED_MESSAGE
+        );
     })
 }

@@ -1,16 +1,18 @@
 //! What `/api/providers` and `/api/health` say about each provider: whether it can take calls,
 //! why not, and the models it lists.
 
-use std::time::Duration;
-
 use futures_util::future::join_all;
 use serde::Serialize;
-use serde_json::Value;
 
-use super::{anthropic, openai, Provider, ProviderConfig, ProviderKind};
+use super::{
+    listing::{host_of, list_models, ListFailure},
+    Provider, ProviderConfig, ProviderKind,
+};
 
-/// How long a provider's model list may take; the lists are asked for all at once.
-pub const LIST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Why a provider whose model list was refused for its key is unavailable.
+pub const KEY_REJECTED: &str = "the key was rejected";
+/// Why `/api/health` doesn't call a local server available: it doesn't ask it.
+pub const NOT_CHECKED: &str = "not checked (GET /api/providers asks the server)";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderStatus {
@@ -18,24 +20,12 @@ pub struct ProviderStatus {
     pub kind: ProviderKind,
     pub label: String,
     pub available: bool,
+    /// True when the provider itself was asked (its model list), not only the configuration.
+    pub checked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<Vec<String>>,
-}
-
-/// `host[:port]` of a base URL: what a label or a reason may show of it (never credentials).
-fn host_of(base: &str) -> String {
-    reqwest::Url::parse(base)
-        .ok()
-        .and_then(|u| {
-            let host = u.host_str()?.to_string();
-            Some(match u.port() {
-                Some(p) => format!("{host}:{p}"),
-                None => host,
-            })
-        })
-        .unwrap_or_else(|| "the server".to_string())
 }
 
 fn label(p: &Provider) -> String {
@@ -59,20 +49,31 @@ fn configured(p: &Provider) -> ProviderStatus {
         kind: p.kind,
         label: label(p),
         available: why.is_none(),
+        checked: false,
         why,
         models: None,
     }
 }
 
-/// Every provider's status from the configuration alone, without asking any of them.
+/// Every provider's status from the configuration alone, without asking any of them: a key
+/// tells for the others, but nothing tells whether a local server is up, so it is reported
+/// not checked rather than available.
 pub fn summary(config: &ProviderConfig) -> Vec<ProviderStatus> {
-    config.all().iter().map(configured).collect()
+    let unasked = |p: &Provider| {
+        let mut s = configured(p);
+        if p.kind == ProviderKind::Local {
+            s.available = false;
+            s.why = Some(NOT_CHECKED.to_string());
+        }
+        s
+    };
+    config.all().iter().map(unasked).collect()
 }
 
 /// Every provider's status, with the models of those that list them (each list bounded by
-/// [`LIST_TIMEOUT`], all asked at once). A local server that doesn't answer is unavailable;
-/// a list that fails elsewhere leaves the provider available, with the reason, and the model
-/// is typed in.
+/// [`super::LIST_TIMEOUT`], all asked at once). A key the list is refused for, or a local
+/// server that doesn't answer, makes the provider unavailable; a list that fails otherwise
+/// leaves it available, with the reason, and the model is typed in.
 pub async fn statuses(config: &ProviderConfig, http: &reqwest::Client) -> Vec<ProviderStatus> {
     join_all(config.all().iter().map(|p| status(p, http))).await
 }
@@ -82,9 +83,14 @@ async fn status(p: &Provider, http: &reqwest::Client) -> ProviderStatus {
     if !s.available || !lists_models(p.kind) {
         return s;
     }
+    s.checked = true;
     match list_models(p, http).await {
         Ok(models) => s.models = Some(models),
-        Err(why) => {
+        Err(ListFailure::Rejected) => {
+            s.available = false;
+            s.why = Some(KEY_REJECTED.to_string());
+        }
+        Err(ListFailure::Failed(why)) => {
             s.available = p.kind != ProviderKind::Local;
             s.why = Some(why);
         }
@@ -97,69 +103,4 @@ fn lists_models(kind: ProviderKind) -> bool {
         kind,
         ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::Local
     )
-}
-
-/// The provider's model-list request, with its own way of sending the key.
-fn list_request(p: &Provider, http: &reqwest::Client) -> reqwest::RequestBuilder {
-    match p.kind {
-        ProviderKind::Anthropic => anthropic::request(p, http, reqwest::Method::GET, "models")
-            // The Models API pages at 20 by default; 1000 is its largest page.
-            .query(&[("limit", "1000")]),
-        _ => openai::request(p, http, reqwest::Method::GET, "models"),
-    }
-}
-
-/// The ids in the provider's `GET <base>/models`, sorted.
-async fn list_models(p: &Provider, http: &reqwest::Client) -> Result<Vec<String>, String> {
-    let host = host_of(&p.endpoint.base);
-    let ask = async {
-        let r = list_request(p, http)
-            .send()
-            .await
-            .map_err(|e| format!("{host} did not answer: {}", e.without_url()))?;
-        if !r.status().is_success() {
-            return Err(format!("{host} answered {} to the model list", r.status()));
-        }
-        r.json::<Value>()
-            .await
-            .map_err(|_| format!("{host} sent a model list that is not JSON"))
-    };
-    let listed = tokio::time::timeout(LIST_TIMEOUT, ask)
-        .await
-        .map_err(|_| format!("{host} did not answer within {} s", LIST_TIMEOUT.as_secs()))??;
-    Ok(model_ids(&listed))
-}
-
-/// The `data[].id` of a model list (OpenAI's and the Claude API's alike), sorted.
-fn model_ids(list: &Value) -> Vec<String> {
-    let mut ids: Vec<String> = list["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|m| m["id"].as_str().map(str::to_string))
-        .collect();
-    ids.sort();
-    ids
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hosts_never_show_credentials() {
-        assert_eq!(
-            host_of("http://user:pw@127.0.0.1:11434/v1"),
-            "127.0.0.1:11434"
-        );
-        assert_eq!(host_of("https://api.openai.com/v1"), "api.openai.com");
-        assert_eq!(host_of("nonsense"), "the server");
-    }
-
-    #[test]
-    fn model_ids_are_read_and_sorted() {
-        let list = serde_json::json!({"data": [{"id": "b"}, {"id": "a"}, {"x": 1}]});
-        assert_eq!(model_ids(&list), ["a", "b"]);
-        assert!(model_ids(&serde_json::json!({})).is_empty());
-    }
 }

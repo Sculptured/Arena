@@ -6,6 +6,7 @@
 
 mod anthropic;
 mod config;
+mod listing;
 mod openai;
 mod status;
 
@@ -16,7 +17,8 @@ pub use config::{
     is_openrouter_url, local_key_env, Endpoint, LocalEndpoint, ProviderConfig, Secret,
     ANTHROPIC_BASE, LOCAL_KEY_PREFIX, LOCAL_MODELS_ENV, OPENAI_BASE, OPENROUTER_BASE,
 };
-pub use status::{statuses, summary, ProviderStatus, LIST_TIMEOUT};
+pub use listing::LIST_TIMEOUT;
+pub use status::{statuses, summary, ProviderStatus, KEY_REJECTED, NOT_CHECKED};
 
 pub const OPENROUTER: &str = "openrouter";
 pub const OPENAI: &str = "openai";
@@ -27,11 +29,6 @@ pub const CUSTOM_LOCAL: &str = "custom";
 /// The model of an OpenRouter agent that names none.
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-chat-v3.1";
 pub const LOCAL_COST_SOURCE: &str = "local (no API charge)";
-
-/// Every provider id names `openrouter` when absent: what old runs and teams meant.
-pub fn effective_id(provider: Option<&str>) -> &str {
-    provider.unwrap_or(OPENROUTER)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -144,7 +141,7 @@ impl Provider {
 impl ProviderConfig {
     /// The provider `id` names (`None`: the default one); `Err` names the known ones.
     pub fn resolve(&self, id: Option<&str>) -> Result<Provider, String> {
-        let id = id.unwrap_or(&self.default);
+        let id = self.id_of(id);
         let found = match id {
             OPENROUTER => Some(Provider::new(
                 id,
@@ -162,6 +159,12 @@ impl ProviderConfig {
             let known: Vec<String> = self.all().into_iter().map(|p| p.id).collect();
             format!("unknown provider {id:?} (known: {})", known.join(", "))
         })
+    }
+
+    /// The id `provider` stands for: itself, or the default provider when absent (what
+    /// [`ProviderConfig::resolve`] goes by).
+    pub fn id_of<'a>(&'a self, provider: Option<&'a str>) -> &'a str {
+        provider.unwrap_or(&self.default)
     }
 
     /// Every configured provider: OpenRouter, OpenAI, Anthropic, then each local server.

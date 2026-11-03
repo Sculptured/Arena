@@ -33,8 +33,35 @@ async fn send_upstream(
     body: &Value,
 ) -> Result<Upstream, String> {
     match provider {
-        Ok(p) => p.send(&state.http, body).await,
+        Ok(p) => p.send(&state.http, body).await.map(redact_rejection),
         Err(e) => Err(e.clone()),
+    }
+}
+
+/// What stands in for the message of an answer that turned the key down.
+pub const REJECTED_MESSAGE: &str = "(not recorded: the provider rejected the key)";
+
+/// A 401 or 403 answer without its error message, which may quote the key (masked); the
+/// error's type and code stay.
+fn redact_rejection(mut u: Upstream) -> Upstream {
+    if matches!(u.status, 401 | 403) {
+        redact_message(&mut u.response);
+        redact_message(&mut u.raw);
+    }
+    u
+}
+
+fn redact_message(body: &mut Value) {
+    match body.get_mut("error") {
+        Some(Value::Object(e)) if e.contains_key("message") => {
+            e.insert("message".into(), json!(REJECTED_MESSAGE));
+        }
+        Some(e @ Value::String(_)) => *e = json!(REJECTED_MESSAGE),
+        _ => {}
+    }
+    // An answer that wasn't JSON is kept as `{"raw": text}`.
+    if let Some(raw) = body.get_mut("raw") {
+        *raw = json!(REJECTED_MESSAGE);
     }
 }
 
@@ -137,4 +164,43 @@ async fn handle(
         Json(payload.response),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: Value) -> Upstream {
+        redact_rejection(Upstream {
+            status,
+            response: body.clone(),
+            raw: body,
+        })
+    }
+
+    #[test]
+    fn a_rejected_keys_message_is_not_kept() {
+        let openai = json!({"error": {"message": "Incorrect API key provided: sk-ab***yz",
+                                      "type": "invalid_request_error", "code": "invalid_api_key"}});
+        let u = answer(401, openai);
+        let want = json!({"error": {"message": REJECTED_MESSAGE,
+                                    "type": "invalid_request_error", "code": "invalid_api_key"}});
+        assert_eq!((&u.response, &u.raw), (&want, &want));
+        let claude = json!({"type": "error",
+                            "error": {"type": "permission_error", "message": "key sk-ant-***"}});
+        let u = answer(403, claude);
+        assert_eq!(u.raw["error"]["type"], "permission_error");
+        assert_eq!(u.raw["error"]["message"], REJECTED_MESSAGE);
+        assert_eq!(
+            answer(401, json!({"raw": "bad key sk-x"}).clone()).raw["raw"],
+            REJECTED_MESSAGE
+        );
+        assert_eq!(
+            answer(401, json!({"error": "bad key sk-x"})).response["error"],
+            REJECTED_MESSAGE
+        );
+        // Other failures keep their message.
+        let busy = json!({"error": {"message": "overloaded"}});
+        assert_eq!(answer(529, busy.clone()).raw, busy);
+    }
 }

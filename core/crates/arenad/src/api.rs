@@ -149,17 +149,20 @@ fn open_check(
     }
 }
 
-/// 400 when a fork change would put an agent on a provider that can't run it: one that names a
-/// provider, or makes the agent open (on the default provider unless it names one). A real
-/// mode or provider change drops the old model, so only the change's own model counts.
-fn fork_change_check(state: &AppState, c: &Change) -> Result<(), ApiError> {
-    let provider = c
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty());
-    if provider.is_some() || c.kind == Some(AgentKind::Open) {
-        open_check(state, provider, c.model.as_deref())?;
+/// 400 when the team the fork would run (`changes` applied to `parent`) puts a changed agent in
+/// open mode on a provider that can't run it.
+fn check_fork_team(
+    state: &AppState,
+    parent: &Team,
+    changes: &HashMap<String, Change>,
+) -> Result<(), ApiError> {
+    let team = fork::apply_changes(parent, changes);
+    let changed_open = team
+        .agents
+        .iter()
+        .filter(|a| a.kind == AgentKind::Open && changes.contains_key(&a.id));
+    for a in changed_open {
+        open_check(state, a.provider.as_deref(), a.model.as_deref())?;
     }
     Ok(())
 }
@@ -327,7 +330,11 @@ struct NewRun {
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let cleanup = not_cleaning(&state)?;
-    let req: NewRun = parse_body(&body)?;
+    let mut req: NewRun = parse_body(&body)?;
+    // A blank provider means the default one, as in a fork change.
+    for a in &mut req.team.agents {
+        a.provider = a.provider.as_deref().and_then(trimmed);
+    }
     validate_team(&state, &req.team)?;
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
@@ -367,14 +374,15 @@ struct ForkReq {
     restore: Mode,
 }
 
-/// 404 for an unknown branch and 409 for a running one; these come before the 507 check.
-async fn ensure_forkable(state: &AppState, id: &str) -> Result<(), ApiError> {
+/// The branch to fork: 404 for an unknown branch and 409 for a running one; these come before
+/// the 507 check.
+async fn forkable(state: &AppState, id: &str) -> Result<Branch, ApiError> {
     match state.store.find_branch(id).await? {
         None => Err(ApiError::not_found(format!("there is no branch \"{id}\""))),
         Some(b) if b.status == BranchStatus::Running => {
             Err(ApiError::conflict("the branch is still running"))
         }
-        Some(_) => Ok(()),
+        Some(b) => Ok(b),
     }
 }
 
@@ -384,11 +392,10 @@ async fn fork_branch(
     body: Bytes,
 ) -> ApiResult<fork::ForkResponse> {
     let cleanup = not_cleaning(&state)?;
-    let req: ForkReq = parse_body(&body)?;
-    for c in req.changes.values() {
-        fork_change_check(&state, c)?;
-    }
-    ensure_forkable(&state, &id).await?;
+    let mut req: ForkReq = parse_body(&body)?;
+    let parent = forkable(&state, &id).await?;
+    fork::settle_changes(&parent.team, &mut req.changes, &state.config.providers);
+    check_fork_team(&state, &parent.team, &req.changes)?;
     check_disk(&state).await?;
     let req = fork::ForkRequest {
         at_seq: req.at_seq,

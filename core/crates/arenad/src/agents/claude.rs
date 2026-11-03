@@ -53,7 +53,7 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Comm
         .arg("--no-session-persistence")
         // The prompt is positional and may start with "-": keep it apart from the flags.
         .args(["--", prompt]);
-    super::scrub_env(&mut c);
+    super::scrub_env(&mut c, "ANTHROPIC_API_KEY");
     c
 }
 

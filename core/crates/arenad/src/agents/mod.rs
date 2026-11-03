@@ -2,7 +2,11 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use serde_json::Value;
 
-use crate::{exec::BranchCtx, model::AgentSpec, providers::LOCAL_KEY_PREFIX};
+use crate::{
+    exec::BranchCtx,
+    model::AgentSpec,
+    providers::{LOCAL_KEY_PREFIX, LOCAL_MODELS_ENV},
+};
 
 pub mod claude;
 pub mod codex;
@@ -206,14 +210,16 @@ pub(crate) fn fail(error: String) -> AgentResult {
     failed(error, 0.0)
 }
 
-/// The secrets a CLI child never gets: database credentials and every model provider's key.
-const SECRET_ENV: [&str; 6] = [
+/// The secrets a CLI child doesn't get (except its own vendor's key): database credentials,
+/// every model provider's key, and the local model servers.
+const SECRET_ENV: [&str; 7] = [
     "ARENA_PG_URL",
     "DATABASE_URL",
     "PGPASSWORD",
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    LOCAL_MODELS_ENV,
 ];
 
 /// True for the name of an env var a CLI child must not see.
@@ -221,37 +227,59 @@ fn is_secret_env(name: &str) -> bool {
     name.starts_with("PG") || name.starts_with(LOCAL_KEY_PREFIX) || SECRET_ENV.contains(&name)
 }
 
-/// Remove database/API secrets from a CLI child's environment.
-pub(crate) fn scrub_env(c: &mut std::process::Command) {
-    for (k, _) in std::env::vars_os() {
-        if is_secret_env(&k.to_string_lossy()) {
-            c.env_remove(&k);
-        }
-    }
-    for k in SECRET_ENV {
+/// The env vars to remove from a CLI child, of those named in `present`: every secret but
+/// `keep`, the key of the CLI's own vendor (Claude Code signs in with `ANTHROPIC_API_KEY`,
+/// Codex with `OPENAI_API_KEY`).
+fn scrubbed(present: impl Iterator<Item = String>, keep: &str) -> Vec<String> {
+    let mut out: Vec<String> = present.filter(|k| is_secret_env(k)).collect();
+    out.extend(SECRET_ENV.iter().map(|k| k.to_string()));
+    out.retain(|k| k != keep);
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Removes database and API secrets from a CLI child's environment, all but `keep`.
+pub(crate) fn scrub_env(c: &mut std::process::Command, keep: &str) {
+    let present = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned());
+    for k in scrubbed(present, keep) {
         c.env_remove(k);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_secret_env, server_name};
+    use super::{scrubbed, server_name};
 
     #[test]
-    fn provider_keys_and_database_secrets_are_scrubbed() {
-        for k in [
-            "OPENROUTER_API_KEY",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
+    fn each_cli_keeps_only_its_own_vendor_key() {
+        let present = [
+            "PATH",
+            "HOME",
+            "ARENA_PORT",
             "ARENA_LOCAL_KEY_OLLAMA",
-            "PGPASSWORD",
-            "ARENA_PG_URL",
-            "DATABASE_URL",
+            "PGUSER",
+        ];
+        for (keep, other) in [
+            ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+            ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
         ] {
-            assert!(is_secret_env(k), "{k}");
-        }
-        for k in ["PATH", "HOME", "ARENA_LOCAL_MODELS", "ARENA_PORT"] {
-            assert!(!is_secret_env(k), "{k}");
+            let gone = scrubbed(present.iter().map(|k| k.to_string()), keep);
+            for k in [
+                other,
+                "OPENROUTER_API_KEY",
+                "ARENA_LOCAL_KEY_OLLAMA",
+                "ARENA_LOCAL_MODELS",
+                "PGUSER",
+                "PGPASSWORD",
+                "ARENA_PG_URL",
+                "DATABASE_URL",
+            ] {
+                assert!(gone.iter().any(|g| g == k), "{k} kept with {keep}");
+            }
+            for k in [keep, "PATH", "HOME", "ARENA_PORT"] {
+                assert!(!gone.iter().any(|g| g == k), "{k} removed with {keep}");
+            }
         }
     }
 

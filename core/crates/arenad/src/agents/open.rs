@@ -83,7 +83,7 @@ struct Totals {
     tokens: [i64; 3],
     /// `None` once a call's cost is unknown.
     cost: Option<f64>,
-    /// The label of the cost: the provider's, once it is known.
+    /// The label of the cost: the provider's, once the provider is known.
     source: Option<&'static str>,
 }
 
@@ -105,7 +105,6 @@ impl Totals {
             *total += usage[k].as_i64().unwrap_or(0);
         }
         self.cost = add_cost(self.cost, provider.cost(usage));
-        self.source = provider.cost_source();
     }
 }
 
@@ -177,6 +176,7 @@ impl OpenDriver {
     async fn drive(&self, run: &AgentRun, totals: &mut Totals) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
         let (provider, model) = provider_and_model(&state, run)?;
+        totals.source = provider.cost_source();
         let url = gateway_url(&state, run);
         let tools = openai_tools(&run.branch.world, !run.branch.is_last(&run.spec.id));
         let mut messages = initial_messages(run);
@@ -224,12 +224,22 @@ fn provider_and_model<'a>(
     Ok((provider, model))
 }
 
-/// The model answered with no tool calls: done, unless its output was cut off.
+/// The model answered with no tool calls: done, unless its output was cut off or it refused
+/// (`content_filter`, with the category from Claude's `stop_details` when there is one).
 fn end_without_calls(response: &Value) -> Result<(), Fault> {
-    if response["choices"][0]["finish_reason"] == "length" {
-        return Err(Fault::Model("model output was cut off".into()));
+    let choice = &response["choices"][0];
+    match choice["finish_reason"].as_str() {
+        Some("length") => Err(Fault::Model("model output was cut off".into())),
+        Some("content_filter") => Err(Fault::Model(refusal(&choice["stop_details"]))),
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+fn refusal(details: &Value) -> String {
+    match details["category"].as_str() {
+        Some(category) => format!("the model refused (category {category})"),
+        None => "the model refused".to_string(),
+    }
 }
 
 /// Runs each tool call, appending the tool messages. `Ok(true)` when the agent handed off.
