@@ -1,5 +1,5 @@
 //! How each part of a world is restored on a rerun, from what its integration declares and the
-//! restore asked for (the spec's restore table):
+//! restore asked for (the table in `docs/concepts.md`, "Restore modes"):
 //!
 //! | Part declares            | exact                  | approximate                  |
 //! |--------------------------|------------------------|------------------------------|

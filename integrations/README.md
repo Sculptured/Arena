@@ -69,7 +69,7 @@ Python is the same with `arena_part.Part` and `arena_part.serve(Counter())`. A m
     (cd core && cargo build -p parts --bin arena-part-check)
     ARENA_BIN_DIR=core/target/debug core/target/debug/arena-part-check integrations/<name> [--config file.json]
 
-Run the second line from `arena/`. Build the integration's own binary first (`cargo build` in `arena/`).
+Run the second line from the repository root. Build the integration's own binary first (`cargo build` there).
 
 It starts the program and checks, in order: `describe`, `start`, each `[[example]]` tool call, save and restore (in
 each mode the part declares; exact must match, an approximate difference is reported but does not fail), `diff` of a save against itself and against the original, replay for a part that

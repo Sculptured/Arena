@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-labelledby="title desc">
+  <title id="title">Arena</title>
+  <desc id="desc">A rewindable arena for testing multi-agent systems. A run's steps on a line; from one step a branch forks off and is rerun.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f8f6"/>
+      <stop offset="1" stop-color="#eef2f0"/>
+    </linearGradient>
+    <marker id="head" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2f6f73"/>
+    </marker>
+    <style>
+      text { font-family: Inter, "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif; }
+      .title { font-size: 104px; font-weight: 700; letter-spacing: -2px; fill: #1d2a33; }
+      .tag { font-size: 29px; font-weight: 400; fill: #4f5f66; }
+      .chip { font-size: 16px; font-weight: 500; fill: #244f53; }
+      .lbl { font-size: 14px; font-weight: 500; fill: #4f5f66; }
+    </style>
+  </defs>
+  <rect x="0.5" y="0.5" width="1279" height="339" rx="24" fill="url(#bg)" stroke="#dde3e1"/>
+  <text x="66" y="150" class="title">Arena</text>
+  <text x="72" y="208" class="tag">A rewindable arena for testing multi-agent systems</text>
+  <rect x="72" y="252" width="180" height="36" rx="18" fill="#e3ecea" stroke="#d3dfdc"/><text x="162.0" y="276" text-anchor="middle" class="chip">Record every step</text><rect x="264" y="252" width="189" height="36" rx="18" fill="#e3ecea" stroke="#d3dfdc"/><text x="358.5" y="276" text-anchor="middle" class="chip">Fork from any step</text><rect x="465" y="252" width="276" height="36" rx="18" fill="#e3ecea" stroke="#d3dfdc"/><text x="603.0" y="276" text-anchor="middle" class="chip">Exact or approximate restore</text><rect x="753" y="252" width="136" height="36" rx="18" fill="#e3ecea" stroke="#d3dfdc"/><text x="821.0" y="276" text-anchor="middle" class="chip">Compare runs</text>
+  <g fill="none" stroke-linecap="round">
+    <path d="M880 150 H1200" stroke="#9aa9ad" stroke-width="4"/>
+    <path d="M1010 150 C1010 210 1030 236 1075 236 H1200" stroke="#2f6f73" stroke-width="4"/>
+    <path d="M1140 128 C1120 82 1030 82 1013 126" stroke="#2f6f73" stroke-width="3" stroke-dasharray="2 8" marker-end="url(#head)"/>
+  </g>
+  <circle cx="880" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/><circle cx="945" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/><circle cx="1010" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/><circle cx="1075" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/><circle cx="1140" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/><circle cx="1200" cy="150" r="9" fill="#eef2f0" stroke="#9aa9ad" stroke-width="3"/>
+  <circle cx="1010" cy="150" r="13" fill="none" stroke="#2f6f73" stroke-width="3"/>
+  <circle cx="1075" cy="236" r="9" fill="#2f6f73"/><circle cx="1140" cy="236" r="9" fill="#2f6f73"/><circle cx="1200" cy="236" r="9" fill="#2f6f73"/>
+  <text x="1075" y="74" text-anchor="middle" class="lbl">rewind</text>
+  <text x="1138" y="276" text-anchor="middle" class="lbl">fork and rerun</text>
+</svg>
