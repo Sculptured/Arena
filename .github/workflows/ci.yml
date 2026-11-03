@@ -40,7 +40,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -51,7 +51,7 @@ jobs:
             . -> core/target
             core -> target
       # Some core tests run the Python kit's example integration with uv.
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - name: Format
         run: |
@@ -62,18 +62,18 @@ jobs:
           cargo clippy --workspace --all-targets
           (cd core && cargo clippy --workspace --all-targets)
       - name: Test kits, integrations and benchmarks
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
       - name: Test core
         working-directory: core
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   python:
     name: Python
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Test the Python kit
         working-directory: kits/python
         run: uv run --with pytest pytest -q
@@ -98,8 +98,8 @@ jobs:
       run:
         working-directory: ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
