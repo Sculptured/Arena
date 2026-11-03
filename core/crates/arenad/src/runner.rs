@@ -136,23 +136,20 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
         let branch_id = ctx.branch_id.clone();
         let inner = tokio::spawn(run_branch(state.clone(), ctx.clone(), from));
         if let Err(e) = inner.await {
-            state.live.write().unwrap().remove(&branch_id);
-            ctx.stop_ticker().await;
-            ctx.world.stop().await;
+            leave_live(&state, &ctx).await;
             let error = Some(format!("runner crashed: {e}"));
             record_ending(&state, &branch_id, (BranchStatus::InfraError, error)).await;
         }
     });
 }
 
-/// Runs the agents from `from.agent_index` of a branch already in `state.live` (the clock ticking), scores the result, stops the
-/// world and sets the branch status. Never leaves the branch `running`.
+/// Runs the agents from `from.agent_index` of a branch already in `state.live` (the clock
+/// ticking), scores the result, stops the world and sets the branch status. Never leaves the
+/// branch `running`.
 pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint) {
     ctx.start_ticker(&state.store).await;
     let outcome = drive(&state, &ctx, from).await;
-    state.live.write().unwrap().remove(&ctx.branch_id);
-    ctx.stop_ticker().await;
-    ctx.world.stop().await;
+    leave_live(&state, &ctx).await;
     let (status, error) = match (ctx.fatal(), outcome) {
         // A world program stopped: whatever the agents did after it doesn't count.
         (Some(f), _) => (BranchStatus::InfraError, Some(f)),
@@ -160,6 +157,14 @@ pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPo
         (None, Err(e)) => (BranchStatus::InfraError, Some(format!("{e:#}"))),
     };
     record_ending(&state, &ctx.branch_id, (status, error)).await;
+}
+
+/// Stops the branch's ticker and world, then takes it out of `state.live`. In that order: a
+/// cleanup is refused while a branch is live, so it can't drop instances the world is stopping.
+async fn leave_live(state: &AppState, ctx: &BranchCtx) {
+    ctx.stop_ticker().await;
+    ctx.world.stop().await;
+    state.live.write().unwrap().remove(&ctx.branch_id);
 }
 
 /// How a branch ended: its status and error.
@@ -172,9 +177,10 @@ async fn record_ending(state: &AppState, branch_id: &str, (status, error): Endin
         let set = state.store.set_status(branch_id, status, error.clone());
         match set.await {
             Ok(()) => return,
-            Err(e) => eprintln!(
-                "branch {branch_id}: could not record its end ({status:?}), attempt {attempt}: {e:#}"
-            ),
+            Err(e) => {
+                let what = format!("could not record its end ({status:?}), attempt {attempt}");
+                eprintln!("branch {branch_id}: {what}: {e:#}");
+            }
         }
     }
 }

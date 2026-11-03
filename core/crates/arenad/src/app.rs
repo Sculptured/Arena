@@ -139,11 +139,7 @@ impl AppState {
     /// The `describe` of the benchmark new runs use: its world, tasks, instructions and tools.
     pub async fn bench(&self) -> anyhow::Result<BenchDescribe> {
         if self.benchmark.is_empty() {
-            let installed: Vec<&str> = self.hub.registry().benchmarks().map(|m| &*m.name).collect();
-            anyhow::bail!(
-                "no benchmark chosen: set ARENA_BENCHMARK to one of the installed benchmarks ({})",
-                installed.join(", ")
-            );
+            anyhow::bail!(no_benchmark_chosen(&self.hub));
         }
         self.hub.bench_describe(&self.benchmark).await
     }
@@ -152,6 +148,19 @@ impl AppState {
     pub fn install_drivers(&self, drivers: Drivers) -> bool {
         self.drivers.set(drivers).is_ok()
     }
+}
+
+/// Why no benchmark is chosen: none is installed, or several are and `ARENA_BENCHMARK` names none.
+fn no_benchmark_chosen(hub: &Hub) -> String {
+    let installed: Vec<&str> = hub.registry().benchmarks().map(|m| &*m.name).collect();
+    if installed.is_empty() {
+        return "no benchmark is installed: no folder in ARENA_PACKAGES holds a benchmark package"
+            .into();
+    }
+    format!(
+        "several benchmarks are installed: set ARENA_BENCHMARK to one of: {}",
+        installed.join(", ")
+    )
 }
 
 /// The name of the one installed benchmark; empty when there are none or several.

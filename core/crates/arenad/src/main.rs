@@ -20,7 +20,7 @@ use arenad::{
     pg::Admin,
     store::Store,
 };
-use parts::{Hub, Registry};
+use parts::{proto::BenchDescribe, Hub, Registry};
 
 fn arena_dir() -> PathBuf {
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -92,6 +92,18 @@ async fn shutdown_on_ctrl_c(state: Arc<AppState>) {
     });
 }
 
+/// The benchmark's `describe`: arenad doesn't start without one (none chosen, its package missing
+/// or not built).
+async fn startup_bench(state: &AppState) -> anyhow::Result<BenchDescribe> {
+    state
+        .bench()
+        .await
+        .map_err(|e| match state.benchmark.as_str() {
+            "" => e,
+            name => anyhow::anyhow!("benchmark {name}: {e:#}"),
+        })
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let url = std::env::var("ARENA_PG_URL")
@@ -103,11 +115,7 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from);
 
     let state = app_state(&url, port).await?;
-    // Fail at startup if the benchmark can't be described (package missing or not built).
-    let bench = state
-        .bench()
-        .await
-        .map_err(|e| anyhow::anyhow!("benchmark {}: {e:#}", state.benchmark))?;
+    let bench = startup_bench(&state).await?;
     // Before any run can save: drop the saves no event names (left by crashes and aborted tests).
     arenad::gc::run_startup_gc(&state.store, &state.hub, &state.benchmark).await?;
     app::install_default_drivers(&state);
