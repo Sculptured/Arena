@@ -5,7 +5,8 @@ plant, has no tools, and only ever sends GET requests. Restore: none. Exact is `
 arenad refuses to rerun a world that contains it, in either mode (`core/crates/arenad/src/restore.rs`).
 `uses_clock`: true (each `advance` reads the plant's new events). Verified offline only: a pytest test
 (`test_mirror_mode_has_no_tools_and_relays_events` in `integrations/isaac-sim/tests/test_part.py`) runs it against
-a stub HTTP server. It has never followed a real plant, and never an Isaac Sim one.
+a stub HTTP server. It has never followed a real plant, and never an Isaac Sim one. That test is in the isaac-sim
+suite, which is skipped without the factory example; the example is not public yet (see the isaac-sim README).
 
 It is the `isaac-sim` program run with `--mode mirror`, so its code and full notes are in
 `integrations/isaac-sim/` (see "Mirror mode" in its README).

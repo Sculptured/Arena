@@ -1,5 +1,5 @@
 //! Runs real `sculptured serve` instances: `cargo test -p arena-sculptured -- --ignored live_`.
-//! Needs the sculptured program (`arena_sculptured::default_binary()`, or env
+//! Needs the sculptured program (`sculptured` on `PATH`, or env
 //! `ARENA_SCULPTURED_BINARY`); without it the test says so and passes. Every server and folder
 //! the test makes is removed afterwards, even on failure (the drop runs the integration's `gc`).
 use arena_part::proto::*;

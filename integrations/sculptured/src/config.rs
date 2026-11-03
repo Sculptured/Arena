@@ -7,8 +7,8 @@ use serde_json::Value;
 
 /// The team the tools use unless the config names another.
 pub const DEFAULT_TEAM: &str = "arena";
-/// Where the sculptured program is, under the home folder, unless the config says.
-const DEFAULT_BINARY: &str = "MLSys/Sculptured/sculptured/target/release/sculptured";
+/// The program looked up on `PATH` when the config names none.
+const DEFAULT_BINARY: &str = "sculptured";
 /// Team names Sculptured keeps for its own API paths.
 const RESERVED: [&str; 3] = ["import", "import-file", "check-file"];
 
@@ -35,10 +35,9 @@ impl Config {
             v => serde_json::from_value(v.clone())
                 .map_err(|e| PartError::invalid(format!("config: {e}")))?,
         };
-        let binary = raw
-            .binary
-            .or_else(default_binary)
-            .ok_or_else(|| PartError::invalid("config: binary is required (HOME is not set)"))?;
+        let binary = raw.binary.or_else(default_binary).ok_or_else(|| {
+            PartError::invalid("config: binary is required (no sculptured on PATH)")
+        })?;
         if !binary.is_file() {
             return Err(PartError::invalid(format!(
                 "binary {binary:?} is not a file"
@@ -54,10 +53,13 @@ impl Config {
     }
 }
 
-/// The sculptured program a config without `binary` runs: `~/` + `DEFAULT_BINARY` (None when
-/// HOME is not set).
+/// The sculptured program a config without `binary` runs: the first `sculptured` file on `PATH`
+/// (None when there is none).
 pub fn default_binary() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(DEFAULT_BINARY))
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(DEFAULT_BINARY))
+        .find(|f| f.is_file())
 }
 
 /// A name that Sculptured keeps as the team's id: lowercase letters, digits and `-`.
