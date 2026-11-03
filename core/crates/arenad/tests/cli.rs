@@ -5,7 +5,7 @@ use std::{
 };
 
 use arenad::{
-    agents::{claude, claude::ClaudeDriver, codex, codex::CodexDriver, AgentRun, Driver},
+    agents::{claude, claude::ClaudeDriver, codex, codex::CodexDriver, AgentRun, Driver, Mcp},
     app::{self, AppState, Config},
     exec::BranchCtx,
     model::*,
@@ -55,9 +55,22 @@ fn args(c: &std::process::Command) -> Vec<String> {
 
 const URL: &str = "http://127.0.0.1:1/mcp/b1/triage";
 
+/// The MCP endpoint at `url`, named `server`.
+fn mcp_named(server: &str, url: &str) -> Mcp {
+    Mcp {
+        server: server.into(),
+        url: url.into(),
+    }
+}
+
+/// The MCP endpoint at `URL`, named `bench`.
+fn mcp() -> Mcp {
+    mcp_named("bench", URL)
+}
+
 #[test]
-fn claude_command_has_only_retail_mcp() {
-    let c = claude::command(&spec(None), URL, "do it");
+fn claude_command_has_only_the_world_mcp() {
+    let c = claude::command(&spec(None), &mcp(), "do it");
     let a = args(&c);
     assert_eq!(c.get_program(), "claude");
     assert!(a.contains(&"--strict-mcp-config".to_string()));
@@ -65,19 +78,19 @@ fn claude_command_has_only_retail_mcp() {
     let cfg: serde_json::Value = serde_json::from_str(&a[i + 1]).unwrap();
     assert_eq!(
         cfg,
-        json!({"mcpServers": {"retail": {"type": "http", "url": URL}}})
+        json!({"mcpServers": {"bench": {"type": "http", "url": URL}}})
     );
     let i = a.iter().position(|x| x == "--tools").unwrap();
     assert_eq!(a[i + 1], "");
     let i = a.iter().position(|x| x == "--allowedTools").unwrap();
-    assert_eq!(a[i + 1], "mcp__retail__*");
+    assert_eq!(a[i + 1], "mcp__bench__*");
     let i = a.iter().position(|x| x == "--model").unwrap();
     assert_eq!(a[i + 1], "sonnet");
     assert_eq!(a[0], "-p");
     assert_eq!(a[a.len() - 2..], ["--", "do it"]);
     assert!(a.contains(&"--no-session-persistence".to_string()));
     assert!(c.get_envs().any(|(k, v)| k == "PGPASSWORD" && v.is_none()));
-    let c = claude::command(&spec(Some("opus")), URL, "x");
+    let c = claude::command(&spec(Some("opus")), &mcp(), "x");
     assert!(args(&c).contains(&"opus".to_string()));
 }
 
@@ -121,14 +134,14 @@ fn codex_parse_tokens() {
 
 #[test]
 fn codex_command_sets_mcp_url() {
-    let c = codex::command(&spec(Some("gpt-x")), URL, Path::new("/tmp/w"), "do it");
+    let c = codex::command(&spec(Some("gpt-x")), &mcp(), Path::new("/tmp/w"), "do it");
     let a = args(&c);
     assert_eq!(c.get_program(), "codex");
     assert_eq!(a[0], "exec");
     assert_eq!(a[a.len() - 2..], ["--", "do it"]);
-    assert!(a.contains(&format!("mcp_servers.retail.url=\"{URL}\"")));
+    assert!(a.contains(&format!("mcp_servers.bench.url=\"{URL}\"")));
     assert!(a.contains(&"approval_policy=\"never\"".to_string()));
-    assert!(a.contains(&"mcp_servers.retail.default_tools_approval_mode=\"approve\"".to_string()));
+    assert!(a.contains(&"mcp_servers.bench.default_tools_approval_mode=\"approve\"".to_string()));
     assert!(a.contains(&"--ignore-user-config".to_string()));
     assert!(a.contains(&"--ephemeral".to_string()));
     assert!(a.windows(2).any(|w| w == ["--disable", "apps"]));
@@ -235,6 +248,35 @@ fn driver_runs_binary_and_keeps_stderr_on_failure() {
         d.binary = fake("cat <<'EOF'\n{\"is_error\":false,\"result\":\"hi\",\"total_cost_usd\":0.01,\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\nEOF");
         let r = d.run(bare_run(&toy, None)).await;
         assert!(r.ok, "{:?}", r.error);
+    })
+}
+
+/// A fake CLI that writes its arguments, one per line, to a fresh file: (the CLI, the file).
+fn arg_recorder() -> (String, std::path::PathBuf) {
+    let out = std::env::temp_dir().join(format!("fakeargs-{}", uuid::Uuid::new_v4().simple()));
+    let script = format!("printf '%s\\n' \"$@\" > {}; exit 1", out.display());
+    (fake(&script), out)
+}
+
+#[test]
+fn drivers_name_the_mcp_server_after_the_benchmark() {
+    run(async {
+        let toy = toy_world("cliserver").await;
+        let (binary, out) = arg_recorder();
+        let mut d = ClaudeDriver::new("http://x");
+        d.binary = binary.clone();
+        d.run(bare_run(&toy, None)).await;
+        let claude = std::fs::read_to_string(&out).unwrap_or_default();
+        let mut d = CodexDriver::new("http://x");
+        d.binary = binary.clone();
+        d.run(bare_run(&toy, None)).await;
+        let codex = std::fs::read_to_string(&out).unwrap_or_default();
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_file(&binary);
+        assert!(claude.lines().any(|l| l == "mcp__toybench__*"), "{claude}");
+        assert!(claude.contains(r#"{"mcpServers":{"toybench":"#), "{claude}");
+        let url = "mcp_servers.toybench.url=\"http://x/mcp/b1/triage\"";
+        assert!(codex.lines().any(|l| l == url), "{codex}");
     })
 }
 
@@ -382,7 +424,8 @@ fn live_codex_isolation_probe() {
         };
         let wd = std::env::temp_dir().join(format!("probe-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&wd).unwrap();
-        let mut cmd = codex::command(&sp, &format!("{base}/mcp/{branch}/triage"), &wd, PROBE);
+        let endpoint = mcp_named("retail", &format!("{base}/mcp/{branch}/triage"));
+        let mut cmd = codex::command(&sp, &endpoint, &wd, PROBE);
         let out = tokio::task::spawn_blocking(move || {
             cmd.stdin(std::process::Stdio::null()).output().unwrap()
         })

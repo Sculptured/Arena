@@ -100,8 +100,9 @@ Then:
 A team is a list of agents that run one after another. Each agent's input is the task's ticket, the benchmark's
 instructions, and the previous agent's handoff note. Every agent sees the world's tools; only the last agent may
 call write tools (the others are refused), and every agent but the last must call `handoff` with a note for the
-next one, or the branch fails. `GET /api/team/default` gives the default team (triage, then resolver, both
-Claude Code with model `sonnet`; its prompts are written for the retail example).
+next one, or the branch fails. `GET /api/team/default` gives the team the benchmark suggests, every agent
+Claude Code with model `sonnet` (the retail example suggests triage, then resolver). A benchmark that suggests
+none gets one generic agent.
 
 An agent's `kind` picks its mode:
 
@@ -179,6 +180,9 @@ transport (`docs/protocol.md`, "Benchmark calls"). It answers:
 
 - `describe`: its name and version, the world (`[{part, integration, config}]`), the tasks (`[{id, reason,
   ticket}]`), the instructions every agent gets, and its tools (MCP shape plus `effect: "read"|"write"`).
+  Optionally `instructions_title`, the heading over the instructions in each agent's input (default
+  `Instructions`), and `team`, the team it suggests (`{id, name, agents: [{id, name, prompt}]}`).
+  The CLIs know the world's MCP server by the benchmark's name.
 - `seed`: load the starting data into fresh instances. arenad saves the result once as the base world that
   every run starts from.
 - `call_tool`: run one of its tools and say which part it touched and which keys it read and wrote.
@@ -192,8 +196,9 @@ with exact saves may be connected. In Rust, implement `arena_part::Benchmark` an
 `benchmarks/retail` is the included example: a Rust program (`src/main.rs`, `src/lib.rs`) whose world is one
 `postgres` part named `retail`; `src/load.rs` seeds it from `data/retail/db.json`, `src/tools/` holds the tools,
 and `src/tasks.rs` reads the tasks and gold actions from `data/retail/tasks.json` (the tasks offered are the
-ids in `data/retail/demo_tasks.json`). Its tests are in `benchmarks/retail/tests`. arenad runs one benchmark at
-a time, chosen with `ARENA_BENCHMARK`.
+ids in `data/retail/demo_tasks.json`); `src/team.rs` holds the team it suggests and the `Store policy` heading
+over its policy. Its tests are in `benchmarks/retail/tests`. arenad runs one benchmark at a time, chosen with
+`ARENA_BENCHMARK`.
 
 ## Forking
 
@@ -254,7 +259,8 @@ Environment variables, read once at startup by arenad:
 - `ARENA_PG_URL`: the Postgres server for arenad's records, passed on to integration programs (default
   `postgres://arena:arena@127.0.0.1:5544/postgres`).
 - `ARENA_PORT`: HTTP port (default 4510).
-- `ARENA_BENCHMARK`: the benchmark new runs use, by package name (default `retail`, the included example).
+- `ARENA_BENCHMARK`: the benchmark new runs use, by package name (default: the only installed benchmark;
+  required when several are installed).
 - `ARENA_PACKAGES`: `:`-separated folders whose subfolders hold an `arena-package.toml` (default
   `integrations:benchmarks` in this folder).
 - `ARENA_BIN_DIR`: what `${ARENA_BIN_DIR}` in a manifest stands for (default `core/target/release`).
@@ -309,9 +315,6 @@ databases that arenad's startup cleanup would drop.
 
 - Only `postgres` has been used in an arenad run with agents; every other integration is checked on its own.
 - Only one benchmark is included, the retail example. arenad runs one benchmark at a time.
-- Some names in the core still come from the retail example: the default team's prompts, the
-  `# Store policy` heading over the benchmark's instructions in each agent's input, and the MCP server name
-  `retail` given to the CLIs.
 - Teams are a fixed sequence of agents with handoff notes; only the last agent writes.
 - API mode has not been measured (no key was set).
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).

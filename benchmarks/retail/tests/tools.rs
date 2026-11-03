@@ -180,6 +180,18 @@ async fn describe_lists_tasks() {
         d.instructions,
         std::fs::read_to_string(data_dir().join("policy.md")).unwrap()
     );
+    assert_eq!(d.instructions_title.as_deref(), Some("Store policy"));
+}
+
+#[tokio::test]
+async fn describe_suggests_triage_then_resolver() {
+    let team = retail().describe().await.unwrap().team.expect("a team");
+    let ids: Vec<&str> = team.agents.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, ["triage", "resolver"]);
+    assert!(team.agents[0]
+        .prompt
+        .starts_with("You are the triage agent"));
+    assert!(team.agents[1].prompt.contains("handoff note"));
 }
 
 #[tokio::test]

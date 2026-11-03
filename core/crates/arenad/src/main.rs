@@ -3,7 +3,7 @@
 //! Environment: `ARENA_PG_URL`, `ARENA_PORT` (4510), `OPENROUTER_API_KEY`,
 //! `ARENA_UI_DIST` (serve the built UI at `/`),
 //! `ARENA_MAX_DB_BYTES` (default 5 GiB: new runs and forks are refused above it),
-//! `ARENA_BENCHMARK` (default `retail`), and where the parts are:
+//! `ARENA_BENCHMARK` (default: the only installed benchmark), and where the parts are:
 //! - `ARENA_PACKAGES`: `:`-separated folders whose subfolders hold `arena-package.toml`
 //!   (default `<arena>/integrations:<arena>/benchmarks`);
 //! - `ARENA_BIN_DIR`: substituted for `${ARENA_BIN_DIR}` in package commands

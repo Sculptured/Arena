@@ -87,6 +87,8 @@ mod tests {
             }],
             tasks: vec![],
             instructions: String::new(),
+            instructions_title: None,
+            team: None,
             tools: vec![],
         }
     }

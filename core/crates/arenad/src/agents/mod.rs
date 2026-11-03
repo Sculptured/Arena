@@ -159,13 +159,41 @@ pub(crate) fn prompt_of(run: &AgentRun) -> String {
     format!("{}\n\n{}", run.spec.prompt, run.input)
 }
 
-pub(crate) fn mcp_url(self_base: &str, run: &AgentRun) -> String {
-    format!(
-        "{}/mcp/{}/{}",
-        self_base.trim_end_matches('/'),
-        run.branch.branch_id,
-        run.spec.id
-    )
+/// Where a CLI agent finds the world's tools: arenad's MCP endpoint and the name it goes by.
+pub struct Mcp {
+    pub server: String,
+    pub url: String,
+}
+
+impl Mcp {
+    /// `run`'s endpoint on the arenad at `self_base`, named after the benchmark.
+    pub(crate) fn of(self_base: &str, run: &AgentRun) -> Mcp {
+        let url = format!(
+            "{}/mcp/{}/{}",
+            self_base.trim_end_matches('/'),
+            run.branch.branch_id,
+            run.spec.id
+        );
+        Mcp {
+            server: server_name(run.branch.world.bench()),
+            url,
+        }
+    }
+}
+
+/// The name the CLIs give the world's MCP server: the benchmark's name, each character outside
+/// `[A-Za-z0-9_-]` (what Claude Code and Codex accept) replaced by `_`; `arena` if it is empty.
+pub fn server_name(benchmark: &str) -> String {
+    if benchmark.is_empty() {
+        return "arena".into();
+    }
+    benchmark
+        .chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' => c,
+            _ => '_',
+        })
+        .collect()
 }
 
 pub(crate) fn fresh_workdir() -> std::io::Result<std::path::PathBuf> {
@@ -198,5 +226,18 @@ pub(crate) fn scrub_env(c: &mut std::process::Command) {
         "OPENROUTER_API_KEY",
     ] {
         c.env_remove(k);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_name;
+
+    #[test]
+    fn the_server_is_named_after_the_benchmark() {
+        assert_eq!(server_name("retail"), "retail");
+        assert_eq!(server_name("toy-bench_2"), "toy-bench_2");
+        assert_eq!(server_name("My bench.v2/é"), "My_bench_v2__");
+        assert_eq!(server_name(""), "arena");
     }
 }

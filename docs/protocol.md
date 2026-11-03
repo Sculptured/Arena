@@ -19,7 +19,7 @@ name = "postgres"            # [a-z0-9-]{1,40}, unique among installed packages
 version = "0.1.0"
 protocol = 1
 run = { command = ["${ARENA_BIN_DIR}/arena-postgres"] }    # or: run = { image = "..." }
-needs = { gpu_vram_gb = 0, services = [] }    # e.g. services = ["host.docker.internal:5544"]
+needs = { gpu_vram_gb = 0, services = [] }    # e.g. services = ["host.docker.internal:5544"], network = "host"
 config_schema = { ... }      # JSON Schema of the part's config in a world
 
 [[example]]                  # tool calls the conformance check runs
@@ -28,8 +28,10 @@ args = {}
 ```
 
 `command` runs as a local program, for integrations installed from a folder you trust, and may contain
-`${ARENA_BIN_DIR}`. `image` runs boxed in a container: no network except the services it declares, no
-environment from arenad, disk only under the save storage given to it.
+`${ARENA_BIN_DIR}`. `image` runs boxed in a container: no network at all unless `needs.network = "host"`,
+which gives it the host's network (every service the host can reach, not only those in `needs.services`;
+arenad does not enforce `services`); no environment from arenad; disk only under its own save folder,
+mounted at `/saves`.
 
 ## Ids and keys
 
@@ -82,10 +84,19 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, tools: [ToolSchema]}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema]}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
+
+- `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
+  `Instructions` when it is absent.
+- `team` is the team the benchmark suggests, `{id, name, agents: [{id, name, prompt}]}`, agents in the
+  order they run (ids match `^[a-z0-9_-]+$`; the last agent writes, every other one hands off). arenad
+  offers it as the default team, each agent run by Claude Code with model `sonnet`; when it is absent
+  arenad offers one agent with a generic prompt.
+- The CLI agents know the world's MCP server by the benchmark's `name` (any character outside
+  `[A-Za-z0-9_-]` replaced by `_`), so their tools are `mcp__<name>__<tool>` in Claude Code.
 
 A benchmark's tools reach parts only through `connect` info. Only parts with exact saves may be connected
 (replay re-sends a part's own inputs, which a benchmark's direct writes are not).

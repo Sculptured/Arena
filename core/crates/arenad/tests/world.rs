@@ -1,4 +1,5 @@
-//! `/api/world`, `/api/usage` and `/api/gc` over toy integrations and a toy benchmark.
+//! `/api/world`, `/api/usage`, `/api/gc` and `/api/team/default` over toy integrations and a toy
+//! benchmark.
 #[path = "support/app.rs"]
 mod app_support;
 #[path = "support/fake_upstream.rs"]
@@ -144,6 +145,19 @@ impl Fx {
         let passed = store.set_status(&b, BranchStatus::Passed, None);
         passed.await.unwrap();
     }
+}
+
+/// The toy benchmark suggests no team: the default team is arenad's one generic agent.
+#[test]
+fn a_benchmark_without_a_team_gets_the_generic_one() {
+    run(async {
+        let fx = setup("noteam", vec![integration("toy-a", &[])], &["box=toy-a"]).await;
+        let (st, v) = fx.get("/api/team/default").await;
+        assert_eq!(st, 200, "{v}");
+        let team: Team = serde_json::from_value(v).unwrap();
+        assert_eq!(team.agents.len(), 1);
+        assert_eq!(team.agents[0].prompt, arenad::prompts::GENERIC_PROMPT);
+    })
 }
 
 #[test]

@@ -280,8 +280,9 @@ async fn tasks(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
     ))
 }
 
-async fn default_team() -> Json<Team> {
-    Json(prompts::default_team())
+/// The team the benchmark suggests, or arenad's generic one.
+async fn default_team(State(state): State<Arc<AppState>>) -> ApiResult<Team> {
+    Ok(Json(prompts::default_team(&state.bench().await?)))
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSummary>> {
@@ -586,7 +587,7 @@ fn parse_rows_query(q: &HashMap<String, String>) -> Result<RowsQuery, ApiError> 
         .map(|k| match k.split_once('/') {
             Some((kind, id)) if !kind.is_empty() && !id.is_empty() => Ok(k.to_string()),
             _ => Err(ApiError::bad(format!(
-                "bad key {k:?}: expected <kind>/<id>, e.g. orders/<id>"
+                "bad key {k:?}: expected <kind>/<id>"
             ))),
         })
         .collect::<Result<_, _>>()?;

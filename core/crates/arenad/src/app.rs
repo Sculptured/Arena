@@ -83,13 +83,12 @@ impl Config {
     }
 }
 
-pub const DEFAULT_BENCHMARK: &str = "retail";
-
 pub struct AppState {
     pub store: Arc<Store>,
     /// The installed integrations and benchmarks, their programs started on first use.
     pub hub: Arc<Hub>,
-    /// The benchmark new runs use (env `ARENA_BENCHMARK`, default `retail`).
+    /// The benchmark new runs use: env `ARENA_BENCHMARK`, else the only one installed; empty
+    /// when neither names one.
     pub benchmark: String,
     /// Branches currently running, by branch id.
     pub live: RwLock<HashMap<String, Arc<BranchCtx>>>,
@@ -115,7 +114,7 @@ impl AppState {
         let benchmark = std::env::var("ARENA_BENCHMARK")
             .ok()
             .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| DEFAULT_BENCHMARK.to_string());
+            .unwrap_or_else(|| only_benchmark(&hub));
         AppState {
             store,
             hub,
@@ -139,12 +138,28 @@ impl AppState {
 impl AppState {
     /// The `describe` of the benchmark new runs use: its world, tasks, instructions and tools.
     pub async fn bench(&self) -> anyhow::Result<BenchDescribe> {
+        if self.benchmark.is_empty() {
+            let installed: Vec<&str> = self.hub.registry().benchmarks().map(|m| &*m.name).collect();
+            anyhow::bail!(
+                "no benchmark chosen: set ARENA_BENCHMARK to one of the installed benchmarks ({})",
+                installed.join(", ")
+            );
+        }
         self.hub.bench_describe(&self.benchmark).await
     }
 
     /// Installs the driver map; false if one was already installed.
     pub fn install_drivers(&self, drivers: Drivers) -> bool {
         self.drivers.set(drivers).is_ok()
+    }
+}
+
+/// The name of the one installed benchmark; empty when there are none or several.
+fn only_benchmark(hub: &Hub) -> String {
+    let mut names = hub.registry().benchmarks().map(|m| m.name.clone());
+    match (names.next(), names.next()) {
+        (Some(one), None) => one,
+        _ => String::new(),
     }
 }
 

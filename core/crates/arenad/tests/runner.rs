@@ -590,6 +590,24 @@ async fn toy_fx(tag: &str, up: Option<&FakeUpstream>, root: &packages::ToyRoot, 
     setup_full(tag, up, drv, std::slice::from_ref(&root.0), "toybench").await
 }
 
+/// The toy benchmark names no title for its instructions: the input uses the generic heading.
+#[test]
+fn instructions_without_a_title_get_the_generic_heading() {
+    run(async {
+        let root = packages::toy_world("title", &[], &[]);
+        let up = FakeUpstream::start(vec![text_msg("Nothing to do.")]).await;
+        let fx = toy_fx("title", Some(&up), &root, Drv::Open).await;
+        let (_run, branch) = runner::start_run(&fx.state, "t1", solo()).await.unwrap();
+        finished(&fx, &branch).await;
+        let req = &up.requests()[0];
+        let input = req["messages"][1]["content"].as_str().unwrap();
+        assert!(
+            input.contains("\n# Instructions\n\nBe kind to the box.\n"),
+            "{input}"
+        );
+    })
+}
+
 #[test]
 fn malformed_diff_is_infra_error_not_passed() {
     run(async {

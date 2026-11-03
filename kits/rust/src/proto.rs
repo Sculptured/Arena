@@ -252,6 +252,22 @@ pub struct TaskInfo {
     pub ticket: String,
 }
 
+/// One agent of a benchmark's suggested team: its id (`^[a-z0-9_-]+$`), name and system prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamRole {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+}
+
+/// The team a benchmark suggests: its agents in the order they run (the last one writes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchTeam {
+    pub id: String,
+    pub name: String,
+    pub agents: Vec<TeamRole>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchDescribe {
     pub name: String,
@@ -260,6 +276,12 @@ pub struct BenchDescribe {
     pub world: Vec<WorldPart>,
     pub tasks: Vec<TaskInfo>,
     pub instructions: String,
+    /// The heading over `instructions` in each agent's input; arenad uses a generic one if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_title: Option<String>,
+    /// The team the benchmark suggests; arenad suggests a generic one if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<BenchTeam>,
     pub tools: Vec<ToolSchema>,
 }
 

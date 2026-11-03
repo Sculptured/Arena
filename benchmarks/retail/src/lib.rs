@@ -1,6 +1,7 @@
 //! The retail benchmark: τ²-bench retail tools over a Postgres world part.
 pub mod load;
 pub mod tasks;
+pub mod team;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
@@ -89,6 +90,8 @@ impl Benchmark for Retail {
             }],
             tasks,
             instructions: self.policy.clone(),
+            instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
+            team: Some(team::team()),
             tools: schemas(),
         })
     }

@@ -9,6 +9,7 @@ use crate::{
     app::AppState,
     exec::BranchCtx,
     model::*,
+    prompts,
     store::{BranchId, RunId},
     world::{self, Plan, World, WorldFrom},
 };
@@ -178,10 +179,12 @@ async fn record_ending(state: &AppState, branch_id: &str, (status, error): Endin
     }
 }
 
-/// What every agent's input starts with: the task's ticket and the benchmark's instructions.
+/// What every agent's input starts with: the task's ticket and the benchmark's instructions
+/// under their title.
 struct Brief {
     ticket: String,
-    policy: String,
+    title: String,
+    instructions: String,
 }
 
 async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) -> Result<Ending> {
@@ -192,7 +195,8 @@ async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) ->
         .ok_or_else(|| anyhow!("unknown task {}", ctx.task_id))?;
     let brief = Brief {
         ticket,
-        policy: bench.instructions,
+        title: prompts::instructions_title(&bench).to_string(),
+        instructions: bench.instructions,
     };
     restore_notes(ctx, &from)?;
     let mut resume = from.resume;
@@ -220,10 +224,14 @@ fn restore_notes(ctx: &BranchCtx, from: &StartPoint) -> Result<()> {
     Ok(())
 }
 
-/// The ticket, the policy, and the previous agent's handoff note.
+/// The ticket, the instructions, and the previous agent's handoff note.
 fn agent_input(ctx: &BranchCtx, idx: usize, brief: &Brief) -> Result<String> {
-    let Brief { ticket, policy } = brief;
-    let mut input = format!("{ticket}\n# Store policy\n\n{policy}\n");
+    let Brief {
+        ticket,
+        title,
+        instructions,
+    } = brief;
+    let mut input = format!("{ticket}\n# {title}\n\n{instructions}\n");
     if let Some(prev) = idx.checked_sub(1).map(|i| &ctx.team.agents[i]) {
         let spec = &ctx.team.agents[idx];
         let note = ctx

@@ -2,8 +2,9 @@
 //!
 //! Flags (confirmed live against claude 2.1.314):
 //!   -p <prompt> --model <m> --output-format json --setting-sources ""
-//!   --strict-mcp-config --mcp-config '{"mcpServers":{"retail":{"type":"http","url":..}}}'
-//!   --disable-slash-commands --tools "" --allowedTools "mcp__retail__*"
+//!   --strict-mcp-config --mcp-config '{"mcpServers":{"<server>":{"type":"http","url":..}}}'
+//!   --disable-slash-commands --tools "" --allowedTools "mcp__<server>__*"
+//! `<server>` is the benchmark's name (`super::server_name`).
 //! `--tools ""` removes the built-in tools; `--allowedTools` pre-approves the MCP tools so
 //! no permission prompt blocks the non-interactive run.
 
@@ -11,7 +12,7 @@ use std::{future::Future, pin::Pin, process::Command};
 
 use serde_json::{json, Value};
 
-use super::{AgentResult, AgentRun, Driver, CLI_TIMEOUT_SECS};
+use super::{AgentResult, AgentRun, Driver, Mcp, CLI_TIMEOUT_SECS};
 use crate::model::AgentSpec;
 
 pub struct ClaudeDriver {
@@ -30,12 +31,12 @@ impl ClaudeDriver {
     }
 }
 
-pub fn command(spec: &AgentSpec, mcp_url: &str, prompt: &str) -> Command {
-    command_with("claude", spec, mcp_url, prompt)
+pub fn command(spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Command {
+    command_with("claude", spec, mcp, prompt)
 }
 
-fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> Command {
-    let mcp = json!({"mcpServers": {"retail": {"type": "http", "url": mcp_url}}}).to_string();
+fn command_with(binary: &str, spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Command {
+    let config = json!({"mcpServers": {&mcp.server: {"type": "http", "url": mcp.url}}});
     let mut c = Command::new(binary);
     c.arg("-p")
         .arg("--model")
@@ -44,10 +45,11 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp_url: &str, prompt: &str) -> 
         .args(["--setting-sources", ""])
         .arg("--strict-mcp-config")
         .arg("--mcp-config")
-        .arg(mcp)
+        .arg(config.to_string())
         .arg("--disable-slash-commands")
         .args(["--tools", ""])
-        .args(["--allowedTools", "mcp__retail__*"])
+        .arg("--allowedTools")
+        .arg(format!("mcp__{}__*", mcp.server))
         .arg("--no-session-persistence")
         // The prompt is positional and may start with "-": keep it apart from the flags.
         .args(["--", prompt]);
@@ -90,10 +92,10 @@ pub fn parse(stdout: &str) -> AgentResult {
 impl Driver for ClaudeDriver {
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async move {
-            let url = super::mcp_url(&self.self_base, &run);
+            let mcp = Mcp::of(&self.self_base, &run);
             let prompt = super::prompt_of(&run);
             let build = |workdir: &std::path::Path| {
-                let mut cmd = command_with(&self.binary, &run.spec, &url, &prompt);
+                let mut cmd = command_with(&self.binary, &run.spec, &mcp, &prompt);
                 cmd.current_dir(workdir);
                 cmd
             };

@@ -2,9 +2,10 @@
 //!
 //! Flags (confirmed live against codex 0.163.0):
 //!   exec --skip-git-repo-check --json -s read-only -C <dir>
-//!   -c 'mcp_servers.retail.url="<url>"'
-//!   -c 'mcp_servers.retail.default_tools_approval_mode="approve"' -c 'approval_policy="never"'
+//!   -c 'mcp_servers.<server>.url="<url>"'
+//!   -c 'mcp_servers.<server>.default_tools_approval_mode="approve"' -c 'approval_policy="never"'
 //!   [-m <model>] <prompt>
+//! `<server>` is the benchmark's name (`super::server_name`).
 //! `--ignore-user-config` keeps ~/.codex/config.toml (other MCP servers, plugins, hooks) out;
 //! auth still comes from CODEX_HOME. `approval_policy=never` alone makes every MCP call fail ("requires approval, but approval
 //! policy is never"); the per-server `default_tools_approval_mode="approve"` fixes that.
@@ -14,7 +15,7 @@ use std::{future::Future, path::Path, pin::Pin, process::Command};
 
 use serde_json::{json, Value};
 
-use super::{AgentResult, AgentRun, Driver, CLI_TIMEOUT_SECS};
+use super::{AgentResult, AgentRun, Driver, Mcp, CLI_TIMEOUT_SECS};
 use crate::model::AgentSpec;
 
 pub struct CodexDriver {
@@ -50,14 +51,14 @@ const DISABLED_FEATURES: &[&str] = &[
     "skill_search",
 ];
 
-pub fn command(spec: &AgentSpec, mcp_url: &str, workdir: &Path, prompt: &str) -> Command {
-    command_with("codex", spec, mcp_url, workdir, prompt)
+pub fn command(spec: &AgentSpec, mcp: &Mcp, workdir: &Path, prompt: &str) -> Command {
+    command_with("codex", spec, mcp, workdir, prompt)
 }
 
 fn command_with(
     binary: &str,
     spec: &AgentSpec,
-    mcp_url: &str,
+    mcp: &Mcp,
     workdir: &Path,
     prompt: &str,
 ) -> Command {
@@ -73,11 +74,12 @@ fn command_with(
         .arg("-C")
         .arg(workdir)
         .arg("-c")
-        .arg(format!("mcp_servers.retail.url={}", json!(mcp_url)))
-        .args([
-            "-c",
-            "mcp_servers.retail.default_tools_approval_mode=\"approve\"",
-        ])
+        .arg(format!("mcp_servers.{}.url={}", mcp.server, json!(mcp.url)))
+        .arg("-c")
+        .arg(format!(
+            "mcp_servers.{}.default_tools_approval_mode=\"approve\"",
+            mcp.server
+        ))
         .args(["-c", "approval_policy=\"never\""]);
     if let Some(m) = &spec.model {
         c.args(["-m", m]);
@@ -150,10 +152,10 @@ pub fn parse(stdout: &str, returncode: i32) -> AgentResult {
 impl Driver for CodexDriver {
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async move {
-            let url = super::mcp_url(&self.self_base, &run);
+            let mcp = Mcp::of(&self.self_base, &run);
             let prompt = super::prompt_of(&run);
             let build =
-                |workdir: &Path| command_with(&self.binary, &run.spec, &url, workdir, &prompt);
+                |workdir: &Path| command_with(&self.binary, &run.spec, &mcp, workdir, &prompt);
             super::run_in_workdir(&run, self.timeout_secs, build, parse).await
         })
     }
