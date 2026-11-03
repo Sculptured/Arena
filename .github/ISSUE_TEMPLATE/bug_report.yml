@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Arena does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Start a run of task 27 with the default team\n2. Fork at step 12 with an exact restore\n3. …"
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - arenad (runs, forks, restore, compare)
+        - Web UI
+        - An integration
+        - A benchmark
+        - Rust kit
+        - Python kit
+        - arena-part-check
+        - Docs
+    validations: { required: true }
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD` of the checkout you ran"
+    validations: { required: true }
+  - type: dropdown
+    id: agents
+    attributes:
+      label: Agents involved
+      multiple: true
+      options: [Claude Code, Codex, API mode (OpenRouter), None]
+  - type: input
+    id: integrations
+    attributes:
+      label: Integrations and benchmark
+      placeholder: postgres, folder; benchmark retail
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04, …
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, events or screenshots
+      description: arenad's log, the branch's events (`GET /api/branches/{id}`), or a screenshot. Remove keys, tokens and anything private before pasting.

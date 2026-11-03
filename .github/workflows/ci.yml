@@ -1,0 +1,109 @@
+# Checks every push to main and every pull request: formatting, Clippy and tests of both Cargo
+# workspaces (this folder and core/), the Python kit, and the web UI. Tests marked live_ (Docker
+# services, real servers, real models) are not run here. No secrets are used.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Postgres service below, with the credentials of deploy/compose.yml.
+  ARENA_PG_URL: postgres://arena:arena@127.0.0.1:5544/postgres
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: arena
+          POSTGRES_PASSWORD: arena
+        ports:
+          - 127.0.0.1:5544:5432
+        options: >-
+          --health-cmd "pg_isready -U arena"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Both workspaces build into core/target (.cargo/config.toml).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> core/target
+            core -> target
+      # Some core tests run the Python kit's example integration with uv.
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Format
+        run: |
+          cargo fmt --all --check
+          (cd core && cargo fmt --all --check)
+      - name: Clippy
+        run: |
+          cargo clippy --workspace --all-targets
+          (cd core && cargo clippy --workspace --all-targets)
+      - name: Test kits, integrations and benchmarks
+        run: cargo test --workspace
+      - name: Test core
+        working-directory: core
+        run: cargo test --workspace
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Test the Python kit
+        working-directory: kits/python
+        run: uv run --with pytest pytest -q
+      # Their tests read the factory example (Sculptured-Examples/factory) from next to the
+      # checkout, which CI does not have; here they are only installed, compiled and imported.
+      - name: Import ridgeline-hub
+        working-directory: integrations/ridgeline-hub
+        run: |
+          uv run python -m compileall -q ridgeline_hub_part tests
+          uv run python -c "import ridgeline_hub_part.part"
+      - name: Import isaac-sim
+        working-directory: integrations/isaac-sim
+        run: |
+          uv run python -m compileall -q isaac_part tests
+          uv run python -c "import isaac_part.part"
+
+  ui:
+    name: Web UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

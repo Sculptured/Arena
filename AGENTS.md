@@ -1,8 +1,10 @@
 # Arena — instructions for agents working in this repo
 
 The arena records multi-agent runs against a world made of integrations, saves the world at every
-step, and reruns from any step. The design is in `docs/specs/2026-10-31-integrations-design.md`; the
-protocol between arenad and an integration is `docs/protocol.md`.
+step, and reruns from any step. The protocol between arenad and an integration or benchmark is
+`docs/protocol.md`; the concepts (restore modes, teams, forking) are in `docs/concepts.md`.
+Setup, the checks to run before a pull request, and how to write an integration or a benchmark are
+in `CONTRIBUTING.md`. The rules below are the same as its "Code rules".
 
 ## Layout and boundaries
 - `core/` is arenad and the primitives. It contains no code for a particular system.
@@ -22,11 +24,16 @@ protocol between arenad and an integration is `docs/protocol.md`.
   check-then-unwrap. Use `expect` with the invariant spelled out when a panic is required.
 - Python packages follow the same rules: short functions, one responsibility per module, no
   copy-pasted logic.
-- Run `cargo fmt`, the relevant tests, and `cargo clippy --all-targets` for every changed crate.
+- Run `cargo fmt`, the relevant tests, and `cargo clippy --all-targets` for every changed crate
+  (the full list of checks is in `CONTRIBUTING.md`, "Make a change").
+- Docs and READMEs say only what was verified, and on what; keep it separate from what is designed
+  or assumed.
 
 ## Tests
 - Tests never call a real model. Tests that need Docker services or hardware not always present
   are `#[ignore]`d with the prefix `live_` (Rust) or marked `live` (Python).
 - Tests drop every database, container and folder they create, even when an assertion fails.
-- The disk is nearly full: share `core/target` (set in `.cargo/config.toml`), never add another
-  target directory.
+  `core/scripts/leakcheck.sh` checks this for the core's tests.
+- Never start arenad while tests run: its startup cleanup drops databases the tests make.
+- Both Cargo workspaces share `core/target` (set in `.cargo/config.toml`), where arenad finds the
+  package programs; never add another target directory.

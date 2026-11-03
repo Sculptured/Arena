@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/Sculptured/Arena/security/advisories/new
+    about: Please report vulnerabilities privately.
+  - name: The arena-part/1 protocol
+    url: https://github.com/Sculptured/Arena/blob/main/docs/protocol.md
+    about: Every method, error code and contract between arenad and an integration.

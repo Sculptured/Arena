@@ -1,0 +1,14 @@
+Arena
+Copyright 2026 The Sculptured Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes data from tau2-bench
+(https://github.com/sierra-research/tau2-bench):
+
+  data/retail/db.json
+  data/retail/tasks.json
+  data/retail/policy.md
+
+Copyright (c) 2025 Sierra Research. Licensed under the MIT License; the full
+text is in data/retail/LICENSE.

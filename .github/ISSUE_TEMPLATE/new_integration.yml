@@ -1,0 +1,56 @@
+name: New integration or benchmark
+description: Propose a system to put in the world, or a benchmark to run in it
+labels: [integration]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [Integration, Benchmark]
+    validations: { required: true }
+  - type: input
+    id: system
+    attributes:
+      label: System or benchmark
+      placeholder: Redis, a Git repository, a browser, a warehouse simulator, …
+    validations: { required: true }
+  - type: textarea
+    id: world
+    attributes:
+      label: What it puts in the world
+      description: For an integration, what one instance is and the tools agents would call. For a benchmark, its tasks, its world and how a task is scored.
+    validations: { required: true }
+  - type: dropdown
+    id: restore
+    attributes:
+      label: How it could restore (integrations)
+      description: See "Restore modes" in docs/concepts.md.
+      multiple: true
+      options:
+        - Exact save
+        - Replay (deterministic from a seed and the recorded inputs)
+        - Approximate save
+        - None
+        - Not sure yet
+  - type: dropdown
+    id: clock
+    attributes:
+      label: Does it change with time on its own?
+      description: Parts that do use the arena clock.
+      options: ["Yes", "No", Not sure]
+  - type: input
+    id: needs
+    attributes:
+      label: What it needs to run
+      placeholder: Docker, a GPU with 16 GB, a licence, network access, …
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options: [Rust (kits/rust), Python (kits/python), Other]
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to build it and open a pull request
