@@ -4,6 +4,7 @@
 //! request and gives back a canonical response plus its own raw response ([`Provider::send`]);
 //! the agent loop, replay and fork only ever see the canonical form.
 
+mod anthropic;
 mod config;
 mod openai;
 mod status;
@@ -23,7 +24,6 @@ pub const ANTHROPIC: &str = "anthropic";
 pub const LOCAL_PREFIX: &str = "local:";
 /// The local provider the old single-upstream override becomes.
 pub const CUSTOM_LOCAL: &str = "custom";
-pub const ANTHROPIC_NOT_BUILT: &str = "Anthropic support is not built yet";
 /// The model of an OpenRouter agent that names none.
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-chat-v3.1";
 pub const LOCAL_COST_SOURCE: &str = "local (no API charge)";
@@ -47,7 +47,6 @@ pub enum ProviderKind {
 pub enum Unavailable {
     /// The env var holding its key is not set.
     MissingKey(&'static str),
-    NotBuilt,
 }
 
 impl Unavailable {
@@ -55,7 +54,6 @@ impl Unavailable {
     pub fn why(&self) -> String {
         match self {
             Unavailable::MissingKey(env) => format!("{env} is not set"),
-            Unavailable::NotBuilt => ANTHROPIC_NOT_BUILT.to_string(),
         }
     }
 
@@ -63,7 +61,6 @@ impl Unavailable {
     pub fn refusal(&self) -> String {
         match self {
             Unavailable::MissingKey(env) => format!("open mode needs {env}"),
-            Unavailable::NotBuilt => ANTHROPIC_NOT_BUILT.to_string(),
         }
     }
 }
@@ -98,7 +95,7 @@ impl Provider {
     /// Sends one canonical chat-completions `request`. `Err` is a transport failure (no answer).
     pub async fn send(&self, http: &reqwest::Client, request: &Value) -> Result<Upstream, String> {
         match self.kind {
-            ProviderKind::Anthropic => Err(ANTHROPIC_NOT_BUILT.to_string()),
+            ProviderKind::Anthropic => anthropic::send(self, http, request).await,
             _ => openai::send(self, http, request).await,
         }
     }
@@ -114,7 +111,7 @@ impl Provider {
         match self.kind {
             ProviderKind::OpenRouter => missing("OPENROUTER_API_KEY"),
             ProviderKind::OpenAi => missing("OPENAI_API_KEY"),
-            ProviderKind::Anthropic => Some(Unavailable::NotBuilt),
+            ProviderKind::Anthropic => missing("ANTHROPIC_API_KEY"),
             ProviderKind::Local => None,
         }
     }
@@ -246,7 +243,7 @@ mod tests {
         );
         assert_eq!(
             c.refusal(Some("anthropic"), Some("m")).as_deref(),
-            Some(ANTHROPIC_NOT_BUILT)
+            Some("open mode needs ANTHROPIC_API_KEY")
         );
         assert!(c
             .refusal(Some("local:box"), None)

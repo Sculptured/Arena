@@ -7,7 +7,7 @@ use futures_util::future::join_all;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{openai, Provider, ProviderConfig, ProviderKind};
+use super::{anthropic, openai, Provider, ProviderConfig, ProviderKind};
 
 /// How long a provider's model list may take; the lists are asked for all at once.
 pub const LIST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -93,14 +93,27 @@ async fn status(p: &Provider, http: &reqwest::Client) -> ProviderStatus {
 }
 
 fn lists_models(kind: ProviderKind) -> bool {
-    matches!(kind, ProviderKind::OpenAi | ProviderKind::Local)
+    matches!(
+        kind,
+        ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::Local
+    )
+}
+
+/// The provider's model-list request, with its own way of sending the key.
+fn list_request(p: &Provider, http: &reqwest::Client) -> reqwest::RequestBuilder {
+    match p.kind {
+        ProviderKind::Anthropic => anthropic::request(p, http, reqwest::Method::GET, "models")
+            // The Models API pages at 20 by default; 1000 is its largest page.
+            .query(&[("limit", "1000")]),
+        _ => openai::request(p, http, reqwest::Method::GET, "models"),
+    }
 }
 
 /// The ids in the provider's `GET <base>/models`, sorted.
 async fn list_models(p: &Provider, http: &reqwest::Client) -> Result<Vec<String>, String> {
     let host = host_of(&p.endpoint.base);
     let ask = async {
-        let r = openai::request(p, http, reqwest::Method::GET, "models")
+        let r = list_request(p, http)
             .send()
             .await
             .map_err(|e| format!("{host} did not answer: {}", e.without_url()))?;
@@ -117,7 +130,7 @@ async fn list_models(p: &Provider, http: &reqwest::Client) -> Result<Vec<String>
     Ok(model_ids(&listed))
 }
 
-/// The `data[].id` of an OpenAI-style model list, sorted.
+/// The `data[].id` of a model list (OpenAI's and the Claude API's alike), sorted.
 fn model_ids(list: &Value) -> Vec<String> {
     let mut ids: Vec<String> = list["data"]
         .as_array()

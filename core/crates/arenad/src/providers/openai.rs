@@ -4,11 +4,13 @@
 
 use serde_json::{json, Value};
 
-use super::{Provider, ProviderKind, Upstream};
+use super::{anthropic, Provider, ProviderKind, Upstream};
 
-/// The request as this provider takes it: OpenRouter alone is asked to report its cost.
+/// The request as this provider takes it: canonical fields only (an agent moved here by a fork
+/// may carry Claude's own content), and OpenRouter alone is asked to report its cost.
 fn outgoing(kind: ProviderKind, request: &Value) -> Value {
     let mut body = request.clone();
+    anthropic::strip_extras(&mut body);
     if kind == ProviderKind::OpenRouter {
         body["usage"] = json!({"include": true});
     }
@@ -30,13 +32,10 @@ pub(super) fn request(
     }
 }
 
-pub(super) async fn send(
-    p: &Provider,
-    http: &reqwest::Client,
-    request_body: &Value,
-) -> Result<Upstream, String> {
-    let r = request(p, http, reqwest::Method::POST, "chat/completions")
-        .json(&outgoing(p.kind, request_body))
+/// Sends `req`: the answer's HTTP status and its JSON body (`{"raw": text}` when it isn't JSON);
+/// `Err` when no answer came. Messages never carry the URL, so never a credential in it.
+pub(super) async fn exchange(req: reqwest::RequestBuilder) -> Result<(u16, Value), String> {
+    let r = req
         .send()
         .await
         .map_err(|e| format!("upstream request failed: {}", e.without_url()))?;
@@ -45,7 +44,18 @@ pub(super) async fn send(
         .text()
         .await
         .map_err(|e| format!("upstream response unreadable: {}", e.without_url()))?;
-    let response = serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}));
+    let body = serde_json::from_str(&text).unwrap_or_else(|_| json!({"raw": text}));
+    Ok((status, body))
+}
+
+pub(super) async fn send(
+    p: &Provider,
+    http: &reqwest::Client,
+    request_body: &Value,
+) -> Result<Upstream, String> {
+    let req = request(p, http, reqwest::Method::POST, "chat/completions")
+        .json(&outgoing(p.kind, request_body));
+    let (status, response) = exchange(req).await?;
     Ok(Upstream {
         status,
         raw: response.clone(),
@@ -67,5 +77,17 @@ mod tests {
         for kind in [ProviderKind::OpenAi, ProviderKind::Local] {
             assert_eq!(outgoing(kind, &req), req);
         }
+    }
+
+    #[test]
+    fn claude_content_is_not_sent_to_other_providers() {
+        let msg = json!({"role": "assistant", "content": "hi"});
+        let mut moved = msg.clone();
+        moved["anthropic_content"] =
+            json!([{"type": "thinking", "thinking": "", "signature": "s"}]);
+        moved["anthropic_context"] = json!("abc");
+        let req = json!({"model": "m", "messages": [moved]});
+        let sent = outgoing(ProviderKind::OpenAi, &req);
+        assert_eq!(sent["messages"], json!([msg]));
     }
 }

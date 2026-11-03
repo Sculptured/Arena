@@ -4,6 +4,8 @@
 
 #[path = "support/app.rs"]
 mod app_support;
+#[path = "support/fake_anthropic.rs"]
+mod fake_anthropic;
 #[path = "support/fake_upstream.rs"]
 mod fake_upstream;
 #[path = "support/packages.rs"]
@@ -22,6 +24,7 @@ use arenad::{
     model::*,
     providers::{Endpoint, LocalEndpoint, ProviderConfig, ProviderKind, Secret},
 };
+use fake_anthropic::FakeAnthropic;
 use fake_upstream::FakeUpstream;
 use packages::TestHub;
 use pg::Cleanup;
@@ -329,7 +332,7 @@ fn assert_listing(list: &Value) {
     let an = by_id(list, "anthropic");
     assert_eq!(
         (&an["available"], &an["why"]),
-        (&json!(false), &json!("Anthropic support is not built yet"))
+        (&json!(false), &json!("ANTHROPIC_API_KEY is not set"))
     );
     for id in ["local:slow1", "local:slow2"] {
         let s = by_id(list, id);
@@ -384,7 +387,7 @@ const REFUSED: [(Option<&str>, Option<&str>, &str); 5] = [
     (
         Some("anthropic"),
         Some("m"),
-        "Anthropic support is not built yet",
+        "open mode needs ANTHROPIC_API_KEY",
     ),
     (
         Some("local:up"),
@@ -512,4 +515,104 @@ fn records_and_teams_without_a_provider_mean_openrouter() {
     assert_eq!(serde_json::to_value(&mc).unwrap(), call);
     let change: Change = serde_json::from_value(json!({"model": "m"})).unwrap();
     assert_eq!(change.provider, None);
+}
+
+const ANT_KEY: &str = "sk-ant-test-key";
+
+fn on_claude(up: &FakeAnthropic) -> ProviderConfig {
+    ProviderConfig {
+        anthropic: Endpoint::new(&up.base_url, Some(Secret::new(ANT_KEY))),
+        ..ProviderConfig::default()
+    }
+}
+
+/// Claude's first turn: a thinking block, then a call of `get_order_details`.
+fn claude_reads() -> Value {
+    json!({"stop_reason": "tool_use", "content": [
+        {"type": "thinking", "thinking": "", "signature": "sig-1"},
+        {"type": "tool_use", "id": "toolu_1", "name": "get_order_details",
+         "input": {"order_id": "#W7181492"}},
+    ]})
+}
+
+fn claude_done() -> Value {
+    json!({"stop_reason": "end_turn", "content": [{"type": "text", "text": "Done."}]})
+}
+
+/// Both calls went with the key and API version (never a bearer token), as Messages API
+/// requests; the second sent Claude's first turn back unchanged, then the tool's result.
+fn assert_claude_requests(up: &FakeAnthropic) {
+    let reqs = up.requests();
+    assert_eq!(reqs.len(), 2, "{reqs:?}");
+    let want = [Some(ANT_KEY.to_string()), Some("2026-10-21".into()), None];
+    for (_, headers) in &reqs {
+        assert_eq!(headers, &want);
+    }
+    let first = &reqs[0].0;
+    assert_eq!(
+        (&first["model"], &first["max_tokens"]),
+        (&json!("claude-test"), &json!(16000))
+    );
+    assert_eq!(first["system"], "You are solo.");
+    let tool = first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "get_order_details");
+    assert!(tool.unwrap()["input_schema"].is_object(), "{first}");
+    let turns = reqs[1].0["messages"].as_array().unwrap().clone();
+    let n = turns.len();
+    assert_eq!(turns[n - 2]["content"], claude_reads()["content"]);
+    let result = &turns[n - 1]["content"][0];
+    assert_eq!(
+        (&result["type"], &result["tool_use_id"]),
+        (&json!("tool_result"), &json!("toolu_1"))
+    );
+}
+
+/// The record holds the canonical call and Claude's own answer beside it, with no cost.
+fn assert_claude_recorded(b: &Value) {
+    let calls = payloads(b, "model_call", "solo");
+    assert_eq!(calls.len(), 2);
+    let mc: ModelCallPayload = serde_json::from_value(calls[0].clone()).unwrap();
+    assert_eq!(mc.provider.as_deref(), Some("anthropic"));
+    let call = &mc.response["choices"][0]["message"]["tool_calls"][0];
+    assert_eq!(
+        (&call["id"], &call["function"]["name"]),
+        (&json!("toolu_1"), &json!("get_order_details"))
+    );
+    assert_eq!(mc.response["usage"]["prompt_tokens"], 12);
+    assert_eq!(mc.provider_response.unwrap()["stop_reason"], "tool_use");
+    assert_eq!((mc.cost_usd, mc.cost_source), (None, None));
+}
+
+#[test]
+fn a_claude_agent_completes_a_tool_use_turn() {
+    run(async {
+        let up = FakeAnthropic::start(vec![claude_reads(), claude_done()]).await;
+        let fx = setup("claude", on_claude(&up)).await;
+        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
+        let b = fx.run_to_end(&team(vec![solo])).await;
+        assert_ne!(b["status"], "infra_error", "{b}");
+        assert_claude_requests(&up);
+        assert_claude_recorded(&b);
+        assert!(!b.to_string().contains(ANT_KEY), "key recorded");
+    })
+}
+
+#[test]
+fn claude_models_are_listed_with_the_key() {
+    run(async {
+        let up = FakeAnthropic::start(vec![claude_done()]).await;
+        let fx = setup("claude-list", on_claude(&up)).await;
+        let (st, list) = fx.get("/api/providers").await;
+        assert_eq!(st, 200, "{list}");
+        let an = by_id(&list, "anthropic");
+        assert_eq!(
+            (&an["available"], &an["models"]),
+            (&json!(true), &json!(["claude-a", "claude-b"]))
+        );
+        let want = [Some(ANT_KEY.to_string()), Some("2026-10-21".into()), None];
+        assert_eq!(up.list_headers(), vec![want]);
+    })
 }
