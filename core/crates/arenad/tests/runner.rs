@@ -367,6 +367,9 @@ fn run_branch_can_start_mid_chain_from_recorded_notes() {
             resume: None,
             notes: vec!["Carried note.".into()],
         };
+        // `spawn_branch` makes a branch live before it runs; do the same here.
+        let live = ctx.clone();
+        fx.state.live.write().unwrap().insert(branch.clone(), live);
         runner::run_branch(fx.state.clone(), ctx, from).await;
         let b = fx.state.store.branch(&branch).await.unwrap();
         assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);

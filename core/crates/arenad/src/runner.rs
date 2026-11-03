@@ -122,9 +122,15 @@ async fn start_world(
     Ok(world)
 }
 
-/// Runs `run_branch` on its own task; a panic still ends the branch as `infra_error`.
+/// Runs `run_branch` on its own task; a panic still ends the branch as `infra_error`. The branch
+/// is live before this returns, so a cleanup can't slip in between the start and the task.
 pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint) {
     let state = state.clone();
+    state
+        .live
+        .write()
+        .unwrap()
+        .insert(ctx.branch_id.clone(), ctx.clone());
     tokio::spawn(async move {
         let branch_id = ctx.branch_id.clone();
         let inner = tokio::spawn(run_branch(state.clone(), ctx.clone(), from));
@@ -138,14 +144,9 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
     });
 }
 
-/// Runs the agents from `from.agent_index` (the clock ticking), scores the result, stops the
+/// Runs the agents from `from.agent_index` of a branch already in `state.live` (the clock ticking), scores the result, stops the
 /// world and sets the branch status. Never leaves the branch `running`.
 pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint) {
-    state
-        .live
-        .write()
-        .unwrap()
-        .insert(ctx.branch_id.clone(), ctx.clone());
     ctx.start_ticker(&state.store).await;
     let outcome = drive(&state, &ctx, from).await;
     state.live.write().unwrap().remove(&ctx.branch_id);

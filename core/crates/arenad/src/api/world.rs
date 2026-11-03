@@ -16,15 +16,9 @@ use crate::{app::AppState, gc, saves};
 /// answering. A late answer is dropped by the client, so the integration is not harmed.
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `f`'s result, or the plain error text: its own, or that it did not answer in time.
+/// `f` within `DESCRIBE_TIMEOUT`.
 async fn bounded<T>(f: impl Future<Output = Result<T>>) -> Result<T, String> {
-    match tokio::time::timeout(DESCRIBE_TIMEOUT, f).await {
-        Ok(r) => r.map_err(|e| format!("{e:#}")),
-        Err(_) => Err(format!(
-            "did not answer within {} s",
-            DESCRIBE_TIMEOUT.as_secs()
-        )),
-    }
+    saves::bounded(DESCRIBE_TIMEOUT, "answer", f).await
 }
 
 #[derive(Debug, Serialize)]

@@ -1,7 +1,10 @@
 //! Disk hygiene: the bytes the arena keeps, deleting a run's saves, and the startup cleanup of
 //! saves no event names.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use anyhow::Result;
 use parts::{
@@ -119,6 +122,9 @@ async fn keep_list(store: &Store) -> Result<Vec<String>> {
     Ok(keep.into_iter().collect())
 }
 
+/// How long one integration gets to finish its gc.
+const GC_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// What a cleanup dropped: the integrations' totals, and the save folders that are gone.
 #[derive(Debug, Default)]
 pub struct GcReport {
@@ -145,17 +151,17 @@ pub async fn run_gc(store: &Store, hub: &Hub, benchmark: &str) -> Result<GcRepor
     let mut removed = BTreeSet::new();
     for i in integrations(hub, benchmark).await? {
         let before = hub.save_dirs(&i);
-        match saves::gc(hub, &i, &keep).await {
+        match saves::bounded(GC_TIMEOUT, "finish", saves::gc(hub, &i, &keep)).await {
             Ok(Some(r)) => {
                 report.result.dropped += r.dropped;
                 report.result.bytes += r.bytes;
             }
             Ok(None) => println!("gc: the {i} integration has no gc; skipped"),
             Err(e) => {
-                eprintln!("gc: {e:#}");
+                eprintln!("gc: {e}");
                 report.errors.push(GcError {
                     integration: i.clone(),
-                    message: format!("{e:#}"),
+                    message: e,
                 });
             }
         }

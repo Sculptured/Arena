@@ -338,6 +338,17 @@ struct ForkReq {
     restore: Mode,
 }
 
+/// 404 for an unknown branch and 409 for a running one; these come before the 507 check.
+async fn ensure_forkable(state: &AppState, id: &str) -> Result<(), ApiError> {
+    match state.store.find_branch(id).await? {
+        None => Err(ApiError::not_found(format!("there is no branch \"{id}\""))),
+        Some(b) if b.status == BranchStatus::Running => {
+            Err(ApiError::conflict("the branch is still running"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 async fn fork_branch(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -352,14 +363,7 @@ async fn fork_branch(
     {
         open_check(&state)?;
     }
-    // Existence (404) and not-running (409) come first, so a 507 never masks them.
-    match state.store.find_branch(&id).await? {
-        None => return Err(ApiError::not_found(format!("there is no branch \"{id}\""))),
-        Some(b) if b.status == BranchStatus::Running => {
-            return Err(ApiError::conflict("the branch is still running"))
-        }
-        Some(_) => {}
-    }
+    ensure_forkable(&state, &id).await?;
     check_disk(&state).await?;
     let req = fork::ForkRequest {
         at_seq: req.at_seq,

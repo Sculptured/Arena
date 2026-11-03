@@ -1,6 +1,8 @@
 //! `/api/world`, `/api/usage` and `/api/gc` over toy integrations and a toy benchmark.
 #[path = "support/app.rs"]
 mod app_support;
+#[path = "support/fake_upstream.rs"]
+mod fake_upstream;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -12,9 +14,11 @@ use std::{
 };
 
 use arenad::{
+    agents::{open::OpenDriver, Driver},
     app::{AppState, Config},
     model::*,
 };
+use fake_upstream::FakeUpstream;
 use packages::{Package, TestHub, ToyRoot};
 use pg::Cleanup;
 use serde_json::{json, Value};
@@ -45,6 +49,16 @@ fn integration(name: &str, args: &[&str]) -> Package {
 
 /// An app over the toy `integrations` and a benchmark whose parts are `parts` (`part=integration`).
 async fn setup(tag: &str, integrations: Vec<Package>, parts: &[&str]) -> Fx {
+    setup_with(tag, integrations, parts, None).await
+}
+
+/// `setup`, with open agents talking to the (fake) model upstream at `upstream`, if given.
+async fn setup_with(
+    tag: &str,
+    integrations: Vec<Package>,
+    parts: &[&str],
+    upstream: Option<&str>,
+) -> Fx {
     let mut bench = vec!["bench"];
     for p in parts {
         bench.extend(["--part", p]);
@@ -55,8 +69,16 @@ async fn setup(tag: &str, integrations: Vec<Package>, parts: &[&str]) -> Fx {
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("world", tag).await;
     let (listener, base) = app_support::bind().await;
-    let state = AppState::new(store, hub.hub.clone(), Config::new()).with_benchmark("toybench");
+    let mut config = Config::new();
+    if let Some(url) = upstream {
+        config.upstream_base = url.to_string();
+        config.openrouter_key = Some("sk-secret".into());
+        config.self_base = base.clone();
+    }
+    let state = AppState::new(store, hub.hub.clone(), config).with_benchmark("toybench");
     let state = Arc::new(state);
+    let driver: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
+    assert!(state.install_drivers([(AgentKind::Open, driver)].into_iter().collect()));
     app_support::serve(listener, &state);
     Fx {
         state,
@@ -300,5 +322,32 @@ fn gc_reports_failing_integration() {
             message.contains("the toy cannot clean up today"),
             "{message}"
         );
+    })
+}
+
+/// A run that has just been created is live at once: a gc right after `POST /api/runs` returns
+/// is refused, with no gap for it to drop the run's instances.
+#[test]
+fn gc_refused_right_after_run_starts() {
+    run(async {
+        let slow = json!({"role": "assistant", "content": "Done.", "_delay_ms": 3000});
+        let up = FakeUpstream::start(vec![slow]).await;
+        let part = integration("toy-a", &["--gc"]);
+        let fx = setup_with("gcnow", vec![part], &["box=toy-a"], Some(&up.base_url)).await;
+        let agent = json!({"id": "a", "name": "A", "kind": "open", "model": "fake/model",
+                           "prompt": "You are A."});
+        let team = json!({"id": "t", "name": "T", "agents": [agent]});
+        let client = reqwest::Client::new();
+        let req = client.post(format!("{}/api/runs", fx.base));
+        let (st, v) = app_support::send(req.json(&json!({"task_id": "t1", "team": team}))).await;
+        assert_eq!(st, 200, "{v}");
+        let (st, v) = fx.post("/api/gc").await;
+        assert_eq!(st, 409, "{v}");
+        for _ in 0..100 {
+            if fx.state.live.read().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
     })
 }

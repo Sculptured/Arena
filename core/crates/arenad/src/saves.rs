@@ -2,7 +2,7 @@
 //! leftover instance, measure and clean up. A part's own error stays a `parts::CallError` inside
 //! the returned error, so callers can downcast it for its code.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, future::Future, time::Duration};
 
 use anyhow::{Context, Result};
 use parts::{
@@ -139,4 +139,17 @@ pub fn integration_of<'a>(world: &'a [WorldPart], part: &str) -> Option<&'a str>
 pub async fn integrations(hub: &Hub, benchmark: &str) -> Result<BTreeSet<String>> {
     let bench = hub.bench_describe(benchmark).await?;
     Ok(bench.world.into_iter().map(|p| p.integration).collect())
+}
+
+/// `f`'s result, or the plain error text: its own, or that it did not `verb` (answer, finish)
+/// within `limit`.
+pub async fn bounded<T>(
+    limit: Duration,
+    verb: &str,
+    f: impl Future<Output = Result<T>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, f).await {
+        Ok(r) => r.map_err(|e| format!("{e:#}")),
+        Err(_) => Err(format!("did not {verb} within {} s", limit.as_secs())),
+    }
 }
