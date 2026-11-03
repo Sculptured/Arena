@@ -22,7 +22,7 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 | `GET /api/branches/{id}/restore-plan?at_seq=N&restore=exact\|approximate` | `{parts: [{part, how, estimate_seconds?}]}`, or 409 with the refusal |
 | `GET /api/compare?a=<branch>&b=<branch>` | `{a, b, first_divergent_seq, differing_rows, not_compared}` |
 | `GET /api/world` | the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`) |
-| `GET /api/usage` | `{integrations: [{integration, parts, bytes}], total_bytes, limit_bytes}`: the bytes each integration keeps and the world parts that use it |
+| `GET /api/usage` | `{integrations: [{integration, parts, bytes, error?}], total_bytes, limit_bytes}`: the bytes each integration keeps (its own `usage` plus its save folders) and the world parts that use it. An integration whose `usage` fails or doesn't answer within 5 s has `bytes: 0` and an `error`, and adds nothing to `total_bytes` |
 | `POST /api/gc` | runs the startup cleanup and returns `{removed, freed_bytes, errors}`; it keeps every save a recorded run names and the shared base and gold saves; 409 while agents are running, and new runs and forks answer 409 while it runs. It has no deadline: it answers when every integration's `gc` has (an integration that never answers keeps the cleanup on until it exits), and a client that stops waiting does not end it |
 
 New runs and forks answer 507 once the saves reach the disk limit. The `/api` routes answer only
@@ -44,7 +44,9 @@ Environment variables, read once at startup by arenad:
 - `ARENA_SAVES`: where saves are kept (default `core/saves`, ignored by git). Integrations that run in Docker or
   on their own servers also keep data elsewhere.
 - `ARENA_MAX_DB_BYTES`: disk limit, see [Disk](#disk) (default 5 GiB, `5368709120`).
-- `ARENA_CLOCK_SPEED`: speed of the world clock (default 1, real time).
+- `ARENA_CLOCK_SPEED`: speed of the world clock (default 1, real time; 0 stops it; anything that isn't a number
+  of at least 0 counts as 1). Unlike the others, it is read each time a run or fork starts a branch, not once at
+  startup.
 - `OPENROUTER_API_KEY`: turns on API mode. Pick the model per agent on the Team page (or per fork in "Change and
   rerun") by typing an OpenRouter model id.
 - `ARENA_UI_DIST`: a built UI folder for arenad to serve at `/`.
