@@ -223,19 +223,63 @@ fn delete_run_drops_all_part_saves() {
     })
 }
 
+/// A run of task 27 with one root branch that has not ended.
+async fn new_branch(fx: &Fx) -> (String, String) {
+    let t = team();
+    let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+    let b = fx
+        .state
+        .store
+        .create_branch(&run_id, None, &t, &json!([]), None)
+        .await
+        .unwrap();
+    (run_id, b)
+}
+
+/// With the limit exceeded, forking a missing branch is 404 and a running one is 409, and only a
+/// finished branch gets the 507. Leaves one root branch behind.
+async fn assert_fork_errors_before_limit(fx: &Fx) {
+    assert_eq!(
+        fx.post("/api/branches/whatever/fork", json!({"at_seq": 1}))
+            .await
+            .0,
+        404
+    );
+    let (_, b) = new_branch(fx).await;
+    assert_eq!(
+        fx.post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1}))
+            .await
+            .0,
+        409
+    );
+    fx.state
+        .store
+        .set_status(&b, BranchStatus::Passed, None)
+        .await
+        .unwrap();
+    let (st, v) = fx
+        .post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1}))
+        .await;
+    assert_over_limit(st, &v);
+}
+
+/// The response is the 507 the arena gives when its saves use more than the limit.
+fn assert_over_limit(status: u16, body: &Value) {
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (
+            507,
+            Some("the arena's saves use more than the limit; delete old runs")
+        )
+    );
+}
+
 #[test]
 fn delete_running_run_is_409() {
     run(async {
         let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let fx = setup_with("running", &up, |_| {}).await;
-        let t = team();
-        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let b = fx
-            .state
-            .store
-            .create_branch(&run_id, None, &t, &json!([]), None)
-            .await
-            .unwrap();
+        let (run_id, b) = new_branch(&fx).await;
         let (st, v) = fx.delete(&format!("/api/runs/{run_id}")).await;
         assert_eq!(st, 409, "{v}");
         assert!(
@@ -261,49 +305,8 @@ fn limit_refuses_new_runs() {
         let (st, v) = fx
             .post("/api/runs", json!({"task_id": "27", "team": team()}))
             .await;
-        assert_eq!(
-            (st, v["error"].as_str()),
-            (
-                507,
-                Some("the arena's saves use more than the limit; delete old runs")
-            )
-        );
-        // 404 and 409 are reported before 507.
-        assert_eq!(
-            fx.post("/api/branches/whatever/fork", json!({"at_seq": 1}))
-                .await
-                .0,
-            404
-        );
-        let t = team();
-        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let b = fx
-            .state
-            .store
-            .create_branch(&run_id, None, &t, &json!([]), None)
-            .await
-            .unwrap();
-        assert_eq!(
-            fx.post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1}))
-                .await
-                .0,
-            409
-        );
-        fx.state
-            .store
-            .set_status(&b, BranchStatus::Passed, None)
-            .await
-            .unwrap();
-        let (st, v) = fx
-            .post(&format!("/api/branches/{b}/fork"), json!({"at_seq": 1}))
-            .await;
-        assert_eq!(
-            (st, v["error"].as_str()),
-            (
-                507,
-                Some("the arena's saves use more than the limit; delete old runs")
-            )
-        );
+        assert_over_limit(st, &v);
+        assert_fork_errors_before_limit(&fx).await;
         assert_eq!(
             fx.state.store.runs().await.unwrap()[0].branches.len(),
             1,

@@ -1,8 +1,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-#[test]
-fn describe_over_stdio() {
+/// Starts the benchmark, sends one `describe` request and returns its parsed response.
+fn describe_response() -> serde_json::Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_arena-retail"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .stdin(Stdio::piped())
@@ -22,7 +22,12 @@ fn describe_over_stdio() {
         .unwrap();
     drop(stdin);
     child.wait().unwrap();
-    let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[test]
+fn describe_over_stdio() {
+    let v = describe_response();
     let r = &v["result"];
     assert_eq!(r["name"], "retail");
     assert_eq!(r["tasks"].as_array().unwrap().len(), 10);

@@ -218,6 +218,85 @@ async fn read_stream(fx: &Fx, branch: &str) -> Vec<(String, String)> {
     frames(&body)
 }
 
+/// The health, task and default-team endpoints describe the retail benchmark and task 27.
+async fn assert_health_and_tasks(fx: &Fx) {
+    let (st, h) = fx.get("/api/health").await;
+    assert_eq!(st, 200);
+    assert!(h["open_available"].as_bool().unwrap());
+    assert!(h["claude"].is_boolean() && h["codex"].is_boolean());
+    assert_eq!(h["benchmark"]["name"], "retail", "{h}");
+    assert_eq!(h["benchmark"]["world"][0]["integration"], "postgres", "{h}");
+    let (_, tasks) = fx.get("/api/tasks").await;
+    let t27 = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "27")
+        .expect("task 27");
+    assert!(
+        t27["reason"].as_str().is_some_and(|r| !r.is_empty()),
+        "{t27}"
+    );
+    let (_, dt) = fx.get("/api/team/default").await;
+    assert_eq!(dt["agents"].as_array().unwrap().len(), 2);
+}
+
+/// Bad run requests: unknown task is 404; duplicate, malformed or no agents, or no team, is 400.
+async fn assert_run_validation_errors(fx: &Fx) {
+    let (st, v) = fx
+        .post("/api/runs", json!({"task_id": "nope", "team": team()}))
+        .await;
+    assert_eq!((st, v["error"].is_string()), (404, true));
+    for agents in [vec![agent("a"), agent("a")], vec![agent("Bad Id")], vec![]] {
+        let t = Team { agents, ..team() };
+        let (st, _) = fx
+            .post("/api/runs", json!({"task_id": "27", "team": t}))
+            .await;
+        assert_eq!(st, 400);
+    }
+    assert_eq!(fx.post("/api/runs", json!({"task_id": "27"})).await.0, 400);
+    assert_eq!(fx.get("/api/branches/nope").await.0, 404);
+}
+
+/// The branch's stream is ordered without gaps, ends with `check` and a passed status. Returns
+/// the number of frames and of events.
+async fn assert_stream_passed(fx: &Fx, branch: &str) -> (usize, usize) {
+    let fr = read_stream(fx, branch).await;
+    let last = fr.last().unwrap();
+    assert_eq!(last.0, "status");
+    let status: Value = serde_json::from_str(&last.1).unwrap();
+    assert_eq!(status["status"], "passed", "{status}");
+    let evs: Vec<Value> = fr
+        .iter()
+        .filter(|(n, _)| n == "event")
+        .map(|(_, d)| serde_json::from_str(d).unwrap())
+        .collect();
+    let seqs: Vec<i64> = evs.iter().map(|e| e["seq"].as_i64().unwrap()).collect();
+    assert_eq!(
+        seqs,
+        (1..=seqs.len() as i64).collect::<Vec<_>>(),
+        "ordered, no gaps or duplicates"
+    );
+    assert_eq!(evs.last().unwrap()["kind"], "check");
+    (fr.len(), seqs.len())
+}
+
+/// The branch endpoint has all `n_events` and the run list shows the branch as passed.
+async fn assert_branch_and_run_listed(fx: &Fx, branch: &str, run_id: &str, n_events: usize) {
+    let (_, b) = fx.get(&format!("/api/branches/{branch}")).await;
+    assert_eq!(b["events"].as_array().unwrap().len(), n_events);
+    assert_eq!(b["status"], "passed");
+    let (_, runs) = fx.get("/api/runs").await;
+    let r = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == run_id)
+        .unwrap();
+    assert_eq!(r["branches"][0]["id"], branch);
+    assert_eq!(r["branches"][0]["status"], "passed");
+}
+
 #[test]
 fn post_run_then_stream_until_status() {
     run(async {
@@ -226,63 +305,8 @@ fn post_run_then_stream_until_status() {
         let up = FakeUpstream::start(script).await;
         let fx = setup("stream", &up).await;
 
-        let (st, h) = fx.get("/api/health").await;
-        assert_eq!(st, 200);
-        assert!(h["open_available"].as_bool().unwrap());
-        assert!(h["claude"].is_boolean() && h["codex"].is_boolean());
-        assert_eq!(h["benchmark"]["name"], "retail", "{h}");
-        assert_eq!(h["benchmark"]["world"][0]["integration"], "postgres", "{h}");
-        let (_, tasks) = fx.get("/api/tasks").await;
-        let t27 = tasks
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["id"] == "27")
-            .expect("task 27");
-        assert!(
-            t27["reason"].as_str().is_some_and(|r| !r.is_empty()),
-            "{t27}"
-        );
-        let (_, dt) = fx.get("/api/team/default").await;
-        assert_eq!(dt["agents"].as_array().unwrap().len(), 2);
-
-        // Validation errors.
-        let (st, v) = fx
-            .post("/api/runs", json!({"task_id": "nope", "team": team()}))
-            .await;
-        assert_eq!((st, v["error"].is_string()), (404, true));
-        let dup = Team {
-            agents: vec![agent("a"), agent("a")],
-            ..team()
-        };
-        assert_eq!(
-            fx.post("/api/runs", json!({"task_id": "27", "team": dup}))
-                .await
-                .0,
-            400
-        );
-        let bad = Team {
-            agents: vec![agent("Bad Id")],
-            ..team()
-        };
-        assert_eq!(
-            fx.post("/api/runs", json!({"task_id": "27", "team": bad}))
-                .await
-                .0,
-            400
-        );
-        let none = Team {
-            agents: vec![],
-            ..team()
-        };
-        assert_eq!(
-            fx.post("/api/runs", json!({"task_id": "27", "team": none}))
-                .await
-                .0,
-            400
-        );
-        assert_eq!(fx.post("/api/runs", json!({"task_id": "27"})).await.0, 400);
-        assert_eq!(fx.get("/api/branches/nope").await.0, 404);
+        assert_health_and_tasks(&fx).await;
+        assert_run_validation_errors(&fx).await;
 
         let (st, v) = fx
             .post("/api/runs", json!({"task_id": "27", "team": team()}))
@@ -291,40 +315,11 @@ fn post_run_then_stream_until_status() {
         let branch = v["branch_id"].as_str().unwrap().to_string();
         let run_id = v["run_id"].as_str().unwrap().to_string();
 
-        let fr = read_stream(&fx, &branch).await;
-        let last = fr.last().unwrap();
-        assert_eq!(last.0, "status");
-        let status: Value = serde_json::from_str(&last.1).unwrap();
-        assert_eq!(status["status"], "passed", "{status}");
-        let evs: Vec<Value> = fr
-            .iter()
-            .filter(|(n, _)| n == "event")
-            .map(|(_, d)| serde_json::from_str(d).unwrap())
-            .collect();
-        let seqs: Vec<i64> = evs.iter().map(|e| e["seq"].as_i64().unwrap()).collect();
-        assert_eq!(
-            seqs,
-            (1..=seqs.len() as i64).collect::<Vec<_>>(),
-            "ordered, no gaps or duplicates"
-        );
-        assert_eq!(evs.last().unwrap()["kind"], "check");
-
+        let (frames, seqs) = assert_stream_passed(&fx, &branch).await;
         // After the end, a new stream replays everything and ends with status immediately.
         let again = read_stream(&fx, &branch).await;
-        assert_eq!(again.len(), fr.len());
-
-        let (_, b) = fx.get(&format!("/api/branches/{branch}")).await;
-        assert_eq!(b["events"].as_array().unwrap().len(), seqs.len());
-        assert_eq!(b["status"], "passed");
-        let (_, runs) = fx.get("/api/runs").await;
-        let r = runs
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["id"] == run_id.as_str())
-            .unwrap();
-        assert_eq!(r["branches"][0]["id"], branch.as_str());
-        assert_eq!(r["branches"][0]["status"], "passed");
+        assert_eq!(again.len(), frames);
+        assert_branch_and_run_listed(&fx, &branch, &run_id, seqs).await;
         teardown(fx, &[&branch]).await;
     })
 }
@@ -465,6 +460,28 @@ fn rows_via_inspect_before_after() {
     })
 }
 
+/// A bad step, an unknown agent in the changes and a malformed body are 400; an unknown branch
+/// is 404.
+async fn assert_fork_errors(fx: &Fx, url: &str, at: i64) {
+    assert_eq!(fx.post(url, json!({"at_seq": 9999})).await.0, 400);
+    assert_eq!(
+        fx.post(
+            url,
+            json!({"at_seq": at, "changes": {"ghost": {"prompt": "x"}}})
+        )
+        .await
+        .0,
+        400
+    );
+    assert_eq!(fx.post(url, json!({"nope": 1})).await.0, 400);
+    assert_eq!(
+        fx.post("/api/branches/nope/fork", json!({"at_seq": 1}))
+            .await
+            .0,
+        404
+    );
+}
+
 #[test]
 fn fork_over_http_maps_errors_and_starts_a_branch() {
     run(async {
@@ -486,23 +503,7 @@ fn fork_over_http_maps_errors_and_starts_a_branch() {
             .unwrap()
             .seq;
         let url = format!("/api/branches/{b}/fork");
-        assert_eq!(fx.post(&url, json!({"at_seq": 9999})).await.0, 400);
-        assert_eq!(
-            fx.post(
-                &url,
-                json!({"at_seq": at, "changes": {"ghost": {"prompt": "x"}}})
-            )
-            .await
-            .0,
-            400
-        );
-        assert_eq!(fx.post(&url, json!({"nope": 1})).await.0, 400);
-        assert_eq!(
-            fx.post("/api/branches/nope/fork", json!({"at_seq": 1}))
-                .await
-                .0,
-            404
-        );
+        assert_fork_errors(&fx, &url, at).await;
         let (st, v) = fx.post(&url, json!({"at_seq": at})).await;
         assert_eq!(st, 200, "{v}");
         let child = v["branch_id"].as_str().unwrap().to_string();

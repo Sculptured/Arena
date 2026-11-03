@@ -349,29 +349,38 @@ fn missing_handoff_fails() {
     })
 }
 
+/// A fresh branch of task 27 with its world started, made live as `spawn_branch` does before
+/// it runs.
+async fn live_branch(fx: &Fx) -> (String, Arc<BranchCtx>) {
+    let t = team();
+    let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+    let branch = fx
+        .state
+        .store
+        .create_branch(&run_id, None, &t, &json!([]), None)
+        .await
+        .unwrap();
+    let world = fx.hub.start_world("retail", &branch).await;
+    let ctx = Arc::new(BranchCtx::new(branch.clone(), world, t, "27".into()));
+    fx.state
+        .live
+        .write()
+        .unwrap()
+        .insert(branch.clone(), ctx.clone());
+    (branch, ctx)
+}
+
 #[test]
 fn run_branch_can_start_mid_chain_from_recorded_notes() {
     run(async {
         let up = FakeUpstream::start(vec![gold_write(), text_msg("Exchanged.")]).await;
         let fx = setup("mid", Some(&up), false).await;
-        let t = team();
-        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let branch = fx
-            .state
-            .store
-            .create_branch(&run_id, None, &t, &json!([]), None)
-            .await
-            .unwrap();
-        let world = fx.hub.start_world("retail", &branch).await;
-        let ctx = Arc::new(BranchCtx::new(branch.clone(), world, t, "27".into()));
+        let (branch, ctx) = live_branch(&fx).await;
         let from = StartPoint {
             agent_index: 1,
             resume: None,
             notes: vec!["Carried note.".into()],
         };
-        // `spawn_branch` makes a branch live before it runs; do the same here.
-        let live = ctx.clone();
-        fx.state.live.write().unwrap().insert(branch.clone(), live);
         runner::run_branch(fx.state.clone(), ctx, from).await;
         let b = fx.state.store.branch(&branch).await.unwrap();
         assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);

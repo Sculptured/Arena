@@ -154,6 +154,13 @@ fn codex_command_sets_mcp_url() {
     assert!(a.windows(2).any(|w| w == ["--disable", "hooks"]));
     assert!(a.contains(&"web_search=\"disabled\"".to_string()));
     assert!(a.windows(2).any(|w| w == ["-m", "gpt-x"]));
+    assert_secrets_scrubbed(&c);
+    assert!(a.windows(2).any(|w| w == ["-C", "/tmp/w"]));
+    assert_eq!(a.last().unwrap(), "do it");
+}
+
+/// Every secret the driver must not hand to the agent is removed from the command's environment.
+fn assert_secrets_scrubbed(c: &std::process::Command) {
     let removed: Vec<_> = c
         .get_envs()
         .filter(|(_, v)| v.is_none())
@@ -171,8 +178,6 @@ fn codex_command_sets_mcp_url() {
     }
     // Codex keeps its own vendor's key.
     assert!(!c.get_envs().any(|(k, _)| k == "OPENAI_API_KEY"));
-    assert!(a.windows(2).any(|w| w == ["-C", "/tmp/w"]));
-    assert_eq!(a.last().unwrap(), "do it");
 }
 
 // ---- driver behaviour with fake binaries ----
@@ -305,6 +310,44 @@ fn driver_times_out() {
 
 // ---- live smoke tests (use the user's CLI sign-in; cost a few cents) ----
 
+fn agent_spec(id: &str, kind: AgentKind, prompt: &str) -> AgentSpec {
+    AgentSpec {
+        id: id.into(),
+        name: id.into(),
+        kind,
+        model: None,
+        prompt: prompt.into(),
+        provider: None,
+    }
+}
+
+fn live_team() -> Team {
+    let a = |id: &str| agent_spec(id, AgentKind::ClaudeCode, "p");
+    Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![a("triage"), a("resolver")],
+    }
+}
+
+/// Binds a free local port and returns the listener with its base URL.
+async fn bind_local() -> (tokio::net::TcpListener, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    (listener, base)
+}
+
+/// A new branch of "task" for `team`, with a retail world started for it.
+async fn live_branch(store: &Store, hub: &packages::TestHub, team: &Team) -> (String, Arc<World>) {
+    let run_id = store.create_run("task", team).await.unwrap();
+    let branch = store
+        .create_branch(&run_id, None, team, &json!([]), None)
+        .await
+        .unwrap();
+    let world = hub.start_world("retail", &branch).await;
+    (branch, world)
+}
+
 async fn live_setup(
     tag: &str,
 ) -> (
@@ -316,28 +359,10 @@ async fn live_setup(
     packages::TestHub,
 ) {
     let (store, clean) = app_support::meta_store("cli", tag).await;
-    let a = |id: &str| AgentSpec {
-        id: id.into(),
-        name: id.into(),
-        kind: AgentKind::ClaudeCode,
-        model: None,
-        prompt: "p".into(),
-        provider: None,
-    };
-    let team = Team {
-        id: "t".into(),
-        name: "T".into(),
-        agents: vec![a("triage"), a("resolver")],
-    };
-    let run_id = store.create_run("task", &team).await.unwrap();
-    let branch = store
-        .create_branch(&run_id, None, &team, &json!([]), None)
-        .await
-        .unwrap();
+    let team = live_team();
     let hub = packages::TestHub::new(&[]);
-    let world = hub.start_world("retail", &branch).await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (branch, world) = live_branch(&store, &hub, &team).await;
+    let (listener, base) = bind_local().await;
     let mut cfg = Config::new();
     cfg.self_base = base.clone();
     let state = Arc::new(AppState::new(store.clone(), hub.hub.clone(), cfg));
@@ -358,6 +383,28 @@ async fn live(tag: &str, mk: impl FnOnce(String) -> Box<dyn Driver>) {
     live_with(tag, mk, "Call the list_all_product_types tool exactly once, then reply with the word done. Do not call any other tool.", 1).await
 }
 
+/// A context for `branch` whose team has no agents.
+fn agentless_ctx(branch: &str, world: &Arc<World>) -> Arc<BranchCtx> {
+    let team = Team {
+        id: "t".into(),
+        name: "T".into(),
+        agents: vec![],
+    };
+    Arc::new(BranchCtx::new(
+        branch.into(),
+        world.clone(),
+        team,
+        "task".into(),
+    ))
+}
+
+fn print_outcome(r: &impl std::fmt::Debug, evs: &[Event]) {
+    println!("RESULT: {r:?}");
+    for e in evs {
+        println!("EVENT: {:?} {:?} {}", e.kind, e.agent, e.payload);
+    }
+}
+
 async fn live_with(
     tag: &str,
     mk: impl FnOnce(String) -> Box<dyn Driver>,
@@ -366,45 +413,27 @@ async fn live_with(
 ) {
     let (store, _clean, branch, world, base, _hub) = live_setup(tag).await;
     let driver = mk(base);
-    let team = Team {
-        id: "t".into(),
-        name: "T".into(),
-        agents: vec![],
-    };
-    let ctx = Arc::new(BranchCtx::new(
-        branch.clone(),
-        world.clone(),
-        team,
-        "task".into(),
-    ));
+    let ctx = agentless_ctx(&branch, &world);
+    let spec = agent_spec(
+        "triage",
+        AgentKind::ClaudeCode,
+        "You are a test agent. Use the retail MCP tools.",
+    );
     let r = driver
         .run(AgentRun {
             branch: ctx,
-            spec: AgentSpec {
-                id: "triage".into(),
-                name: "t".into(),
-                kind: AgentKind::ClaudeCode,
-                model: None,
-                prompt: "You are a test agent. Use the retail MCP tools.".into(),
-                provider: None,
-            },
+            spec,
             input: input.into(),
             resume: None,
         })
         .await;
-    println!("RESULT: {r:?}");
     let evs = store.events(&branch).await.unwrap();
-    for e in &evs {
-        println!("EVENT: {:?} {:?} {}", e.kind, e.agent, e.payload);
-    }
+    print_outcome(&r, &evs);
     drop(store);
     world.stop().await;
     assert!(r.ok, "{:?}", r.error);
-    let calls: Vec<_> = evs
-        .iter()
-        .filter(|e| e.kind == EventKind::ToolCall)
-        .collect();
-    assert_eq!(calls.len(), want_calls, "unexpected ToolCall count");
+    let calls = evs.iter().filter(|e| e.kind == EventKind::ToolCall);
+    assert_eq!(calls.count(), want_calls, "unexpected ToolCall count");
 }
 
 #[test]
@@ -421,59 +450,63 @@ fn live_codex_lists_tools() {
 
 const PROBE: &str = "Do two things and report raw results. (1) List the exact name of EVERY tool, MCP server and plugin you can use, one per line, prefixed 'TOOL:'. (2) Run this shell command and print its raw output prefixed 'NET:': bash -c 'timeout 3 bash -c \"echo > /dev/tcp/127.0.0.1/5544\" && echo OPEN || echo CLOSED'. Call no retail tool.";
 
+/// Runs the probe prompt through the Codex command against the branch's MCP endpoint and
+/// returns the agent's last message.
+async fn codex_probe_answer(base: &str, branch: &str) -> String {
+    let sp = agent_spec("triage", AgentKind::Codex, "");
+    let wd = std::env::temp_dir().join(format!("probe-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&wd).unwrap();
+    let endpoint = mcp_named("retail", &format!("{base}/mcp/{branch}/triage"));
+    let mut cmd = codex::command(&sp, &endpoint, &wd, PROBE);
+    let out = tokio::task::spawn_blocking(move || {
+        cmd.stdin(std::process::Stdio::null()).output().unwrap()
+    })
+    .await
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&wd);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["item"]["type"] == "agent_message")
+        .filter_map(|v| v["item"]["text"].as_str().map(String::from))
+        .next_back()
+        .unwrap_or_default()
+}
+
+/// The answer lists only the retail tools and says the database port is unreachable.
+fn assert_isolated(answer: &str) {
+    for bad in [
+        "codex_apps",
+        "node_repl",
+        "web__run",
+        "browser",
+        "figma",
+        "runpod",
+        "image_gen",
+        "computer",
+    ] {
+        assert!(
+            !answer.contains(bad),
+            "unexpected tool/server `{bad}` visible"
+        );
+    }
+    assert!(answer.contains("mcp__retail__list_all_product_types"));
+    assert!(
+        answer.contains("CLOSED") && !answer.contains("OPEN\n"),
+        "db port reachable from sandbox?"
+    );
+}
+
 #[test]
 #[ignore]
 fn live_codex_isolation_probe() {
     run(async {
         let (store, _clean, branch, world, base, _hub) = live_setup("probe").await;
-        let sp = AgentSpec {
-            id: "triage".into(),
-            name: "t".into(),
-            kind: AgentKind::Codex,
-            model: None,
-            prompt: "".into(),
-            provider: None,
-        };
-        let wd = std::env::temp_dir().join(format!("probe-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&wd).unwrap();
-        let endpoint = mcp_named("retail", &format!("{base}/mcp/{branch}/triage"));
-        let mut cmd = codex::command(&sp, &endpoint, &wd, PROBE);
-        let out = tokio::task::spawn_blocking(move || {
-            cmd.stdin(std::process::Stdio::null()).output().unwrap()
-        })
-        .await
-        .unwrap();
-        let _ = std::fs::remove_dir_all(&wd);
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let answer = stdout
-            .lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|v| v["item"]["type"] == "agent_message")
-            .filter_map(|v| v["item"]["text"].as_str().map(String::from))
-            .last()
-            .unwrap_or_default();
+        let answer = codex_probe_answer(&base, &branch).await;
         println!("ANSWER:\n{answer}");
         drop(store);
         world.stop().await;
-        for bad in [
-            "codex_apps",
-            "node_repl",
-            "web__run",
-            "browser",
-            "figma",
-            "runpod",
-            "image_gen",
-            "computer",
-        ] {
-            assert!(
-                !answer.contains(bad),
-                "unexpected tool/server `{bad}` visible"
-            );
-        }
-        assert!(answer.contains("mcp__retail__list_all_product_types"));
-        assert!(
-            answer.contains("CLOSED") && !answer.contains("OPEN\n"),
-            "db port reachable from sandbox?"
-        );
+        assert_isolated(&answer);
     })
 }

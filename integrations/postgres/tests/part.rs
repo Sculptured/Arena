@@ -100,6 +100,47 @@ async fn save(p: &Postgres, inst: &str, save: &str) -> Saved {
     .unwrap()
 }
 
+fn instance(name: &str) -> Target {
+    Target::Instance {
+        instance: name.into(),
+    }
+}
+
+fn saved(name: &str) -> Target {
+    Target::Save { save: name.into() }
+}
+
+/// The documents `keys` name in `target` (every document when `keys` is empty).
+async fn docs_of(p: &Postgres, target: Target, keys: &[&str]) -> serde_json::Map<String, Value> {
+    let keys = keys.iter().map(ToString::to_string).collect();
+    p.inspect(InspectParams { target, keys })
+        .await
+        .unwrap()
+        .docs
+}
+
+async fn differing(p: &Postgres, a: Target, b: Target) -> Vec<String> {
+    p.diff(DiffParams { a, b }).await.unwrap().differing
+}
+
+/// Stops `inst`, drops `save` and checks the save can no longer be inspected.
+async fn stop_and_drop_save(p: &Postgres, inst: &str, save: &str) {
+    p.stop(IdParams {
+        instance: inst.into(),
+    })
+    .await
+    .unwrap();
+    p.drop_save(SaveId { save: save.into() }).await.unwrap();
+    let e = p
+        .inspect(InspectParams {
+            target: saved(save),
+            keys: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, -32002);
+}
+
 #[tokio::test]
 async fn save_restore_roundtrip() {
     let ns = ns();
@@ -134,20 +175,7 @@ async fn save_restore_roundtrip() {
         assert_eq!(d.restore.exact, ExactKind::Save);
         assert!(!d.restore.approximate);
         assert!(d.fingerprint["server_version"].is_string());
-        p.stop(IdParams {
-            instance: "a".into(),
-        })
-        .await
-        .unwrap();
-        p.drop_save(SaveId { save: "s1".into() }).await.unwrap();
-        let e = p
-            .inspect(InspectParams {
-                target: Target::Save { save: "s1".into() },
-                keys: vec![],
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, -32002);
+        stop_and_drop_save(&p, "a", "s1").await;
     })
     .await;
 }
@@ -162,49 +190,34 @@ async fn diff_reports_changed_row() {
         exec(&p, "a", "INSERT INTO t(id, v) VALUES (1, 'x'), (2, 'y')").await;
         save(&p, "a", "s1").await;
         exec(&p, "a", "UPDATE t SET v = 'z' WHERE id = 1").await;
-        let d = p
-            .diff(DiffParams {
-                a: Target::Instance {
-                    instance: "a".into(),
-                },
-                b: Target::Save { save: "s1".into() },
-            })
-            .await
-            .unwrap();
-        assert_eq!(d.differing, vec!["t/1".to_string()]);
-        let same = p
-            .diff(DiffParams {
-                a: Target::Save { save: "s1".into() },
-                b: Target::Save { save: "s1".into() },
-            })
-            .await
-            .unwrap();
-        assert!(same.differing.is_empty());
-        let docs = p
-            .inspect(InspectParams {
-                target: Target::Instance {
-                    instance: "a".into(),
-                },
-                keys: vec!["t/1".into(), "t/9".into(), "nope/1".into()],
-            })
-            .await
-            .unwrap()
-            .docs;
+        let d = differing(&p, instance("a"), saved("s1")).await;
+        assert_eq!(d, vec!["t/1".to_string()]);
+        assert!(differing(&p, saved("s1"), saved("s1")).await.is_empty());
+        let docs = docs_of(&p, instance("a"), &["t/1", "t/9", "nope/1"]).await;
         assert_eq!(docs["t/1"], json!({"id": 1, "v": "z"}));
         assert_eq!(docs["t/9"], Value::Null);
         assert_eq!(docs["nope/1"], Value::Null);
-        let all = p
-            .inspect(InspectParams {
-                target: Target::Save { save: "s1".into() },
-                keys: vec![],
-            })
-            .await
-            .unwrap()
-            .docs;
+        let all = docs_of(&p, saved("s1"), &[]).await;
         assert_eq!(all.len(), 2);
         assert_eq!(all["t/2"], json!({"id": 2, "v": "y"}));
     })
     .await;
+}
+
+/// Creates a save database named `name` holding one row, as an older arena would have.
+async fn seed_legacy_save(name: &str) {
+    let t = Templates::new(&url());
+    t.drop(name).await.unwrap();
+    t.create_empty(name).await.unwrap();
+    t.with_db(name, async |c| {
+        c.batch_execute(
+            "CREATE TABLE t(id int primary key, v text); INSERT INTO t VALUES (7, 'old')",
+        )
+        .await?;
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -215,42 +228,13 @@ async fn legacy_snap_name_accepted() {
     let extra = vec![name.clone(), format!("pi_t5_{}_li", std::process::id())];
     let nm = name.clone();
     with_cleanup("none_", &extra, move || async move {
-        let t = Templates::new(&url());
-        t.drop(&nm).await.unwrap();
-        t.create_empty(&nm).await.unwrap();
-        t.with_db(&nm, async |c| {
-            c.batch_execute(
-                "CREATE TABLE t(id int primary key, v text); INSERT INTO t VALUES (7, 'old')",
-            )
-            .await?;
-            Ok(())
-        })
-        .await
-        .unwrap();
+        seed_legacy_save(&nm).await;
         let p = Postgres::new(&url(), "").with_sql_tools();
-        let docs = p
-            .inspect(InspectParams {
-                target: Target::Save { save: nm.clone() },
-                keys: vec!["t/7".into()],
-            })
-            .await
-            .unwrap()
-            .docs;
+        let docs = docs_of(&p, saved(&nm), &["t/7"]).await;
         assert_eq!(docs["t/7"], json!({"id": 7, "v": "old"}));
         // and a new instance can start from it
         let inst = format!("t5_{}_li", std::process::id());
-        p.start(StartParams {
-            instance: inst.clone(),
-            config: json!({}),
-            seed: 1,
-            clock_ms: 0,
-            from: Some(FromSave {
-                save: nm.clone(),
-                mode: Mode::Exact,
-            }),
-        })
-        .await
-        .unwrap();
+        p.start(start(&inst, json!({}), Some(&nm))).await.unwrap();
         let r = query(&p, &inst, "SELECT v FROM t").await;
         assert_eq!(r.result, Some(json!([{"v": "old"}])));
         p.stop(IdParams {
@@ -319,29 +303,34 @@ fn build_all() {
     });
 }
 
+/// Runs `arena-part-check` against the postgres package in the background and returns its output.
+async fn run_part_check(cfgfile: PathBuf, saves: PathBuf, ns: String) -> std::process::Output {
+    let a = arena();
+    tokio::task::spawn_blocking(move || {
+        Command::new(a.join("core/target/debug/arena-part-check"))
+            .arg(a.join("integrations/postgres/check"))
+            .arg("--config")
+            .arg(&cfgfile)
+            .env("ARENA_BIN_DIR", a.join("core/target/debug"))
+            .env("ARENA_SAVES", &saves)
+            .env("ARENA_PG_URL", format!("{}?arena_ns={}", url(), ns))
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn conformance_check_passes() {
     build_all();
     let ns = ns();
-    let a = arena();
     let cfgfile = std::env::temp_dir().join(format!("{}pgcheck.json", ns));
     std::fs::write(&cfgfile, cfg().to_string()).unwrap();
     let saves = std::env::temp_dir().join(format!("{}saves", ns));
     let (cf, sv, ns2) = (cfgfile.clone(), saves.clone(), ns.clone());
     with_cleanup(&ns, &[], move || async move {
-        let out = tokio::task::spawn_blocking(move || {
-            Command::new(a.join("core/target/debug/arena-part-check"))
-                .arg(a.join("integrations/postgres/check"))
-                .arg("--config")
-                .arg(&cf)
-                .env("ARENA_BIN_DIR", a.join("core/target/debug"))
-                .env("ARENA_SAVES", &sv)
-                .env("ARENA_PG_URL", format!("{}?arena_ns={}", url(), ns2))
-                .output()
-                .unwrap()
-        })
-        .await
-        .unwrap();
+        let out = run_part_check(cf, sv, ns2).await;
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         assert!(
             out.status.success() && stdout.contains("\"passed\": true"),

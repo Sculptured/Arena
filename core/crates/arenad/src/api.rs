@@ -863,15 +863,34 @@ mod tests {
         (st, ct, String::from_utf8_lossy(&body).to_string())
     }
 
-    #[tokio::test]
-    async fn spa_fallback_is_scoped() {
+    /// A scratch folder with a built UI (`dist/`) and a secret beside it; returns the folder.
+    fn ui_folder() -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("arena_ui_{}", uuid::Uuid::new_v4().simple()));
         let dist = root.join("dist");
         std::fs::create_dir_all(dist.join("assets")).unwrap();
         std::fs::write(dist.join("index.html"), "INDEX").unwrap();
         std::fs::write(dist.join("assets/a.js"), "JS").unwrap();
         std::fs::write(root.join("secret.txt"), "SECRET").unwrap();
-        let app = with_ui(Router::new(), dist);
+        root
+    }
+
+    /// Paths that climb out of the UI folder never serve the secret.
+    async fn assert_no_path_escape(app: &Router) {
+        for p in [
+            "/../secret.txt",
+            "/%2e%2e/secret.txt",
+            "/assets/../../secret.txt",
+            "/%2e%2e%2fsecret.txt",
+        ] {
+            let (_, _, body) = call(app, "GET", p).await;
+            assert!(!body.contains("SECRET"), "{p} escaped");
+        }
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_is_scoped() {
+        let root = ui_folder();
+        let app = with_ui(Router::new(), root.join("dist"));
 
         assert_eq!(call(&app, "GET", "/").await.2, "INDEX");
         assert_eq!(call(&app, "GET", "/runs/x").await.2, "INDEX");
@@ -894,15 +913,7 @@ mod tests {
         );
         assert_eq!(call(&app, "GET", "/api/x").await.0, StatusCode::NOT_FOUND);
         assert_eq!(call(&app, "POST", "/runs/x").await.0, StatusCode::NOT_FOUND);
-        for p in [
-            "/../secret.txt",
-            "/%2e%2e/secret.txt",
-            "/assets/../../secret.txt",
-            "/%2e%2e%2fsecret.txt",
-        ] {
-            let (_, _, body) = call(&app, "GET", p).await;
-            assert!(!body.contains("SECRET"), "{p} escaped");
-        }
+        assert_no_path_escape(&app).await;
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -49,6 +49,15 @@ struct Fx {
     _clean: Cleanup,
 }
 
+/// Config that sends model calls to the fake `upstream` and names the arena's own address.
+fn open_config(upstream: &FakeUpstream, self_base: String) -> Config {
+    let mut config = Config::new();
+    config.providers = ProviderConfig::with_upstream(&upstream.base_url);
+    config.providers.openrouter.key = Some(Secret::new("sk-secret"));
+    config.self_base = self_base;
+    config
+}
+
 async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx {
     let hub = TestHub::new(&[]);
     let (store, clean) = app_support::meta_store("open", tag).await;
@@ -65,10 +74,7 @@ async fn setup(tag: &str, agents: Vec<AgentSpec>, upstream: &FakeUpstream) -> Fx
     let world = hub.start_world("retail", &branch).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let mut config = Config::new();
-    config.providers = ProviderConfig::with_upstream(&upstream.base_url);
-    config.providers.openrouter.key = Some(Secret::new("sk-secret"));
-    config.self_base = format!("http://127.0.0.1:{port}");
+    let config = open_config(upstream, format!("http://127.0.0.1:{port}"));
     let state = Arc::new(AppState::new(store, hub.hub.clone(), config));
     let ctx = Arc::new(BranchCtx::new(branch.clone(), world, team, "task".into()));
     state.live.write().unwrap().insert(branch, ctx.clone());
@@ -103,6 +109,20 @@ fn address_args() -> Value {
         "address2": "", "city": "New York", "state": "NY", "country": "USA", "zip": "10001"})
 }
 
+/// The last message of a recorded upstream request.
+fn last_message(req: &Value) -> Value {
+    req["messages"].as_array().unwrap().last().unwrap().clone()
+}
+
+/// Whether the request offers the tool `name`.
+fn offers_tool(req: &Value, name: &str) -> bool {
+    req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["function"]["name"] == name)
+}
+
 fn driver(fx: &Fx) -> OpenDriver {
     OpenDriver::new(fx.state.clone())
 }
@@ -127,19 +147,70 @@ async fn kinds(fx: &Fx) -> Vec<EventKind> {
         .collect()
 }
 
+/// The first model call of the scripted run, as recorded: local provider, no charge, the solo
+/// agent's prompt, the retail tools but no handoff. Returns its payload.
+fn assert_first_model_call(ev: &Event) -> ModelCallPayload {
+    let mc: ModelCallPayload = serde_json::from_value(ev.payload.clone()).unwrap();
+    assert_eq!(mc.cost_usd, Some(0.0));
+    assert_eq!(mc.cost_source.as_deref(), Some("local (no API charge)"));
+    assert_eq!(mc.provider.as_deref(), Some("local:custom"));
+    assert_eq!(mc.provider_response, None);
+    assert_eq!(mc.request["model"], "fake/model");
+    assert_eq!(
+        mc.request["messages"][0],
+        json!({"role": "system", "content": "You are the solo agent."})
+    );
+    assert_eq!(mc.request["messages"][1]["role"], "user");
+    assert!(offers_tool(&mc.request, "get_order_details"));
+    assert!(!offers_tool(&mc.request, "handoff"));
+    assert_eq!(
+        mc.response["choices"][0]["message"]["tool_calls"][0]["id"],
+        "c1"
+    );
+    assert_eq!(ev.agent.as_deref(), Some("solo"));
+    mc
+}
+
+/// The upstream saw exactly what was recorded, and the first tool result went back.
+fn assert_upstream_saw_recorded(up: &FakeUpstream, mc: &ModelCallPayload) {
+    let reqs = up.requests();
+    assert_eq!(reqs.len(), 3);
+    assert_eq!(reqs[0], mc.request);
+    assert!(up.auth_headers().iter().all(Option::is_none));
+    let last = last_message(&reqs[1]);
+    assert_eq!(last["role"], "tool");
+    assert_eq!(last["tool_call_id"], "c1");
+}
+
+/// A read, a write and a final answer.
+async fn scripted_upstream() -> FakeUpstream {
+    FakeUpstream::start(vec![
+        tool_msg(vec![(
+            "c1",
+            "get_order_details",
+            json!({"order_id": "#W0000000"}),
+        )]),
+        tool_msg(vec![("c2", "modify_user_address", address_args())]),
+        text_msg("All done."),
+    ])
+    .await
+}
+
+/// The token totals of the scripted run; the upstream override is the local provider
+/// `local:custom`, so no API charge.
+fn assert_local_cost(r: &arenad::agents::AgentResult) {
+    assert_eq!(
+        r.tokens,
+        json!({"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45})
+    );
+    assert_eq!(r.cost_usd, Some(0.0));
+    assert_eq!(r.cost_source.as_deref(), Some("local (no API charge)"));
+}
+
 #[test]
 fn open_agent_runs_scripted_tools_and_records_model_calls() {
     run(async {
-        let up = FakeUpstream::start(vec![
-            tool_msg(vec![(
-                "c1",
-                "get_order_details",
-                json!({"order_id": "#W0000000"}),
-            )]),
-            tool_msg(vec![("c2", "modify_user_address", address_args())]),
-            text_msg("All done."),
-        ])
-        .await;
+        let up = scripted_upstream().await;
         let fx = setup(
             "scripted",
             vec![agent("solo", "You are the solo agent.")],
@@ -149,13 +220,7 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
         let d: Arc<dyn Driver> = Arc::new(driver(&fx));
         let r = d.run(agent_run(&fx, 0, None)).await;
         assert!(r.ok, "{:?}", r.error);
-        assert_eq!(
-            r.tokens,
-            json!({"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45})
-        );
-        // The upstream override is the local provider `local:custom`: no API charge.
-        assert_eq!(r.cost_usd, Some(0.0));
-        assert_eq!(r.cost_source.as_deref(), Some("local (no API charge)"));
+        assert_local_cost(&r);
         assert_eq!(
             kinds(&fx).await,
             vec![
@@ -167,45 +232,8 @@ fn open_agent_runs_scripted_tools_and_records_model_calls() {
             ]
         );
         let evs = fx.state.store.events(&fx.ctx.branch_id).await.unwrap();
-        let mc: ModelCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
-        assert_eq!(mc.cost_usd, Some(0.0));
-        assert_eq!(mc.cost_source.as_deref(), Some("local (no API charge)"));
-        assert_eq!(mc.provider.as_deref(), Some("local:custom"));
-        assert_eq!(mc.provider_response, None);
-        assert_eq!(mc.request["model"], "fake/model");
-        assert_eq!(
-            mc.request["messages"][0],
-            json!({"role": "system", "content": "You are the solo agent."})
-        );
-        assert_eq!(mc.request["messages"][1]["role"], "user");
-        assert!(mc.request["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["function"]["name"] == "get_order_details"));
-        assert!(!mc.request["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["function"]["name"] == "handoff"));
-        assert_eq!(
-            mc.response["choices"][0]["message"]["tool_calls"][0]["id"],
-            "c1"
-        );
-        assert_eq!(evs[0].agent.as_deref(), Some("solo"));
-        // The upstream saw exactly what was recorded, and the tool result went back.
-        let reqs = up.requests();
-        assert_eq!(reqs.len(), 3);
-        assert_eq!(reqs[0], mc.request);
-        assert!(up.auth_headers().iter().all(Option::is_none));
-        let last = reqs[1]["messages"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()
-            .clone();
-        assert_eq!(last["role"], "tool");
-        assert_eq!(last["tool_call_id"], "c1");
+        let mc = assert_first_model_call(&evs[0]);
+        assert_upstream_saw_recorded(&up, &mc);
         let tc: ToolCallPayload = serde_json::from_value(evs[3].payload.clone()).unwrap();
         assert!(tc.snapshot.is_some());
         assert_eq!(tc.tool_call_id.as_deref(), Some("c2"));
@@ -252,29 +280,53 @@ fn forty_call_cap_stops_the_loop() {
     })
 }
 
+/// The agent hands off at once.
+async fn handoff_upstream() -> FakeUpstream {
+    FakeUpstream::start(vec![
+        tool_msg(vec![(
+            "h1",
+            "handoff",
+            json!({"note": "customer wants a new address"}),
+        )]),
+        text_msg("unused"),
+    ])
+    .await
+}
+
+/// A recorded conversation under a system prompt the fork replaces.
+fn old_history() -> Vec<Value> {
+    vec![
+        json!({"role": "system", "content": "OLD PROMPT"}),
+        json!({"role": "user", "content": "earlier input"}),
+    ]
+}
+
+/// The one upstream request carries the new system prompt over the resumed history, offers the
+/// handoff tool, and has no OpenRouter usage flag (it goes to OpenRouter alone).
+fn assert_resumed_request(reqs: &[Value]) {
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(
+        reqs[0]["messages"][0],
+        json!({"role": "system", "content": "NEW PROMPT"})
+    );
+    assert_eq!(reqs[0]["messages"][1]["content"], "earlier input");
+    assert!(offers_tool(&reqs[0], "handoff"));
+    assert_eq!(reqs[0].get("usage"), None);
+}
+
 #[test]
 fn handoff_stops_loop_and_resume_replaces_system_prompt() {
     run(async {
-        let up = FakeUpstream::start(vec![
-            tool_msg(vec![(
-                "h1",
-                "handoff",
-                json!({"note": "customer wants a new address"}),
-            )]),
-            text_msg("unused"),
-        ])
-        .await;
+        let up = handoff_upstream().await;
         let fx = setup(
             "handoff",
             vec![agent("triage", "NEW PROMPT"), agent("resolver", "r")],
             &up,
         )
         .await;
-        let resume = vec![
-            json!({"role": "system", "content": "OLD PROMPT"}),
-            json!({"role": "user", "content": "earlier input"}),
-        ];
-        let r = driver(&fx).run(agent_run(&fx, 0, Some(resume))).await;
+        let r = driver(&fx)
+            .run(agent_run(&fx, 0, Some(old_history())))
+            .await;
         assert!(r.ok, "{:?}", r.error);
         assert_eq!(
             kinds(&fx).await,
@@ -284,20 +336,7 @@ fn handoff_stops_loop_and_resume_replaces_system_prompt() {
             fx.ctx.handoff_note("triage").as_deref(),
             Some("customer wants a new address")
         );
-        let reqs = up.requests();
-        assert_eq!(reqs.len(), 1);
-        assert_eq!(
-            reqs[0]["messages"][0],
-            json!({"role": "system", "content": "NEW PROMPT"})
-        );
-        assert_eq!(reqs[0]["messages"][1]["content"], "earlier input");
-        assert!(reqs[0]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["function"]["name"] == "handoff"));
-        // OpenRouter's usage flag goes to OpenRouter alone.
-        assert_eq!(reqs[0].get("usage"), None);
+        assert_resumed_request(&up.requests());
         teardown(fx).await;
     })
 }
@@ -316,12 +355,7 @@ fn malformed_tool_arguments_are_not_run() {
             vec![EventKind::ModelCall, EventKind::ModelCall]
         );
         let reqs = up.requests();
-        let last = reqs[1]["messages"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()
-            .clone();
+        let last = last_message(&reqs[1]);
         assert_eq!(last["tool_call_id"], "b1");
         assert!(last["content"].as_str().unwrap().contains("not valid JSON"));
         teardown(fx).await;

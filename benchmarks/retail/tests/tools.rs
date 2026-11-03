@@ -56,40 +56,46 @@ async fn call(url: &str, name: &str, args: Value) -> arena_part::proto::BenchToo
         .unwrap()
 }
 
+/// Truncates the database and reloads the `base` dump into it.
+async fn reset_to(url: &str, base: &Value) {
+    with_conn(url, async |c| {
+        c.batch_execute("TRUNCATE users, orders, products").await?;
+        for t in ["users", "orders", "products"] {
+            c.execute(
+                &format!("INSERT INTO {t} (id, doc) SELECT key, value FROM jsonb_each($1::jsonb)"),
+                &[&base[t]],
+            )
+            .await?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// Runs the benchmark's gold actions for `task` against the database at `url`.
+async fn run_gold(url: &str, task: &str) {
+    let gold = retail()
+        .gold_actions(GoldParams { task: task.into() })
+        .await
+        .unwrap();
+    for a in gold.actions {
+        call(url, &a.name, a.args).await;
+    }
+}
+
 #[tokio::test]
 async fn gold_changes_match_for_all_68_tasks() {
     let fix = fixture();
     assert_eq!(fix.len(), 68);
     let db = TestDb::seeded("gold").await;
     let base = with_conn(&db.url, async |c| dump(c).await).await.unwrap();
-    let r = retail();
     let mut n = 0;
     for task in tasks().iter().filter(|t| eligible(t)) {
         let id = task["id"].as_str().unwrap();
-        // Reset to base between tasks.
-        with_conn(&db.url, async |c| {
-            c.batch_execute("TRUNCATE users, orders, products").await?;
-            for t in ["users", "orders", "products"] {
-                c.execute(
-                    &format!(
-                        "INSERT INTO {t} (id, doc) SELECT key, value FROM jsonb_each($1::jsonb)"
-                    ),
-                    &[&base[t]],
-                )
-                .await?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
+        reset_to(&db.url, &base).await;
         // The gold actions come from the benchmark and run through its call_tool.
-        let gold = r
-            .gold_actions(GoldParams { task: id.into() })
-            .await
-            .unwrap();
-        for a in gold.actions {
-            call(&db.url, &a.name, a.args).await;
-        }
+        run_gold(&db.url, id).await;
         let got = with_conn(&db.url, async |c| dump(c).await).await.unwrap();
         assert_eq!(
             Value::Object(changed_rows(&base, &got)),

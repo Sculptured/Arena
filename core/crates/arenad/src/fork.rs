@@ -920,9 +920,8 @@ mod tests {
         assert_eq!(p.restore, snap("snap_b"));
     }
 
-    #[test]
-    fn fork_of_a_fork_with_two_agent_starts() {
-        // Branch forked at seq 11 (resume): prefix 1..=10, then the resumed resolver.
+    /// The events of a branch forked at seq 11 (resume): prefix 1..=10, then the resumed resolver.
+    fn forked_events() -> Vec<Event> {
         let mut evs: Vec<Event> = events().into_iter().take(10).collect();
         evs.extend([
             start(11, "resolver"),
@@ -937,6 +936,12 @@ mod tests {
             ),
             ev(16, None, EventKind::Check, json!({"passed": true})),
         ]);
+        evs
+    }
+
+    #[test]
+    fn fork_of_a_fork_with_two_agent_starts() {
+        let evs = forked_events();
         let t = team(AgentKind::Open);
         let p = plan_fork(&evs, &t, 13, &no_changes()).unwrap();
         assert_eq!(
@@ -992,14 +997,31 @@ mod tests {
             p.reason.as_deref(),
             Some("a tool call is redone from the model call that chose it")
         );
-        // AgentEnd and Check: from the agent's last model call.
-        let p = plan_fork(&events(), &t, 14, &no_changes()).unwrap();
+        assert_end_steps_map_to_last_model_call(&t);
+    }
+
+    /// AgentEnd and Check: from the agent's last model call.
+    fn assert_end_steps_map_to_last_model_call(t: &Team) {
+        let p = plan_fork(&events(), t, 14, &no_changes()).unwrap();
         assert_eq!((p.start_seq, p.moved_from), (13, Some(14)));
-        let p = plan_fork(&events(), &t, 15, &no_changes()).unwrap();
+        let p = plan_fork(&events(), t, 15, &no_changes()).unwrap();
         assert_eq!(
             (p.start_seq, p.agent_index, p.restore),
             (13, 1, snap("snap_b"))
         );
+    }
+
+    /// Forking at `at` with the change `c` restarts the resolver from its first start.
+    fn assert_moves_back_to_resolver_start(t: &Team, c: &HashMap<String, Change>, at: i64) {
+        let p = plan_fork(&events(), t, at, c).unwrap();
+        assert_eq!(
+            (p.start_seq, p.moved_from, p.agent_index),
+            (8, Some(at), 1),
+            "at {at}"
+        );
+        assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
+        assert_eq!((p.resume, p.restore), (None, base()));
+        assert_eq!(p.notes, vec!["N1".to_string()]);
     }
 
     #[test]
@@ -1014,15 +1036,7 @@ mod tests {
         );
         // At the Check (after the resolver's AgentEnd) and at its AgentEnd itself.
         for at in [15, 14] {
-            let p = plan_fork(&events(), &t, at, &c).unwrap();
-            assert_eq!(
-                (p.start_seq, p.moved_from, p.agent_index),
-                (8, Some(at), 1),
-                "at {at}"
-            );
-            assert_eq!(p.reason.as_deref(), Some(REASON_EARLIER));
-            assert_eq!((p.resume, p.restore), (None, base()));
-            assert_eq!(p.notes, vec!["N1".to_string()]);
+            assert_moves_back_to_resolver_start(&t, &c, at);
         }
         // Changes to both: the earliest finished one wins.
         let mut both = c.clone();
@@ -1046,51 +1060,31 @@ mod tests {
         t.agents[0].model = Some("old/model".into());
         let ap =
             |c: Change| apply_changes(&t, &change(&t.agents[0].id.clone(), c)).agents[0].clone();
-        // A mode change resets the model.
-        let a = ap(Change {
-            kind: Some(AgentKind::Codex),
+        let to = |kind: AgentKind, model: Option<&str>| Change {
+            kind: Some(kind),
+            model: model.map(Into::into),
             ..Default::default()
-        });
+        };
+        // A mode change resets the model.
+        let a = ap(to(AgentKind::Codex, None));
         assert_eq!((a.kind, a.model), (AgentKind::Codex, None));
         // An explicit model with the mode change is kept.
-        let a = ap(Change {
-            kind: Some(AgentKind::Codex),
-            model: Some("gpt-x".into()),
-            ..Default::default()
-        });
+        let a = ap(to(AgentKind::Codex, Some("gpt-x")));
         assert_eq!(a.model.as_deref(), Some("gpt-x"));
         // Same kind keeps the model.
-        let a = ap(Change {
-            kind: Some(AgentKind::Open),
-            ..Default::default()
-        });
+        let a = ap(to(AgentKind::Open, None));
         assert_eq!(a.model.as_deref(), Some("old/model"));
         // Empty or blank text clears.
-        assert_eq!(
+        let model = |m: &str| {
             ap(Change {
-                model: Some("".into()),
-                ..Default::default()
-            })
-            .model,
-            None
-        );
-        assert_eq!(
-            ap(Change {
-                model: Some("  ".into()),
-                ..Default::default()
-            })
-            .model,
-            None
-        );
-        assert_eq!(
-            ap(Change {
-                model: Some("new".into()),
+                model: Some(m.into()),
                 ..Default::default()
             })
             .model
-            .as_deref(),
-            Some("new")
-        );
+        };
+        assert_eq!(model(""), None);
+        assert_eq!(model("  "), None);
+        assert_eq!(model("new").as_deref(), Some("new"));
     }
 
     #[test]

@@ -330,6 +330,26 @@ fn addr_for(user: &str, line: &str) -> Value {
            "state": "NY", "country": "USA", "zip": "10001"})
 }
 
+/// After each write event the event's save holds exactly the address lines written so far.
+async fn assert_saves_follow_events(fx: &Fx, evs: &[Event], [u1, u2]: [&str; 2]) {
+    let mut seen = vec![];
+    for (i, e) in evs.iter().enumerate() {
+        let p: ToolCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
+        let line = p.args["address1"].as_str().unwrap().to_string();
+        let save = p.saves.expect("saves")["retail"].clone();
+        let docs = fx
+            .hub
+            .inspect_save(&save, &[&format!("users/{u1}"), &format!("users/{u2}")])
+            .await
+            .to_string();
+        seen.push(line.clone());
+        for l in ["1 Alpha Way", "2 Beta Way"] {
+            let expected = seen.iter().any(|s| s == l);
+            assert_eq!(docs.contains(l), expected, "event {i} save, line {l}");
+        }
+    }
+}
+
 #[test]
 fn parallel_writes_snapshot_in_order() {
     run(async {
@@ -354,22 +374,7 @@ fn parallel_writes_snapshot_in_order() {
         let evs = fx.store.events(&fx.branch).await.unwrap();
         assert_eq!(evs.len(), 2);
         assert!(evs[0].seq < evs[1].seq);
-        let mut seen = vec![];
-        for (i, e) in evs.iter().enumerate() {
-            let p: ToolCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
-            let line = p.args["address1"].as_str().unwrap().to_string();
-            let save = p.saves.expect("saves")["retail"].clone();
-            let docs = fx
-                .hub
-                .inspect_save(&save, &[&format!("users/{u1}"), &format!("users/{u2}")])
-                .await
-                .to_string();
-            seen.push(line.clone());
-            for l in ["1 Alpha Way", "2 Beta Way"] {
-                let expected = seen.iter().any(|s| s == l);
-                assert_eq!(docs.contains(l), expected, "event {i} save, line {l}");
-            }
-        }
+        assert_saves_follow_events(&fx, &evs, [u1, u2]).await;
         teardown(fx).await;
     })
 }

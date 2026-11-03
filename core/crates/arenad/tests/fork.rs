@@ -204,6 +204,33 @@ fn assert_restored_from_save(first: &Branch, child: &Branch) {
     assert_eq!(child.restored, [retail]);
 }
 
+/// The events before the fork point at `at`, as comparable tuples: a child's timeline starts
+/// with its parent's.
+fn events_before(evs: &[Event], at: i64) -> Vec<(i64, EventKind, Value)> {
+    evs.iter()
+        .filter(|e| e.seq < at)
+        .map(|e| (e.seq, e.kind, e.payload.clone()))
+        .collect()
+}
+
+/// Starts a run of task 27 and waits for it to pass with the exchange made. Returns the
+/// branch id and the finished branch.
+async fn passed_parent(fx: &Fx) -> (String, Branch) {
+    let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
+    let b = finished(fx, &parent).await;
+    assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
+    assert_eq!(order_status_in(fx, &parent).await, "exchange requested");
+    (parent, b)
+}
+
+/// `c` is a fork of `b` (branch id `parent`) at `at`, in the same run, restored from the save.
+fn assert_child_of(c: &Branch, b: &Branch, parent: &str, at: i64) {
+    assert_eq!(c.parent_id.as_deref(), Some(parent));
+    assert_eq!(c.start_seq, Some(at));
+    assert_eq!(c.run_id, b.run_id);
+    assert_restored_from_save(b, c);
+}
+
 #[test]
 fn fork_sees_world_at_fork_step_not_after() {
     run(async {
@@ -214,10 +241,7 @@ fn fork_sees_world_at_fork_step_not_after() {
         script.extend([read_order("f1"), gold_write(), text_msg("Exchanged again.")]);
         let up = FakeUpstream::start(script).await;
         let fx = setup("world", &up).await;
-        let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-        let b = finished(&fx, &parent).await;
-        assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
-        assert_eq!(order_status_in(&fx, &parent).await, "exchange requested");
+        let (parent, b) = passed_parent(&fx).await;
         let pevs = fx.state.store.events(&parent).await.unwrap();
         let at = model_call_choosing(&pevs, "resolver", "exchange_delivered_order_items");
 
@@ -232,31 +256,16 @@ fn fork_sees_world_at_fork_step_not_after() {
         let c = finished(&fx, &child).await;
         // The exchange only succeeds again because the world was restored to before it.
         assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
-        assert_eq!(c.parent_id.as_deref(), Some(parent.as_str()));
-        assert_eq!(c.start_seq, Some(at));
-        assert_eq!(c.run_id, b.run_id);
-        assert_restored_from_save(&b, &c);
+        assert_child_of(&c, &b, &parent, at);
 
         let cevs = fx.state.store.events(&child).await.unwrap();
-        // The child's timeline starts with the parent's events before the fork point.
-        let prefix: Vec<_> = cevs
-            .iter()
-            .filter(|e| e.seq < at)
-            .map(|e| (e.seq, e.kind, e.payload.clone()))
-            .collect();
-        let pprefix: Vec<_> = pevs
-            .iter()
-            .filter(|e| e.seq < at)
-            .map(|e| (e.seq, e.kind, e.payload.clone()))
-            .collect();
-        assert_eq!(prefix, pprefix);
+        assert_eq!(events_before(&cevs, at), events_before(&pevs, at));
         // The child's first resolver read shows the order as it was before the write.
         let reads = tool_results(&cevs, "get_order_details", at);
         assert_eq!(reads[0]["status"], "delivered", "{}", reads[0]);
         // The resumed model call replays the recorded conversation up to the write.
         let recorded = &pevs.iter().find(|e| e.seq == at).unwrap().payload["request"]["messages"];
-        let reqs = up.requests();
-        assert_eq!(&reqs[6]["messages"], recorded);
+        assert_eq!(&up.requests()[6]["messages"], recorded);
         teardown(fx, &[&parent, &child]).await;
     })
 }
@@ -295,6 +304,32 @@ fn fork_restores_mid_run_snapshot() {
     })
 }
 
+/// Triage was not called again: the fork's two requests (after the first `before`) carry only
+/// the resolver's system prompt, and the resolver starts from the recorded handoff note.
+fn assert_resolver_only_requests(reqs: &[Value], before: usize) {
+    assert_eq!(reqs.len(), before + 2);
+    for r in &reqs[before..] {
+        assert_eq!(system_prompt(r), "You are resolver.");
+    }
+    let input = reqs[before]["messages"][1]["content"].as_str().unwrap();
+    assert!(
+        input.contains("# Handoff note from triage") && input.contains(TRIAGE_NOTE),
+        "{input}"
+    );
+}
+
+/// The child has no new triage events; the recorded handoff is inherited in the prefix.
+async fn assert_handoff_inherited(fx: &Fx, child: &str, at: i64) {
+    let cevs = fx.state.store.events(child).await.unwrap();
+    assert!(cevs
+        .iter()
+        .filter(|e| e.seq >= at)
+        .all(|e| e.agent.as_deref() != Some("triage")));
+    assert!(cevs
+        .iter()
+        .any(|e| e.seq < at && e.kind == EventKind::Handoff && e.payload["note"] == TRIAGE_NOTE));
+}
+
 #[test]
 fn fork_reuses_recorded_handoff() {
     run(async {
@@ -318,29 +353,33 @@ fn fork_reuses_recorded_handoff() {
         let c = finished(&fx, &child).await;
         assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
 
-        // Triage was not called again: no fork request carries triage's system prompt.
-        let reqs = up.requests();
-        assert_eq!(reqs.len(), before + 2);
-        for r in &reqs[before..] {
-            assert_eq!(system_prompt(r), "You are resolver.");
-        }
-        // The resolver started from the recorded handoff note.
-        let input = reqs[before]["messages"][1]["content"].as_str().unwrap();
-        assert!(
-            input.contains("# Handoff note from triage") && input.contains(TRIAGE_NOTE),
-            "{input}"
-        );
-        // No new triage events; the recorded handoff is inherited in the prefix.
-        let cevs = fx.state.store.events(&child).await.unwrap();
-        assert!(cevs
-            .iter()
-            .filter(|e| e.seq >= at)
-            .all(|e| e.agent.as_deref() != Some("triage")));
-        assert!(cevs.iter().any(|e| e.seq < at
-            && e.kind == EventKind::Handoff
-            && e.payload["note"] == TRIAGE_NOTE));
+        assert_resolver_only_requests(&up.requests(), before);
+        assert_handoff_inherited(&fx, &child, at).await;
         teardown(fx, &[&parent, &child]).await;
     })
+}
+
+/// A change of the resolver's prompt alone.
+fn prompt_change(prompt: &str) -> HashMap<String, Change> {
+    let change = Change {
+        prompt: Some(prompt.into()),
+        ..Default::default()
+    };
+    HashMap::from([("resolver".to_string(), change)])
+}
+
+/// Every fork request's system message (the `reqs` after the first `before`) is the new prompt,
+/// including the resumed one, whose conversation is otherwise the `recorded` one.
+fn assert_prompt_applied(reqs: &[Value], before: usize, new_prompt: &str, recorded: &Value) {
+    assert_eq!(reqs.len(), before + 2);
+    for r in &reqs[before..] {
+        assert_eq!(system_prompt(r), new_prompt);
+    }
+    let recorded = recorded.as_array().unwrap();
+    assert_eq!(
+        reqs[before]["messages"].as_array().unwrap()[1..],
+        recorded[1..]
+    );
 }
 
 #[test]
@@ -358,36 +397,17 @@ fn fork_applies_prompt_change() {
         let before = up.requests().len();
 
         let new_prompt = "You are a careful resolver. Never change addresses.";
-        let changes: HashMap<String, Change> = [(
-            "resolver".to_string(),
-            Change {
-                prompt: Some(new_prompt.into()),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect();
-        let resp = fork::fork(&fx.state, &parent, at, changes).await.unwrap();
+        let resp = fork::fork(&fx.state, &parent, at, prompt_change(new_prompt))
+            .await
+            .unwrap();
         assert_eq!((resp.start_seq, resp.moved_from), (at, None));
         let child = resp.branch_id.clone();
         let c = finished(&fx, &child).await;
         assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
 
-        // Every fork request's system message is the new prompt, including the resumed one.
         let reqs = up.requests();
-        assert_eq!(reqs.len(), before + 2);
-        for r in &reqs[before..] {
-            assert_eq!(system_prompt(r), new_prompt);
-        }
-        // The resumed conversation is otherwise the recorded one.
-        let recorded = pevs.iter().find(|e| e.seq == at).unwrap().payload["request"]["messages"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(
-            reqs[before]["messages"].as_array().unwrap()[1..],
-            recorded[1..]
-        );
+        let recorded = &pevs.iter().find(|e| e.seq == at).unwrap().payload["request"]["messages"];
+        assert_prompt_applied(&reqs, before, new_prompt, recorded);
         // The branch stores its effective team and the changes as given.
         assert_eq!(c.team.agents[1].prompt, new_prompt);
         assert_eq!(c.team.agents[0].prompt, "You are triage.");
@@ -397,28 +417,34 @@ fn fork_applies_prompt_change() {
     })
 }
 
+/// A branch of task 27 that has started and not ended.
+async fn running_branch(fx: &Fx) -> String {
+    let t = team();
+    let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+    let branch = fx
+        .state
+        .store
+        .create_branch(&run_id, None, &t, &json!([]), None)
+        .await
+        .unwrap();
+    fx.state
+        .store
+        .append(&branch, None, EventKind::RunStart, json!({"task_id": "27"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.state.store.branch(&branch).await.unwrap().status,
+        BranchStatus::Running
+    );
+    branch
+}
+
 #[test]
 fn fork_while_running_is_409() {
     run(async {
         let up = FakeUpstream::start(vec![]).await;
         let fx = setup("running", &up).await;
-        let t = team();
-        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
-        let branch = fx
-            .state
-            .store
-            .create_branch(&run_id, None, &t, &json!([]), None)
-            .await
-            .unwrap();
-        fx.state
-            .store
-            .append(&branch, None, EventKind::RunStart, json!({"task_id": "27"}))
-            .await
-            .unwrap();
-        assert_eq!(
-            fx.state.store.branch(&branch).await.unwrap().status,
-            BranchStatus::Running
-        );
+        let branch = running_branch(&fx).await;
 
         let e = fork::fork(&fx.state, &branch, 1, HashMap::new())
             .await

@@ -59,8 +59,8 @@ jobs:
           (cd core && cargo fmt --all --check)
       - name: Clippy
         run: |
-          cargo clippy --workspace --all-targets
-          (cd core && cargo clippy --workspace --all-targets)
+          cargo clippy --workspace --all-targets -- -D warnings
+          (cd core && cargo clippy --workspace --all-targets -- -D warnings)
       - name: Test kits, integrations and benchmarks
         run: cargo test --workspace --no-fail-fast
       - name: Test core
