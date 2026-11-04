@@ -17,6 +17,7 @@ use crate::{
     app::AppState,
     clock::BranchClock,
     exec::BranchCtx,
+    external,
     model::*,
     overhead::{self, Cat},
     providers::ProviderConfig,
@@ -121,6 +122,10 @@ pub struct ForkResponse {
     pub start_seq: i64,
     pub moved_from: Option<i64>,
     pub reason: Option<String>,
+    /// For a run an external system drives: each agent's recorded history before `start_seq`
+    /// and its endpoints on the new branch, which is live and waits for the system to resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<external::Resumable>>,
 }
 
 /// True when `c` changes the agent's mode (a kind equal to the current one is no change).
@@ -245,6 +250,20 @@ impl Planner<'_> {
         }
     }
 
+    /// Where the fork starts under the run's runner.
+    fn start_under(
+        &self,
+        rules: Rules,
+        changes: &HashMap<String, Change>,
+        changed: &[usize],
+    ) -> Result<Start, ForkError> {
+        Ok(match rules.runner {
+            Runner::Concurrent => self.restart_all(),
+            Runner::External => self.at_point(),
+            Runner::Chain => self.start_for(changes, changed, self.active_agent()?)?,
+        })
+    }
+
     /// A concurrent run's agents all restart, from the first agent's start (or right after
     /// `RunStart` if none began).
     fn restart_all(&self) -> Start {
@@ -252,6 +271,18 @@ impl Planner<'_> {
         Start {
             seq: first.map_or(self.at_seq + 1, |e| e.seq),
             reason: Some(REASON_CONCURRENT),
+            agent: 0,
+            resume: None,
+        }
+    }
+
+    /// A run an external system drives forks where asked (right after `RunStart` when asked for
+    /// it): how its agents resume is the system's choice.
+    fn at_point(&self) -> Start {
+        let after_start = self.at.kind == EventKind::RunStart;
+        Start {
+            seq: self.at_seq + i64::from(after_start),
+            reason: after_start.then_some(REASON_RUN_START),
             agent: 0,
             resume: None,
         }
@@ -410,10 +441,7 @@ pub fn plan_fork_with(
         at,
     };
     let rules = recorded::rules(events);
-    let mut start = match rules.runner {
-        Runner::Concurrent => planner.restart_all(),
-        Runner::Chain => planner.start_for(changes, &changed, planner.active_agent()?)?,
-    };
+    let mut start = planner.start_under(rules, changes, &changed)?;
     let a = start.agent;
     if start.seq == planner.first_start(a).unwrap_or(i64::MIN) {
         start.resume = None;
@@ -510,7 +538,30 @@ pub async fn fork_with(
     let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id)
         .with_rules(recorded::rules(&events))
         .with_clock(BranchClock::from_env(rerun.clock_ms));
+    if ctx.rules.runner == Runner::External {
+        return Ok(live_child(state, ctx, rerun.plan, &events).await);
+    }
     Ok(spawn_child(state, ctx, rerun.plan))
+}
+
+/// Makes the new branch of an external run live, for its system to resume: the response gives
+/// each agent's history before the fork point and its endpoints.
+async fn live_child(
+    state: &AppState,
+    ctx: BranchCtx,
+    plan: ForkPlan,
+    events: &[Event],
+) -> ForkResponse {
+    let (branch_id, base) = (ctx.branch_id.clone(), &state.config.self_base);
+    let agents = external::resumables(base, &branch_id, &ctx.team, events, plan.start_seq);
+    runner::go_live(state, Arc::new(ctx)).await;
+    ForkResponse {
+        branch_id,
+        start_seq: plan.start_seq,
+        moved_from: plan.moved_from,
+        reason: plan.reason,
+        agents: Some(agents),
+    }
 }
 
 /// How each part of a fork of `branch_id` at `at_seq` would be restored in `mode` (what the
@@ -562,6 +613,7 @@ fn spawn_child(state: &Arc<AppState>, ctx: BranchCtx, plan: ForkPlan) -> ForkRes
         start_seq,
         moved_from,
         reason,
+        agents: None,
     }
 }
 

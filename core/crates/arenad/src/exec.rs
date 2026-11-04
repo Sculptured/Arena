@@ -31,12 +31,16 @@ pub struct BranchCtx {
     ticker: tokio::sync::Mutex<Option<Ticker>>,
     /// The rules the branch runs under (from its run's `RunStart`).
     pub rules: Rules,
+    /// Agents an external system registered while the branch runs (not in `team`).
+    joined: std::sync::RwLock<Vec<AgentSpec>>,
     /// agent id -> its latest handoff note.
     pub handoffs: Mutex<HashMap<String, String>>,
     /// Set when a program of the world has stopped: the branch ends `infra_error` with it.
     fatal: Mutex<Option<String>>,
     /// Held across every tool call so world order, saves and event order agree.
     gate: tokio::sync::Mutex<()>,
+    /// Set once something has begun to end the branch.
+    ending: std::sync::atomic::AtomicBool,
 }
 
 impl BranchCtx {
@@ -51,9 +55,11 @@ impl BranchCtx {
             clock: BranchClock::from_env(0),
             ticker: tokio::sync::Mutex::new(None),
             rules: Rules::legacy(),
+            joined: Default::default(),
             handoffs: Mutex::new(HashMap::new()),
             fatal: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
+            ending: Default::default(),
         }
     }
 
@@ -88,24 +94,54 @@ impl BranchCtx {
         self.team.agents.last().is_some_and(|a| a.id == agent)
     }
 
+    /// The agent `id`: one of the team, or one that joined while the branch runs.
+    pub fn agent(&self, id: &str) -> Option<AgentSpec> {
+        let known = self.team.agents.iter().find(|a| a.id == id).cloned();
+        known.or_else(|| {
+            self.joined
+                .read()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned()
+        })
+    }
+
+    /// Every agent: the team's, then those that joined, in order.
+    pub fn agents(&self) -> Vec<AgentSpec> {
+        let mut all = self.team.agents.clone();
+        all.extend(self.joined.read().unwrap().iter().cloned());
+        all
+    }
+
+    /// Adds an agent that joined while the branch runs; false when one has its id already.
+    pub fn join(&self, spec: AgentSpec) -> bool {
+        let mut joined = self.joined.write().unwrap();
+        let taken = self
+            .team
+            .agents
+            .iter()
+            .chain(joined.iter())
+            .any(|a| a.id == spec.id);
+        if !taken {
+            joined.push(spec);
+        }
+        !taken
+    }
+
     /// True when `agent`'s team keeps it from writing (an unknown agent writes nothing either).
     pub fn read_only(&self, agent: &str) -> bool {
-        let spec = self.team.agents.iter().find(|a| a.id == agent);
-        spec.is_none_or(|a| a.read_only)
+        self.agent(agent).is_none_or(|a| a.read_only)
     }
 
     pub fn has_agent(&self, agent: &str) -> bool {
-        self.team.agents.iter().any(|a| a.id == agent)
+        self.agent(agent).is_some()
     }
 
     /// The provider `agent`'s model calls go to (`Some(None)`: it names none, so the default
-    /// one); `None` when the team has no such agent.
-    pub fn provider_of(&self, agent: &str) -> Option<Option<&str>> {
-        self.team
-            .agents
-            .iter()
-            .find(|a| a.id == agent)
-            .map(|a| a.provider.as_deref())
+    /// one); `None` when the branch has no such agent.
+    pub fn provider_of(&self, agent: &str) -> Option<Option<String>> {
+        self.agent(agent).map(|a| a.provider)
     }
 
     pub fn handoff_note(&self, agent: &str) -> Option<String> {
@@ -135,6 +171,11 @@ impl BranchCtx {
         let guard = self.gate.lock().await;
         overhead::add_since(&self.branch_id, Cat::Wait, since);
         guard
+    }
+
+    /// True for the one caller that may end the branch: the first to ask.
+    pub fn claim_end(&self) -> bool {
+        !self.ending.swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Why the branch can't go on (a world program stopped), once that has happened.

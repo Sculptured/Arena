@@ -39,6 +39,7 @@ use crate::{
     saves::{self, part_code, part_named, part_refusal, world_of},
 };
 
+mod external;
 mod world;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -54,6 +55,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/branches/{id}/rows", get(rows))
         .route("/api/branches/{id}/fork", post(fork_branch))
         .route("/api/branches/{id}/restore-plan", get(get_restore_plan))
+        .route("/api/branches/{id}/agents", post(external::register))
+        .route(
+            "/api/branches/{id}/agents/{agent}/end",
+            post(external::end_agent),
+        )
+        .route("/api/branches/{id}/finish", post(external::finish))
         .route("/api/compare", get(compare_branches))
         .route("/api/world", get(world::world))
         .route("/api/usage", get(world::usage))
@@ -171,30 +178,39 @@ fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
     if team.agents.is_empty() {
         return Err(ApiError::bad("the team needs at least one agent"));
     }
+    validate_agents(state, &team.agents)
+}
+
+/// 400 unless every agent has a good, unique id and an open agent can run.
+fn validate_agents(state: &AppState, agents: &[AgentSpec]) -> Result<(), ApiError> {
     let mut seen = std::collections::HashSet::new();
-    for a in &team.agents {
-        let ok = !a.id.is_empty()
-            && a.id
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
-        if !ok {
-            return Err(ApiError::bad(format!(
-                "agent id {:?} must match ^[a-z0-9_-]+$",
-                a.id
-            )));
-        }
-        if a.id == crate::exec::LINK_ACTOR {
-            return Err(ApiError::bad(format!(
-                "agent id {:?} is kept for steps made by a world's links",
-                a.id
-            )));
-        }
+    for a in agents {
+        validate_agent_id(&a.id)?;
         if !seen.insert(a.id.as_str()) {
             return Err(ApiError::bad(format!("duplicate agent id {:?}", a.id)));
         }
         if a.kind == AgentKind::Open {
             open_check(state, a.provider.as_deref(), a.model.as_deref())?;
         }
+    }
+    Ok(())
+}
+
+/// 400 unless `id` matches `^[a-z0-9_-]+$` and isn't the links' actor.
+fn validate_agent_id(id: &str) -> Result<(), ApiError> {
+    let ok = !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    if !ok {
+        return Err(ApiError::bad(format!(
+            "agent id {id:?} must match ^[a-z0-9_-]+$"
+        )));
+    }
+    if id == crate::exec::LINK_ACTOR {
+        return Err(ApiError::bad(format!(
+            "agent id {id:?} is kept for steps made by a world's links"
+        )));
     }
     Ok(())
 }
@@ -336,7 +352,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSumma
 struct NewRun {
     task_id: String,
     team: Team,
-    /// `chain` (default) or `concurrent`.
+    /// `chain` (default), `concurrent`, or `external` (see `api::external`).
     #[serde(default)]
     runner: Runner,
 }
@@ -348,7 +364,20 @@ async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResul
     for a in &mut req.team.agents {
         a.provider = a.provider.as_deref().and_then(trimmed);
     }
+    if req.runner == Runner::External {
+        return external::create_run(state, cleanup, req.task_id, req.team).await;
+    }
     validate_team(&state, &req.team)?;
+    if req
+        .team
+        .agents
+        .iter()
+        .any(|a| a.kind == AgentKind::External)
+    {
+        return Err(ApiError::bad(
+            "an external agent runs only in a run with runner \"external\"",
+        ));
+    }
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
         let _cleanup = cleanup;

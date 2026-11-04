@@ -191,14 +191,38 @@ pub fn spawn_branch(state: &Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint
 pub async fn run_branch(state: Arc<AppState>, ctx: Arc<BranchCtx>, from: StartPoint) {
     ctx.start_ticker(&state.store).await;
     let outcome = drive(&state, &ctx, from).await;
-    leave_live(&state, &ctx).await;
-    let (status, error) = match (ctx.fatal(), outcome) {
-        // A world program stopped: whatever the agents did after it doesn't count.
+    conclude(&state, &ctx, outcome).await;
+}
+
+/// Makes a branch that an external system drives live, its clock ticking.
+pub async fn go_live(state: &AppState, ctx: Arc<BranchCtx>) {
+    let id = ctx.branch_id.clone();
+    state.live.write().unwrap().insert(id, ctx.clone());
+    ctx.start_ticker(&state.store).await;
+}
+
+/// Ends a live branch an external system drove: freezes and scores its world, stops it and
+/// records how it ended. `None` when the branch is ending already.
+pub async fn finish(state: &AppState, ctx: &BranchCtx) -> Option<Ending> {
+    if !ctx.claim_end() {
+        return None;
+    }
+    freeze(ctx).await;
+    let outcome = check(state, ctx).await;
+    Some(conclude(state, ctx, outcome).await)
+}
+
+/// Stops a branch's world and records how it ended: as `outcome` says, unless a world program
+/// stopped, which makes it `infra_error` whatever the agents did after.
+async fn conclude(state: &AppState, ctx: &BranchCtx, outcome: Result<Ending>) -> Ending {
+    leave_live(state, ctx).await;
+    let ending = match (ctx.fatal(), outcome) {
         (Some(f), _) => (BranchStatus::InfraError, Some(f)),
         (None, Ok(v)) => v,
         (None, Err(e)) => (BranchStatus::InfraError, Some(format!("{e:#}"))),
     };
-    record_ending(&state, &ctx.branch_id, (status, error)).await;
+    record_ending(state, &ctx.branch_id, ending.clone()).await;
+    ending
 }
 
 /// Stops the branch's ticker and world, then takes it out of `state.live`. In that order: a
@@ -210,7 +234,7 @@ async fn leave_live(state: &AppState, ctx: &BranchCtx) {
 }
 
 /// How a branch ended: its status and error.
-type Ending = (BranchStatus, Option<String>);
+pub type Ending = (BranchStatus, Option<String>);
 
 /// Records how a branch ended, trying once more when the store fails; a failure is logged (the
 /// branch then stays `running` in the store).
@@ -241,6 +265,7 @@ async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) ->
     let ended = match ctx.rules.runner {
         Runner::Chain => run_chain(state, ctx, &brief, from).await?,
         Runner::Concurrent => run_concurrent(state, ctx, &brief, from.agent_index).await?,
+        Runner::External => return Err(anyhow!("an external system drives this run, not arenad")),
     };
     if let Some(end) = ended {
         return Ok(end);
@@ -482,7 +507,7 @@ fn agent_ending(ctx: &BranchCtx, agent: &str, result: AgentResult) -> Option<End
 }
 
 /// Scores the world and records the Check.
-async fn check(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<Ending> {
+async fn check(state: &AppState, ctx: &BranchCtx) -> Result<Ending> {
     let since = Instant::now();
     let check = score(state, ctx).await?;
     overhead::add_since(&ctx.branch_id, Cat::Score, since);
@@ -528,7 +553,7 @@ async fn score_by_checks(ctx: &BranchCtx) -> Result<CheckPayload> {
 
 /// Saves every part's final state and compares the world with the task's gold saves; parts not
 /// in them are listed as unchecked. A benchmark that scores itself has no gold saves.
-async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
+async fn score(state: &AppState, ctx: &BranchCtx) -> Result<CheckPayload> {
     let bench = state.hub.bench_describe(ctx.world.bench()).await?;
     if bench.scored {
         return score_by_checks(ctx).await;

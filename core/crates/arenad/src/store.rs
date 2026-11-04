@@ -152,6 +152,17 @@ impl Store {
         Ok(id)
     }
 
+    /// Replaces a branch's team (an external system registered another agent).
+    pub async fn set_team(&self, branch_id: &str, team: &Team) -> Result<()> {
+        self.client
+            .execute(
+                "UPDATE branches SET team = $2 WHERE id = $1",
+                &[&branch_id, &serde_json::to_value(team)?],
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Records how a fork's world was restored: the mode asked for and each part's restore.
     pub async fn set_restore(
         &self,

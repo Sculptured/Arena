@@ -151,7 +151,7 @@ fn live_agent(
     agent: &str,
 ) -> Option<(Arc<BranchCtx>, Option<String>)> {
     let ctx = state.live.read().unwrap().get(branch)?.clone();
-    let provider = ctx.provider_of(agent)?.map(str::to_string);
+    let provider = ctx.provider_of(agent)?;
     Some((ctx, provider))
 }
 

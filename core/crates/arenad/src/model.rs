@@ -9,6 +9,9 @@ pub enum AgentKind {
     ClaudeCode,
     Codex,
     Open,
+    /// Driven by an external system (a design's own code), not by arenad: it reaches the world
+    /// through its MCP endpoint and its models through the gateway.
+    External,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,6 +79,9 @@ pub enum Runner {
     Chain,
     /// arenad runs every agent at once.
     Concurrent,
+    /// An external system registers the agents and drives them through their endpoints; arenad
+    /// records what they do and scores the world when the system says the run is finished.
+    External,
 }
 
 /// The rules a branch runs under, recorded in its run's `RunStart` (`runner`, `handoff`).
