@@ -17,6 +17,8 @@ the plant wrap the example, the ERP's starting records and the expected answers 
 `approvals` part runs the Sculptured program. Outside contributors can read and change the code, and its unit
 tests run, but the world can't start without them: `seed` and `score` say so, and the live test skips.
 
+It is `opt_in`, so arenad's default stays the retail example; choose it with `ARENA_BENCHMARK=factory`.
+
 ## How it is wired
 
 - **A booked shipment reaches the plant through a link.** The hub's `shipment_booked` event calls the plant's

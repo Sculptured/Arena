@@ -37,6 +37,8 @@ pub struct Manifest {
     /// The `[[example]]` entries, `{tool, args}`.
     pub examples: Vec<Value>,
     pub config_schema: Value,
+    /// Used only when chosen by name, never as the one benchmark installed.
+    pub opt_in: bool,
 }
 
 fn str_of(v: &Value, key: &str) -> Result<String> {
@@ -74,6 +76,7 @@ impl Manifest {
             protocol,
             run,
             needs: parse_needs(v.get("needs"))?,
+            opt_in: v.get("opt_in").and_then(Value::as_bool).unwrap_or(false),
             dir: dir.to_path_buf(),
             examples: v
                 .get("example")

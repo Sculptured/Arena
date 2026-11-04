@@ -362,3 +362,12 @@ fn remove_save_dir_removes_read_only_folders() {
     }
     assert!(gone);
 }
+
+#[test]
+fn an_opt_in_benchmark_says_so_in_its_manifest() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../benchmarks");
+    let r = parts::Registry::scan(&[root]).unwrap();
+    let opt_in = |name: &str| r.benchmarks().find(|m| m.name == name).unwrap().opt_in;
+    assert!(opt_in("factory"));
+    assert!(!opt_in("retail"));
+}

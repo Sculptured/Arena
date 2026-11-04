@@ -37,8 +37,8 @@ Environment variables, read once at startup by arenad:
 - `ARENA_PG_URL`: the Postgres server for arenad's records, passed on to integration programs (default
   `postgres://arena:arena@127.0.0.1:5544/postgres`).
 - `ARENA_PORT`: HTTP port (default 4510).
-- `ARENA_BENCHMARK`: the benchmark new runs use, by package name (default: the only installed benchmark;
-  required when several are installed).
+- `ARENA_BENCHMARK`: the benchmark new runs use, by package name (default: the only installed benchmark,
+  not counting those whose manifest says `opt_in = true`; required when several are installed).
 - `ARENA_PACKAGES`: `:`-separated folders whose subfolders hold an `arena-package.toml` (default
   `integrations:benchmarks` in the repository root).
 - `ARENA_BIN_DIR`: what `${ARENA_BIN_DIR}` in a manifest stands for (default `core/target/release`).

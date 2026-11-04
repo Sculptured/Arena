@@ -4,3 +4,4 @@ version = "0.1.0"
 protocol = 1
 run = { command = ["${ARENA_BIN_DIR}/arena-factory"] }
 needs = { gpu_vram_gb = 0, services = [] }
+opt_in = true

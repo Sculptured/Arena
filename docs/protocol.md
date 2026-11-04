@@ -21,6 +21,7 @@ protocol = 1
 run = { command = ["${ARENA_BIN_DIR}/arena-postgres"] }    # or: run = { image = "..." }
 needs = { gpu_vram_gb = 0, services = [] }    # e.g. services = ["host.docker.internal:5544"], network = "host"
 config_schema = { ... }      # JSON Schema of the part's config in a world
+opt_in = true                # optional, for a benchmark: arenad uses it only when ARENA_BENCHMARK names it
 
 [[example]]                  # tool calls the conformance check runs
 tool = "get"
