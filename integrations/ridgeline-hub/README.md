@@ -39,14 +39,15 @@ imports anything.
   `notify_customer`, `customer_replies`. They return at once. `wait_s` is accepted and ignored: blocking
   inside `call_tool` would stall the world, so agents poll while the arena clock runs.
 - `proposal_id` (on `book_freight` and `notify_customer`) is recorded on the stored object and not
-  verified. Approval gating is the `sculptured` integration's job.
+  verified here. A benchmark can gate these tools on the `sculptured` part (`docs/protocol.md`, "Gates on tools").
 - Unknown ids, an unknown supplier or quote, a `book_freight` carrier or amount that doesn't match the quote,
   and bad tool arguments come back as a tool-level `error` result and change nothing. An unknown tool name
   is `-32602`.
 - Keys for `inspect`, `diff` and tool reads/writes: `rfq/<id>`, `freight/<id>`, `claim/<id>`,
   `notice/<id>`, `shipment/<id>`.
-- A booked freight quote creates `shipment/SHP-001`, ... with its arrival on the plant clock. The shipment
-  is kept in this part only. It is not forwarded to Isaac Sim: protocol v1 has no cross-part handoff.
+- A booked freight quote creates `shipment/SHP-001`, ... with its arrival on the plant clock, and the next
+  `advance` gives a `shipment_booked` event whose `data` is the shipment. A benchmark's link can hand it to the
+  plant (`docs/protocol.md`, "Links between parts"); the part itself knows nothing of the plant.
 - Restore is exact from a save: one `state.json` in the save folder with all market state, the shipments,
   the queued events and the stepper position. The market has no randomness, so `seed` is accepted and
   unused; the replay contract holds for any seed (`describe` says so in its fingerprint).

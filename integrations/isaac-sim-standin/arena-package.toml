@@ -1,0 +1,27 @@
+kind = "integration"
+name = "isaac-sim-standin"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--directory", "../isaac-sim", "python", "-m", "isaac_part", "--backend", "standin"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { isaac_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, physics_hz = { type = "integer" }, scenario = { type = "boolean" } } }
+
+[[example]]
+tool = "plant_state"
+args = {}
+
+[[example]]
+tool = "machine_telemetry"
+args = { machine = "PR-A1", minutes = 5 }
+
+[[example]]
+tool = "recent_events"
+args = { since = 0, limit = 20 }
+
+[[example]]
+tool = "set_line_status"
+args = { line = "LINE-B", status = "running", rate = 1.1 }
+
+[[example]]
+tool = "dispatch_technician"
+args = { proposal_id = "P-1", technician = "T-2", machine = "PR-B1", task = "inspect" }

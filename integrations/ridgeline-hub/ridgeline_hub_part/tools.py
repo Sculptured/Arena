@@ -132,8 +132,8 @@ TOOLS = {t.name: t for t in [
          (Param("request", "string"), _wait_s()), "freight_status", _pick("request"),
          _reads(_key("freight", "request", "args")),
          validate=_exists("request", "freight", "freight request")),
-    Tool("book_freight", "Book a carrier's quote. proposal_id is recorded, not verified here. The shipment is "
-         "recorded in this part only.", "write",
+    Tool("book_freight", "Book a carrier's quote. proposal_id is recorded, not verified here. The shipment gives "
+         "a `shipment_booked` event.", "write",
          (Param("proposal_id", "string"), Param("quote_id", "string"), Param("carrier", "string"),
           Param("amount", "number"), Param("part", "string", "SP-SPN-800")),
          "book_freight", _pick("quote_id", "part"), _booking_keys, validate=_check_booking,

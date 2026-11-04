@@ -9,8 +9,8 @@ TICK_MS = 500  # the hub ticks the market every 0.5 s
 
 
 class ArenaFactory:
-    """What the Market expects of the hub's factory: an event queue, a plant clock and shipments.
-    Shipments are recorded here only; they are not forwarded to Isaac Sim (no cross-part handoff in v1)."""
+    """What the Market expects of the hub's factory: an event queue, a plant clock and shipments. A booked
+    shipment is also a `shipment_booked` event, which a benchmark's link can hand to the plant."""
 
     def __init__(self, plant_start: datetime, elapsed_ms):
         self.plant_start = plant_start
@@ -30,6 +30,7 @@ class ArenaFactory:
         shipment = {"id": sid, "part": part, "origin": origin, "carrier": carrier,
                     "transit_hours": transit_hours, "ref": ref, "arrives": arrives}
         self.shipments[sid] = shipment
+        self.emit("shipment_booked", carrier, f"{part} booked with {carrier} ({ref})", shipment)
         return shipment
 
     def drain(self) -> list[dict]:

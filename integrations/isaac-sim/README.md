@@ -28,7 +28,7 @@ changes the fingerprint.
 | Backend | PlantIO | Used by |
 |---|---|---|
 | `isaac` | `sim_io.IsaacIO` in a headless `SimulationApp`, set up as `run.py` does it: scene build, `IsaacIO`, `setup_physics`, play, `start()`. PhysX steps run with `SimulationManager.step`, and `Factory.physics_step` runs in the post-step callback. | `arena-package.toml` (`needs.gpu_vram_gb = 16`) |
-| `standin` | `fake_sim.FakeIO`. Each step is `io.step(dt)` and then `Factory.physics_step(dt)`, the order `test_scenario.py` and the app use. | the tests (a test manifest written to `tmp_path`) |
+| `standin` | `fake_sim.FakeIO`. Each step is `io.step(dt)` and then `Factory.physics_step(dt)`, the order `test_scenario.py` and the app use. | the tests (a test manifest written to `tmp_path`) and package `isaac-sim-standin` (`integrations/isaac-sim-standin`) |
 
 - If `isaacsim` can't be imported, `describe` still answers and `start` fails with -32603: "Isaac Sim is not
   importable here: run this integration with Isaac Sim's Python on the DGX Spark (see README)".
@@ -117,10 +117,14 @@ The names and arguments are those of the factory's `mcp/src/ridgeline_mcp/floor.
 | `predict_move(order, to_line)` | read | `whatif_move` | `order/<id>`, `line/<id>` |
 | `dispatch_technician(proposal_id, technician, machine, task)` | write | `dispatch_technician` | `technician/<id>`, `machine/<id>` |
 | `set_line_status(line, status, rate)` | write | `set_line` (`rate` is `boost`) | `line/<id>` |
+| `add_shipment(part, origin, carrier, transit_hours, ref)` | write | `add_shipment` | `shipment/<id>` |
 
 - `wait_for_event` returns at once, with `timed_out` when nothing matches yet. Inside `call_tool` the arena clock
   stands still, so a wait would never end. `timeout_s` is accepted and ignored.
-- `proposal_id` is accepted and not verified. Approval gating is the `sculptured` integration's job.
+- `proposal_id` is accepted and not verified here. A benchmark can gate the tool on the `sculptured` part
+  (`docs/protocol.md`, "Gates on tools").
+- `add_shipment` is what the factory's hub calls when a carrier is booked. In a world it comes through a
+  benchmark's link (`docs/protocol.md`, "Links between parts"), and then agents don't get the tool.
 - The plant runs without ERPNext in the arena, so it has no Work Orders. `orders` is empty, and `predict_move`
   refuses: "predict_move needs the plant's Work Orders, which come from ERPNext; the plant runs without ERPNext
   in the arena".

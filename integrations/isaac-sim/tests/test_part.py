@@ -78,6 +78,16 @@ def test_scenario_alarm_on_arena_clock():
     assert docs(part)["incident/INC-20260310-01"]["machine"] == "PR-A1"
 
 
+def test_add_shipment_puts_a_shipment_on_the_plant():
+    part = started()
+    args = {"part": "SP-SPN-800", "origin": "Dock", "carrier": "Lakeshore", "transit_hours": 2, "ref": "Q-1"}
+    out = part.call_tool("i1", "add_shipment", args, 0)
+    sid = out["result"]["id"]
+    assert out["writes"] == [f"shipment/{sid}"]
+    doc = docs(part)[f"shipment/{sid}"]
+    assert (doc["part"], doc["ref"], doc["status"]) == ("SP-SPN-800", "Q-1", "in-transit")
+
+
 def test_advance_split_does_not_matter():
     one, many = started("a"), started("b")
     one.advance("a", 5_000)
@@ -271,7 +281,7 @@ def test_tools_keys_and_refusals():
     part = started()
     names = {t["name"] for t in part.describe()["tools"]}
     assert names == {"plant_state", "machine_telemetry", "vibration_spectrum", "recent_events", "wait_for_event",
-                     "predict_move", "dispatch_technician", "set_line_status"}
+                     "predict_move", "dispatch_technician", "set_line_status", "add_shipment"}
     sent = part.call_tool("i1", "dispatch_technician",
                           {"proposal_id": "P", "technician": "T-1", "machine": "PR-A1", "task": "inspect"}, 1_000)
     assert sent["result"]["status"] == "walking" and sent["writes"] == ["technician/T-1", "machine/PR-A1"]

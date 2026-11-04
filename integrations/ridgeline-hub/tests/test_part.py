@@ -49,6 +49,19 @@ def test_quotes_arrive_on_arena_clock():
     assert part.advance("i1", 60_000)["events"] and not quoted(part.advance("i1", 90_000)["events"])
 
 
+def test_booking_gives_a_shipment_booked_event():
+    part = started()
+    freight = call(part, "freight_quotes", {"origin": "Dock", "weight_kg": 10}, 0)["result"]["request"]
+    book = {"proposal_id": "P", "quote_id": f"{freight}-1", "carrier": "Lakeshore Freight", "amount": 420}
+    call(part, "book_freight", book, 22_000)
+    events = part.advance("i1", 22_500)["events"]
+    booked = [e for e in events if e["kind"] == "shipment_booked"]
+    assert len(booked) == 1
+    data = booked[0]["data"]
+    assert (data["part"], data["origin"], data["carrier"], data["transit_hours"], data["ref"]) == (
+        "SP-SPN-800", "Dock", "Lakeshore Freight", 72, f"{freight}-1")
+
+
 def test_freight_booking_records_shipment():
     part = started()
     call(part, "freight_quotes", {"origin": "Columbus OH", "weight_kg": 50}, 0)

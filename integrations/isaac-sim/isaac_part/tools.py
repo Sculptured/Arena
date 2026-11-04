@@ -123,6 +123,12 @@ TOOLS = {t.name: t for t in [
          lambda f, a: f.dispatch_technician(a["technician"], a["machine"], a["task"]),
          _writes(_key("technician", "technician"), _key("machine", "machine")),
          (_task, _known("technician", "technicians", "technician"), MACHINE)),
+    Tool("add_shipment", "Hand the plant a shipment on its way (what the hub does when a carrier is booked): its "
+         "truck arrives after transit_hours of plant time.", "write",
+         (Param("part", "string"), Param("origin", "string"), Param("carrier", "string"),
+          Param("transit_hours", "number"), Param("ref", "string", None)),
+         lambda f, a: f.add_shipment(a["part"], a["origin"], a["carrier"], a["transit_hours"], a["ref"]),
+         lambda _a, r: ([], [f"shipment/{r['id']}"])),
     Tool("set_line_status", "Stop a line ('stopped') or run it ('running'); rate is a multiplier of its normal rate "
          "(0.5 to 1.25).", "write", (Param("line", "string"), Param("status", "string"), Param("rate", "number", None)),
          lambda f, a: f.set_line(a["line"], a["status"], a["rate"]), _writes(_key("line", "line")),
