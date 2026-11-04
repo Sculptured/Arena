@@ -2,7 +2,7 @@
 //! dumps on disk.
 use std::collections::HashSet;
 
-use arena_part::helpers::mariadb::{needed_positions, replay_user, Position, Server};
+use arena_part::helpers::mariadb::{needed_positions, replay_user, Position, Server, Standing};
 use arena_part::proto::{valid_id, GcResult, Usage};
 use arena_part::PartError;
 
@@ -49,9 +49,38 @@ impl Erpnext {
             let idle = self.drop_idle().await?;
             out.dropped += idle.dropped;
             out.bytes += idle.bytes;
+            if let Err(e) = self.reroot(keep).await {
+                eprintln!("arena-erpnext: not re-rooting the kept saves: {e}");
+            }
         }
         out.bytes += self.settle_on(self.server()).await?;
         Ok(out)
+    }
+
+    /// Rewrites as dumps the saves `keep` keeps by a pattern, when they hold too much binlog. A
+    /// save's files are not touched: only its database's manifest changes.
+    async fn reroot(&self, keep: &[String]) -> Result<(), PartError> {
+        let scratch = format!("{VIEW_PREFIX}{}_reroot", std::process::id());
+        let Some(_busy) = self.busy.try_mark(&scratch) else {
+            return Ok(());
+        };
+        let server = self.server();
+        let saves = self.manifests()?;
+        let here = server.reference().await?;
+        let live = {
+            let live = self.live.lock().expect("instances lock");
+            needed_positions(&here, &[], live.values().map(|i| &i.tracked))
+        };
+        let standing = Standing {
+            root: self.dirs.root(),
+            saves: &saves,
+            keep,
+            live,
+            limit: self.reroot_after,
+            scratch: &scratch,
+        };
+        self.dumps.reroot_standing(server, &standing).await?;
+        Ok(())
     }
 
     /// After saves went: removes the dumps nothing needs and purges the binlog before the

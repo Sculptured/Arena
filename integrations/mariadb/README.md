@@ -66,6 +66,11 @@ database.
 - **inspect / diff:** keys `<table>/<pk>` for tables with a one-column primary key (asking for a key of
   another table is -32602); `diff` compares rows by key and, for tables without one, a hash of the whole
   table (`<table>/*`). A save is read by rebuilding it into a scratch database `mx_<pid>_<n>`.
+- **Re-rooting:** arenad keeps every benchmark's base and gold saves (`base_*`, `gold_*`), which would hold the
+  binlog from their positions for good. So `gc` rewrites the saves `keep` keeps by a pattern as full dumps once
+  they alone hold more than 256 MiB of binlog (nothing else on the server needs those bytes; a save that restores
+  from a dump needs no binlog). The check is tested without a server, the rewrite by
+  `live_mariadb_reroots_standing_saves`.
 - **drop_save** and **gc {keep}** share one path: remove the dumps no save or live instance needs, then
   `PURGE BINARY LOGS TO` the file holding the oldest position a remaining save or live instance needs
   (clamped to the files on the server). `gc` first drops the saves not kept, instance databases not
@@ -89,10 +94,3 @@ accounts, position, binlog files, dump, load, apply_log, restore, chain, rebase,
 `check_same_server`, `restore_error`, `chain_error`. The `erpnext` integration uses the same
 helper on a server of its own. The SQL tool schemas, argument parsing and inspect key lookup are
 shared with `postgres` in `arena_part::helpers::sql_tools`.
-
-## Known limits
-
-- **Kept base and gold saves pin the binlog.** A save holds a binlog position, and the binlog is purged
-  only up to the oldest position a remaining save needs. arenad keeps every benchmark's base and gold
-  saves (`base_*`, `gold_*`), so on a long-lived server the binlog grows from their positions until
-  those saves are re-rooted onto a dump. Re-rooting is not built; no benchmark uses this integration yet.

@@ -235,8 +235,6 @@ other integration is checked on its own, and API mode has not been measured.
   together) has not been built or run.
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and
   the branch fails with "no part of this world can be checked against the task's expected result".
-- Re-rooting the kept base and gold saves of `mariadb` and `erpnext`: those saves pin the binary log, so a
-  long-lived server's binlog grows until they are re-rooted. Not built; no benchmark uses these integrations yet.
 - Community publishing of integrations and benchmarks (design only). Packages install from a local folder.
 - Process checkpointing (CRIU), fault injection, fault search and design search.
 - SGLang or vLLM hosting, serving-state capture and chain-of-thought capture.

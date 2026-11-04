@@ -33,7 +33,9 @@ pub use mysql_async;
 pub use position::{
     dump_position, file_seq, purge_target, span, span_bytes, BinlogFile, Position, Purged,
 };
-pub use saving::{needed_positions, used_roots, Dumps, TrackedChange};
+pub use saving::{
+    needed_positions, to_reroot, used_roots, Dumps, Standing, TrackedChange, DEFAULT_REROOT_AFTER,
+};
 pub use server::{valid_docker_name, Server, ServerConfig, IMAGE};
 pub use sql::{names_db, query_misplaced, quote_ident};
 pub use tracked::{Chained, Misplaced, Tracked};

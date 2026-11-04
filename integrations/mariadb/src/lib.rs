@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arena_part::helpers::busy::BusySet;
-use arena_part::helpers::mariadb::{percent_encode, Dumps, IMAGE};
+use arena_part::helpers::mariadb::{percent_encode, Dumps, DEFAULT_REROOT_AFTER, IMAGE};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};
@@ -39,6 +39,8 @@ pub struct Mariadb {
     busy: BusySet,
     /// Dumps, and the gate held while a dump is made and while unused dumps are removed.
     dumps: Dumps,
+    /// Binlog bytes that saves kept by a `gc` pattern may hold before they are rewritten as dumps.
+    reroot_after: u64,
 }
 
 type R<T> = Result<T, PartError>;
@@ -61,7 +63,14 @@ impl Mariadb {
             servers: Servers::default(),
             live: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
+            reroot_after: DEFAULT_REROOT_AFTER,
         }
+    }
+
+    /// Sets how many binlog bytes saves kept by a `gc` pattern may hold before they are re-rooted.
+    pub fn with_reroot_after(mut self, bytes: u64) -> Mariadb {
+        self.reroot_after = bytes;
+        self
     }
 
     /// Turns on the `sql_query` and `sql_execute` tools.

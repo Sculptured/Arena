@@ -2,13 +2,13 @@
 #![cfg(feature = "mariadb")]
 use std::collections::HashSet;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use arena_part::helpers::mariadb::{
     chain_error, check_same_server, dump_position, names_db, needed_positions, percent_encode,
-    purge_target, query_misplaced, restore_error, saves_in, span, span_bytes, used_roots,
-    BinlogFile, Blobs, Dumped, Manifest, Misplaced, Position, Purged, Segment, ServerRef, Tracked,
-    TrackedChange,
+    purge_target, query_misplaced, restore_error, saves_in, span, span_bytes, to_reroot,
+    used_roots, BinlogFile, Blobs, Dumped, Manifest, Misplaced, Position, Purged, Segment,
+    ServerRef, Standing, Tracked, TrackedChange,
 };
 use arena_part::helpers::temp_dir::TempDir;
 
@@ -407,4 +407,60 @@ fn used_roots_and_needed_positions_cover_saves_and_live_databases() {
         [pos("binlog.000002", 5), pos("binlog.000003", 1)],
         "other servers' saves don't count"
     );
+}
+
+/// A standing save `id` (kept by `base_*`) holding the binlog from `from`.
+fn standing(id: &str, from: Position) -> (String, Manifest) {
+    let m = Manifest::rooted(server(), "a".repeat(64));
+    (
+        id.to_string(),
+        m.then(seg("mi_a", from, pos("binlog.000003", 9))),
+    )
+}
+
+fn reroot_picks(saves: &[(String, Manifest)], live: Vec<Position>, limit: u64) -> Vec<String> {
+    let (root, keep) = (
+        Path::new("/nowhere"),
+        ["base_*".to_string(), "s9".to_string()],
+    );
+    let s = Standing {
+        root,
+        saves,
+        keep: &keep,
+        live,
+        limit,
+        scratch: "x",
+    };
+    let picked = to_reroot(&server(), &s, &files(), &pos("binlog.000003", 50));
+    picked.into_iter().map(|(id, _)| id.clone()).collect()
+}
+
+#[test]
+fn only_saves_kept_by_a_pattern_and_past_the_limit_are_rerooted() {
+    let saves = [
+        standing("base_x", pos("binlog.000001", 4)),
+        standing("base_y", pos("binlog.000003", 40)),
+    ];
+    assert_eq!(reroot_picks(&saves, vec![], 10), ["base_x", "base_y"]);
+    assert!(
+        reroot_picks(&saves, vec![], 1_000_000).is_empty(),
+        "under the limit"
+    );
+    // A live database needs the binlog from before them: dumping them frees nothing.
+    assert!(reroot_picks(&saves, vec![pos("binlog.000001", 2)], 0).is_empty());
+    // A save kept by name goes with its run; it needs the same binlog, so nothing is freed.
+    let named = [saves[0].clone(), standing("s9", pos("binlog.000001", 2))];
+    assert!(reroot_picks(&named, vec![], 0).is_empty());
+    // A save on another server, or without a log, holds nothing here.
+    let other = Manifest::empty(other_server()).then(seg(
+        "mi_b",
+        pos("binlog.000001", 4),
+        pos("binlog.000001", 8),
+    ));
+    let rooted = Manifest::rooted(server(), "a".repeat(64));
+    let not_held = [
+        ("base_o".to_string(), other),
+        ("base_r".to_string(), rooted),
+    ];
+    assert!(reroot_picks(&not_held, vec![], 0).is_empty());
 }

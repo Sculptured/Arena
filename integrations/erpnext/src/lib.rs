@@ -54,6 +54,8 @@ pub struct Erpnext {
     /// Held (shared) while a site is built until it is live; taken alone to rotate the binlog.
     starts: RwLock<()>,
     versions: OnceCell<BTreeMap<String, String>>,
+    /// Binlog bytes that saves kept by a `gc` pattern may hold before they are rewritten as dumps.
+    reroot_after: u64,
 }
 
 type R<T> = Result<T, PartError>;
@@ -66,6 +68,12 @@ impl Erpnext {
             StackConfig::from_env()?,
             dirs.root().to_path_buf(),
         ))
+    }
+
+    /// Sets how many binlog bytes saves kept by a `gc` pattern may hold before they are re-rooted.
+    pub fn with_reroot_after(mut self, bytes: u64) -> Erpnext {
+        self.reroot_after = bytes;
+        self
     }
 
     /// The install of `cfg`, with saves under `package_folder/<save>`, dumps in `.blobs`, the
@@ -82,6 +90,7 @@ impl Erpnext {
             live: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
             starts: RwLock::new(()),
+            reroot_after: DEFAULT_REROOT_AFTER,
             versions: OnceCell::new(),
         }
     }

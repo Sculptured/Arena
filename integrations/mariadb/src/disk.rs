@@ -2,7 +2,9 @@
 //! saves and dumps on disk.
 use std::collections::{HashMap, HashSet};
 
-use arena_part::helpers::mariadb::{needed_positions, Manifest, Position, Server, ServerRef};
+use arena_part::helpers::mariadb::{
+    needed_positions, Manifest, Position, Server, ServerRef, Standing,
+};
 use arena_part::proto::{GcResult, Usage};
 use arena_part::PartError;
 
@@ -65,9 +67,33 @@ impl Mariadb {
             let idle = self.drop_idle(&s).await?;
             out.dropped += idle.dropped;
             out.bytes += idle.bytes;
+            if let Err(e) = self.reroot_on(&s, keep).await {
+                let name = &s.config().container;
+                eprintln!("arena-mariadb: not re-rooting the saves on {name}: {e}");
+            }
         }
         out.bytes += self.settle().await?;
         Ok(out)
+    }
+
+    /// Rewrites as dumps the saves `keep` keeps by a pattern, when they hold too much binlog on `s`.
+    async fn reroot_on(&self, s: &Server, keep: &[String]) -> Result<(), PartError> {
+        let scratch = format!("{VIEW_PREFIX}{}_reroot", std::process::id());
+        let Some(_busy) = self.busy.try_mark(&scratch) else {
+            return Ok(());
+        };
+        let saves = self.manifests()?;
+        let live = self.needed(&s.reference().await?, &[]);
+        let standing = Standing {
+            root: self.dirs.root(),
+            saves: &saves,
+            keep,
+            live,
+            limit: self.reroot_after,
+            scratch: &scratch,
+        };
+        self.dumps.reroot_standing(s, &standing).await?;
+        Ok(())
     }
 
     /// After saves went: removes the dumps nothing needs and purges the binlog files before the
