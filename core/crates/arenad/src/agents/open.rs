@@ -10,10 +10,9 @@ use serde_json::{json, Value};
 use super::{AgentResult, AgentRun, Driver, FailureKind};
 use crate::{
     app::AppState,
-    exec::{tool_schemas, ToolExec},
+    exec::{tool_schemas, BranchCtx, ToolExec},
     model::add_cost,
     providers::Provider,
-    world::World,
 };
 
 pub const MAX_MODEL_CALLS: usize = 40;
@@ -56,8 +55,8 @@ impl OpenDriver {
     }
 }
 
-fn openai_tools(world: &World, allow_handoff: bool) -> Vec<Value> {
-    tool_schemas(world, allow_handoff)
+fn openai_tools(branch: &BranchCtx, agent: &str) -> Vec<Value> {
+    tool_schemas(branch, agent)
         .into_iter()
         .map(|s| {
             json!({"type": "function", "function": {
@@ -237,7 +236,7 @@ impl OpenDriver {
         let (provider, model) = provider_and_model(&state, run)?;
         totals.source = provider.cost_source();
         let url = gateway_url(&state, run);
-        let tools = openai_tools(&run.branch.world, !run.branch.is_last(&run.spec.id));
+        let tools = openai_tools(&run.branch, &run.spec.id);
         let mut messages = initial_messages(run);
         let exec = ToolExec::new(state.store.clone());
         for _ in 0..MAX_MODEL_CALLS {

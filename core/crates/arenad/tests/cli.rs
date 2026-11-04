@@ -45,6 +45,7 @@ fn spec(model: Option<&str>) -> AgentSpec {
         model: model.map(Into::into),
         prompt: "p".into(),
         provider: None,
+        read_only: false,
     }
 }
 
@@ -318,6 +319,7 @@ fn agent_spec(id: &str, kind: AgentKind, prompt: &str) -> AgentSpec {
         model: None,
         prompt: prompt.into(),
         provider: None,
+        read_only: false,
     }
 }
 

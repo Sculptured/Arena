@@ -2,7 +2,7 @@ mod links;
 
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
-use parts::proto::{ToolOutput, WorldEvent};
+use parts::proto::{Effect, ToolOutput, WorldEvent};
 use serde_json::{json, Value};
 
 use crate::{
@@ -75,6 +75,12 @@ impl BranchCtx {
         self.team.agents.last().is_some_and(|a| a.id == agent)
     }
 
+    /// True when `agent`'s team keeps it from writing (an unknown agent writes nothing either).
+    pub fn read_only(&self, agent: &str) -> bool {
+        let spec = self.team.agents.iter().find(|a| a.id == agent);
+        spec.is_none_or(|a| a.read_only)
+    }
+
     pub fn has_agent(&self, agent: &str) -> bool {
         self.team.agents.iter().any(|a| a.id == agent)
     }
@@ -124,13 +130,18 @@ pub fn handoff_schema() -> Value {
                            "required": ["note"]}})
 }
 
-/// The world's tools in MCP shape (`name`, `description`, `inputSchema`), plus `handoff` when asked.
-pub fn tool_schemas(world: &World, with_handoff: bool) -> Vec<Value> {
-    let mut list: Vec<Value> = world
+/// The tools `agent` gets on `branch`, in MCP shape (`name`, `description`, `inputSchema`): the
+/// world's (only its read tools when the agent's team made it read-only), and `handoff` unless it
+/// is the last agent.
+pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
+    let read_only = branch.read_only(agent);
+    let mut list: Vec<Value> = branch
+        .world
         .tools()
+        .filter(|t| !read_only || t.effect != Effect::Write)
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
         .collect();
-    if with_handoff {
+    if !branch.is_last(agent) {
         list.push(handoff_schema());
     }
     list
@@ -208,14 +219,15 @@ fn part_events(part: Option<&str>, events: Box<[WorldEvent]>, clock_ms: i64) -> 
         .collect()
 }
 
-/// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent is not
-/// the last one.
+/// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent's team
+/// made it read-only.
 fn refusal(branch: &BranchCtx, agent: &str, name: &str) -> Option<String> {
     if let Some(f) = branch.fatal() {
         return Some(f);
     }
-    (branch.world.is_write(name) && !branch.is_last(agent))
-        .then(|| "Write tools are not available to this agent".to_string())
+    (branch.world.is_write(name) && branch.read_only(agent)).then(|| {
+        "Write tools are not available to this agent: its team made it read-only".to_string()
+    })
 }
 
 /// Saves what changed with a step (the part written to, the clock parts that changed) with the

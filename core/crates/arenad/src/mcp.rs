@@ -30,10 +30,7 @@ async fn reply_to(state: &AppState, ctx: &BranchCtx, agent: &str, req: &Value) -
     Some(match method {
         "initialize" => ok(id, initialize_result(ctx)),
         "ping" => ok(id, json!({})),
-        "tools/list" => ok(
-            id,
-            json!({"tools": tool_schemas(&ctx.world, !ctx.is_last(agent))}),
-        ),
+        "tools/list" => ok(id, json!({"tools": tool_schemas(ctx, agent)})),
         "tools/call" => {
             let result = call_tool(state, ctx, agent, &id, &params).await;
             ok(id, result)

@@ -373,7 +373,8 @@ fn event_from(r: &Row) -> Result<Event> {
 
 fn branch_from(r: &Row) -> Result<Branch> {
     let status: String = r.get("status");
-    let team: Value = r.get("team");
+    let mut team: Value = r.get("team");
+    crate::model::legacy_read_only(&mut team);
     let mode: Option<String> = r.get("restore_mode");
     let restored: Value = r.get("restored");
     Ok(Branch {

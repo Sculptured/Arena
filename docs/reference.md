@@ -14,12 +14,12 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 | `GET /api/tasks` | the benchmark's tasks, `[{id, reason}]` |
 | `GET /api/team/default` | the default team |
 | `GET /api/runs` | the runs with their branches |
-| `POST /api/runs` | `{task_id, team}`: start a run; returns `{run_id, branch_id}`. Each agent is `{id, name, kind, model, prompt, provider?}`; 400 when an API-mode agent's provider is unknown or unavailable, or has no default model and the agent names none |
+| `POST /api/runs` | `{task_id, team}`: start a run; returns `{run_id, branch_id}`. Each agent is `{id, name, kind, model, prompt, provider?, read_only?}` (`read_only`, default false, gives the agent only read tools); 400 when an API-mode agent's provider is unknown or unavailable, or has no default model and the agent names none |
 | `DELETE /api/runs/{id}` | delete a run and what it saved (409 while a branch runs) |
 | `GET /api/branches/{id}` | a branch with its events |
 | `GET /api/branches/{id}/stream` | Server-Sent Events: each `event`, then the final `status` |
 | `GET /api/branches/{id}/rows?seq=N&keys=<kind>/<id>,...[&part=]` | the state of those keys just after step N (at most 50 keys) |
-| `POST /api/branches/{id}/fork` | `{at_seq, changes: {<agent id>: {prompt?, model?, kind?, provider?}}, restore: "exact"\|"approximate"}` (default exact); returns `{branch_id, start_seq, moved_from, reason}`. The changes are checked on the team the fork would run, as `POST /api/runs` checks a team |
+| `POST /api/branches/{id}/fork` | `{at_seq, changes: {<agent id>: {prompt?, model?, kind?, provider?, read_only?}}, restore: "exact"\|"approximate"}` (default exact); returns `{branch_id, start_seq, moved_from, reason}`. The changes are checked on the team the fork would run, as `POST /api/runs` checks a team |
 | `GET /api/branches/{id}/restore-plan?at_seq=N&restore=exact\|approximate` | `{parts: [{part, how, estimate_seconds?}]}`, or 409 with the refusal |
 | `GET /api/compare?a=<branch>&b=<branch>` | `{a, b, first_divergent_seq, differing_rows, not_compared}` |
 | `GET /api/world` | the benchmark's parts with what each integration reports (version, restore, clock use, tool names) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`) |

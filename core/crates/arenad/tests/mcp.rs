@@ -37,6 +37,7 @@ fn agent(id: &str) -> AgentSpec {
         model: None,
         prompt: "p".into(),
         provider: None,
+        read_only: false,
     }
 }
 
@@ -53,12 +54,16 @@ async fn setup(tag: &str) -> Fx {
     setup_with(tag, &[], "retail").await
 }
 
-/// A run of a two-agent team with one branch, recorded in `store`.
+/// A run of a three-agent team (the middle one read-only) with one branch, recorded in `store`.
 async fn new_branch(store: &Store) -> (Team, String) {
+    let auditor = AgentSpec {
+        read_only: true,
+        ..agent("auditor")
+    };
     let team = Team {
         id: "t".into(),
         name: "T".into(),
-        agents: vec![agent("triage"), agent("resolver")],
+        agents: vec![agent("triage"), auditor, agent("resolver")],
     };
     let run_id = store.create_run("task", &team).await.unwrap();
     let branch = store
@@ -176,16 +181,18 @@ fn initialize_and_notification() {
 }
 
 #[test]
-fn tools_list_has_handoff_only_for_first_agent() {
+fn tools_list_has_writes_unless_read_only_and_handoff_unless_last() {
     run(async {
         let fx = setup("list").await;
         let req = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
         let (_, a) = rpc(&fx, "triage", req.clone()).await;
+        let (_, ro) = rpc(&fx, "auditor", req.clone()).await;
         let (_, b) = rpc(&fx, "resolver", req).await;
-        assert!(names(&a).contains(&"handoff".to_string()));
-        assert!(names(&a).contains(&"get_user_details".to_string()));
-        assert!(!names(&b).contains(&"handoff".to_string()));
-        assert!(names(&b).contains(&"modify_user_address".to_string()));
+        let has = |v: &Value, t: &str| names(v).contains(&t.to_string());
+        assert!(has(&a, "handoff") && has(&a, "modify_user_address"));
+        assert!(has(&ro, "handoff") && has(&ro, "get_user_details"));
+        assert!(!has(&ro, "modify_user_address"));
+        assert!(!has(&b, "handoff") && has(&b, "modify_user_address"));
         // MCP shape: name, description, inputSchema.
         let t = &b["result"]["tools"][0];
         assert!(
@@ -197,19 +204,30 @@ fn tools_list_has_handoff_only_for_first_agent() {
 }
 
 #[test]
-fn triage_write_is_refused_and_recorded() {
+fn an_agent_before_the_last_writes_by_default() {
+    run(async {
+        let fx = setup("first-writes").await;
+        let r = call(&fx, "triage", "modify_user_address", address_args()).await;
+        assert_eq!(r["isError"], false, "{r}");
+        assert!(payload(&fx, 0).await.saves.is_some());
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn a_read_only_agents_write_is_refused_and_recorded() {
     run(async {
         let fx = setup("refuse").await;
-        let r = call(&fx, "triage", "modify_user_address", address_args()).await;
+        let r = call(&fx, "auditor", "modify_user_address", address_args()).await;
         assert_eq!(r["isError"], true);
         assert_eq!(
             r["content"][0]["text"],
-            "Write tools are not available to this agent"
+            "Write tools are not available to this agent: its team made it read-only"
         );
         let evs = fx.store.events(&fx.branch).await.unwrap();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].kind, EventKind::ToolCall);
-        assert_eq!(evs[0].agent.as_deref(), Some("triage"));
+        assert_eq!(evs[0].agent.as_deref(), Some("auditor"));
         let p: ToolCallPayload = serde_json::from_value(evs[0].payload.clone()).unwrap();
         assert!(p.error.is_some());
         assert!(p.snapshot.is_none() && p.saves.is_none());

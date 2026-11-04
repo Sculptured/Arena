@@ -38,14 +38,26 @@ It is `opt_in`, so arenad's default stays the retail example; choose it with `AR
 
 ## The team
 
-`src/team.rs` holds the team it suggests: Maintenance, Procurement, Production planning, Finance, then the Incident
-lead. The factory example's team is larger and works at the same time. Arena's teams are a sequence in which only
-the last agent writes, so the first four read and hand off, and the lead does every write.
+`src/team.rs` holds the team it suggests. As in the factory example, each role does its own work with its own
+tools, and a change is decided by another role than the one that proposed it:
 
-That has a cost: **the lead proposes and decides its own changes**, standing in for the plant manager, since a
-change needs a decider and there is no other writer. So a gate proves a change was made, approved and followed
-to the letter, not that someone else approved it. The limits ($5,000 for a purchase order, approved vendors, $800
-for freight) are held by the checks, not by the approvals part, which has no rules here.
+| Role | Does | Proposes | Decides |
+|---|---|---|---|
+| Maintenance | Diagnoses the failure from the evidence, names the part and a qualified technician | `maintenance_order` | |
+| Procurement | Requests and compares quotes, and freight quotes from the vendor | `purchase_order`, `freight_booking` | |
+| Finance | Awards the approved order and records it in the ERP | | `purchase_order`, `freight_booking` |
+| Production planning | Books the approved freight, schedules the repair, finds the affected orders | `customer_notice` | |
+| Incident lead | Dispatches the technician and notifies the customers on approved changes | | `maintenance_order`, `customer_notice` |
+
+Arena runs a team in order, each agent handing off to the next, so a change can only be acted on by the role that
+decided it or a later one. That is where this team differs from the example, where the proposer acts once its change
+is approved: here Finance awards the order Procurement proposed, Planning books the freight, and the lead dispatches
+the technician Maintenance chose. The example's EHS, Customer notices and Insurance roles are left out, since no
+check covers their work. No agent is read-only.
+
+The approvals part doesn't know which agent decided a change (arena's event log does), and it has no rules here, so
+the limits ($5,000 for a purchase order, approved vendors, $800 for freight) are held by the checks, and the team
+keeping proposer and decider apart is up to its prompts.
 
 The repair itself isn't waited for: a truck takes hours of plant time. The task ends with the repair scheduled.
 
@@ -60,11 +72,13 @@ because `describe` has no config. To use Isaac Sim, put a copy of this manifest 
 - `cargo test -p arena-factory` needs nothing: every named check against end states made in the test, the seed
   records, the gates' shape, and what it answers without the example.
 - `(cd core && cargo test -p arenad --test factory -- --ignored live_ --nocapture)` runs the whole world with a
-  scripted team and no model: the right path passes every check, and a wrong one (the wrong diagnosis and part, a
+  scripted team and no model, each agent doing its own part as in the table above: the right path passes every check, and a wrong one (the wrong diagnosis and part, a
   booking with no change behind it) fails. It starts an ERPNext stack of its own and removes it after.
 
 **Verified:** that live test passed on Linux, in about 190 s, against `frappe/erpnext:v16.53.0`, a local release build
-of Sculptured and the stand-in plant, with the clock at 20 times real time. It covers one run of each path. **Not
+of Sculptured and the stand-in plant, with the clock at 20 times real time. It covers one run of each path. That was
+with the earlier script, in which the lead made every change; the script with the work divided between the roles
+compiles but has not been run yet. **Not
 run:** real agents or models, the `isaac` backend, a rerun or fork of this world, and `arena-part-check` on
 `isaac-sim-standin`. Each new run makes arenad check that the base save exists, which on ERPNext rebuilds a scratch
 site.

@@ -52,6 +52,7 @@ fn agent(id: &str, provider: Option<&str>, model: Option<&str>) -> AgentSpec {
         model: model.map(str::to_string),
         prompt: format!("You are {id}."),
         provider: provider.map(str::to_string),
+        read_only: false,
     }
 }
 
@@ -556,10 +557,13 @@ fn records_and_teams_without_a_provider_mean_openrouter() {
     let old = json!({"id": "a", "name": "A", "kind": "open", "model": null, "prompt": "p"});
     let spec: AgentSpec = serde_json::from_value(old.clone()).unwrap();
     assert_eq!(spec.provider, None);
+    // No provider is written back; `read_only` always is (see `AgentSpec::read_only`).
+    let mut stored = old.clone();
+    stored["read_only"] = json!(false);
     assert_eq!(
         serde_json::to_value(&spec).unwrap(),
-        old,
-        "the shape is unchanged"
+        stored,
+        "no provider is added"
     );
     let p = ProviderConfig::default()
         .resolve(spec.provider.as_deref())

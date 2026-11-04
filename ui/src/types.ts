@@ -83,6 +83,8 @@ export interface AgentSpec {
   /** Open agents only: `openrouter` (the default when absent), `openai`, `anthropic` or `local:<name>`. */
   provider?: string | null;
   prompt: string;
+  /** True when the team keeps this agent to read tools; absent or false, it may use every tool. */
+  read_only?: boolean;
 }
 
 export interface Team {
@@ -97,6 +99,7 @@ export interface Change {
   kind?: AgentKind | null;
   /** A new provider; a model change for the fork rules. Sent with `model`. */
   provider?: string | null;
+  read_only?: boolean | null;
 }
 
 export interface Event {

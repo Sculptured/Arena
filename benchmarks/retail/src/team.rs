@@ -1,4 +1,5 @@
-//! The team this benchmark suggests (triage, then resolver) and the heading over its policy.
+//! The team this benchmark suggests (triage, then resolver) and the heading over its policy. Triage
+//! is read-only, as every team was before arena let any agent write, so runs stay comparable.
 use arena_part::proto::{BenchTeam, TeamRole};
 
 /// The heading over the store policy in each agent's input.
@@ -20,11 +21,12 @@ wait for confirmation. Verify details with read tools before writing. When done,
 listing each change you made.
 Use only the tools you have been given; do not edit the database in any other way.";
 
-fn role(id: &str, name: &str, prompt: &str) -> TeamRole {
+fn role(id: &str, name: &str, prompt: &str, read_only: bool) -> TeamRole {
     TeamRole {
         id: id.into(),
         name: name.into(),
         prompt: prompt.into(),
+        read_only,
     }
 }
 
@@ -33,8 +35,20 @@ pub fn team() -> BenchTeam {
         id: "triage-resolver".into(),
         name: "Triage and resolver".into(),
         agents: vec![
-            role("triage", "Triage", TRIAGE_PROMPT),
-            role("resolver", "Resolver", RESOLVER_PROMPT),
+            role("triage", "Triage", TRIAGE_PROMPT, true),
+            role("resolver", "Resolver", RESOLVER_PROMPT, false),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn triage_reads_and_the_resolver_writes() {
+        let t = team();
+        let read_only: Vec<_> = t.agents.iter().map(|a| (&*a.id, a.read_only)).collect();
+        assert_eq!(read_only, [("triage", true), ("resolver", false)]);
     }
 }

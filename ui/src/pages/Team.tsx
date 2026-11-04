@@ -90,7 +90,7 @@ export default function Team() {
     <>
       <header className="page-head">
         <h1>Team</h1>
-        <span className="muted small">A chain of agents; the last one writes. New runs use this team.</span>
+        <span className="muted small">Agents run in order, each handing off to the next; any agent may write unless you make it read-only. New runs use this team.</span>
         <span className="spacer" />
         <button className="btn" onClick={reset}>Reset to default</button>
         <button className="btn primary" onClick={add} disabled={!team}>Add agent</button>
@@ -112,6 +112,10 @@ export default function Team() {
               <button className="btn btn-sm danger" onClick={() => remove(i)} disabled={team.agents.length === 1} title="Remove">Remove</button>
             </div>
             <AgentFields agent={a} index={i} openOk={openOk} list={list} patch={(p) => patch(i, p)} />
+            <label className="check-field" title="Give this agent only the world's read tools">
+              <input type="checkbox" checked={!!a.read_only} onChange={(e) => patch(i, { read_only: e.target.checked })} />
+              <span>Read-only</span>
+            </label>
             <label className="field">
               <span className="label">Prompt</span>
               <textarea value={a.prompt} rows={6} onChange={(e) => patch(i, { prompt: e.target.value })} />

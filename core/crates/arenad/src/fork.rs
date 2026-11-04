@@ -172,9 +172,16 @@ pub fn settle_changes(
     }
 }
 
-/// A provider change is a model change: the fork rules treat both alike.
+/// True when `c` makes the agent read-only or lets it write again.
+fn changes_read_only(c: &Change, spec: &AgentSpec) -> bool {
+    c.read_only.is_some_and(|r| r != spec.read_only)
+}
+
+/// A provider change is a model change: the fork rules treat both alike. A read-only change is
+/// treated like a prompt change.
 fn is_change(c: &Change, spec: &AgentSpec) -> bool {
     c.prompt.is_some()
+        || changes_read_only(c, spec)
         || changes_model(c, spec)
         || changes_provider(c, spec)
         || changes_kind(c, spec)
@@ -414,7 +421,8 @@ fn finish_plan(start: Start, at_seq: i64, restore: Saves, notes: Vec<String>) ->
     }
 }
 
-/// `team` with each agent's prompt/model/kind/provider replaced where `changes` sets them.
+/// `team` with each agent's prompt/model/kind/provider/read_only replaced where `changes` sets
+/// them.
 pub fn apply_changes(team: &Team, changes: &HashMap<String, Change>) -> Team {
     let mut t = team.clone();
     for spec in &mut t.agents {
@@ -441,6 +449,9 @@ fn apply_change(spec: &mut AgentSpec, c: &Change) {
     }
     if let Some(k) = c.kind {
         spec.kind = k;
+    }
+    if let Some(r) = c.read_only {
+        spec.read_only = r;
     }
 }
 
@@ -618,6 +629,7 @@ mod tests {
             model: None,
             prompt: format!("You are {id}."),
             provider: None,
+            read_only: false,
         }
     }
 
@@ -1109,6 +1121,20 @@ mod tests {
         let c = change(&id, empty);
         let p = plan_fork(&events(), &t, 11, &c).unwrap();
         assert_eq!((p.start_seq, p.moved_from), (11, None));
+    }
+
+    #[test]
+    fn a_read_only_change_is_carried_and_only_counts_when_it_differs() {
+        let t = team(AgentKind::Open);
+        let ro = |r: bool| Change {
+            read_only: Some(r),
+            ..Default::default()
+        };
+        assert!(!is_change(&ro(false), &t.agents[0]));
+        assert!(is_change(&ro(true), &t.agents[0]));
+        let id = t.agents[0].id.clone();
+        let forked = apply_changes(&t, &change(&id, ro(true)));
+        assert!(forked.agents[0].read_only && !forked.agents[1].read_only);
     }
 
     #[test]

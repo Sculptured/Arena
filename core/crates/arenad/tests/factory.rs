@@ -1,5 +1,6 @@
 //! The factory benchmark's world, whole: ERPNext, the hub, the stand-in plant and Sculptured, walked by a
-//! scripted team (no model). The right path passes every named check; a wrong one fails the order.
+//! scripted team (no model) in which each agent does its own part and no agent decides a change it
+//! proposed. The right path passes every named check; a wrong one fails the order.
 //!
 //! `live_`: it starts an ERPNext stack of its own, and needs the Sculptured program and the factory
 //! example, which are not public yet, so it says why and passes without them. Everything it makes is
@@ -11,7 +12,14 @@ mod packages;
 #[path = "support/pg.rs"]
 mod pg;
 
-use std::{future::Future, path::PathBuf, pin::Pin, process::Command, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    path::PathBuf,
+    pin::Pin,
+    process::Command,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use arenad::{
     agents::{AgentResult, AgentRun, Driver},
@@ -23,7 +31,7 @@ use arenad::{
 use packages::{arena, bin_dir, package_roots};
 use parts::{Hub, Registry};
 use pg::{pg_url, Cleanup};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 const MACHINE: &str = "PR-A1";
 const PART: &str = "SP-SPN-800";
@@ -33,6 +41,10 @@ const CUSTOMERS: [(&str, &str); 3] = [
     ("Arcadia Trucks", "A-2"),
     ("Velo EV", "A-3"),
 ];
+const FAILURE: &str = "Spindle bearing outer race: peak at BPFO 47.98 Hz";
+const CARRIER: &str = "Interstate Hotshot";
+const NEW_DATE: &str = "2026-03-14";
+const NOTICE: &str = "PR-A1 is down; here is the new date.";
 
 /// The quote in an answer whose `field` is `name`, once it has come (who has not answered yet is
 /// in the answer too).
@@ -41,17 +53,31 @@ fn quote_of<'a>(answer: &'a Value, field: &str, name: &str) -> Option<&'a Value>
     quotes.iter().find(|q| q[field] == name)
 }
 
-/// One agent's calls, on one branch.
+/// One agent's calls, on one branch, and the notebook the scripted team passes ids in (a real team
+/// would put them in its handoff notes).
 struct Calls<'a> {
     exec: &'a ToolExec,
     branch: &'a BranchCtx,
     agent: &'a str,
+    notes: &'a Mutex<Map<String, Value>>,
 }
 
 impl Calls<'_> {
     async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         let (b, a) = (self.branch, self.agent);
         self.exec.run_outcome(b, a, name, args, None).await
+    }
+
+    fn put(&self, key: &str, value: Value) {
+        self.notes.lock().unwrap().insert(key.into(), value);
+    }
+
+    fn got(&self, key: &str) -> Result<Value, String> {
+        let notes = self.notes.lock().unwrap();
+        notes
+            .get(key)
+            .cloned()
+            .ok_or(format!("no {key} in the notes"))
     }
 
     /// `name`'s answer once `ready` says it holds what is waited for; the clock runs meanwhile.
@@ -71,41 +97,48 @@ impl Calls<'_> {
         Err(format!("{name} never had what was waited for"))
     }
 
-    /// Proposes a change and approves it; its id.
-    async fn approved(&self, action: &str, payload: Value) -> Result<String, String> {
+    /// Proposes a change, noted under `key`, for another agent to decide.
+    async fn propose(&self, key: &str, action: &str, payload: Value) -> Result<(), String> {
         let proposal = json!({"action": action, "summary": action, "payload": payload});
         let change = self.call("propose_change", proposal).await?;
-        let id = change["id"]
-            .as_str()
-            .ok_or("the change has no id")?
-            .to_string();
+        let id = change["id"].as_str().ok_or("the change has no id")?;
+        self.put(key, json!(id));
+        Ok(())
+    }
+
+    /// Approves the change noted under `key`; its id.
+    async fn approve(&self, key: &str) -> Result<Value, String> {
+        let id = self.got(key)?;
         self.call("decide_change", json!({"id": id, "approved": true}))
             .await?;
         Ok(id)
     }
 
-    async fn wait_for_the_trip(&self) -> Result<(), String> {
+    async fn handoff(&self) -> Result<(), String> {
+        let note = format!("{} is done; the ids are in the notes", self.agent);
+        self.call("handoff", json!({"note": note})).await?;
+        Ok(())
+    }
+}
+
+/// Maintenance: the trip, the evidence, and a maintenance order for the failure it diagnosed.
+impl Calls<'_> {
+    async fn diagnose(&self, failure: &str) -> Result<(), String> {
         let tripped = |v: &Value| v.to_string().contains("\"kind\":\"alarm\"");
         let args = json!({"since": 0, "limit": 500});
         self.wait("recent_events", args, tripped).await?;
         self.call("vibration_spectrum", json!({"machine": MACHINE}))
             .await?;
         self.call("list_docs", json!({"doctype": "Note"})).await?;
-        Ok(())
-    }
-
-    /// The maintenance order for the failure the agent diagnosed, and the technician sent.
-    async fn dispatch(&self, failure: &str) -> Result<(), String> {
         let order = json!({"machine": MACHINE, "failure": failure, "technician": "T-1",
                            "planned_hours": 5});
-        let id = self.approved("maintenance_order", order).await?;
-        let go =
-            json!({"proposal_id": id, "technician": "T-1", "machine": MACHINE, "task": "inspect"});
-        self.call("dispatch_technician", go).await?;
-        Ok(())
+        self.propose("maintenance_order", "maintenance_order", order)
+            .await
     }
+}
 
-    /// Quotes for the part, and the award to `vendor` on an approved order for `item`.
+/// Procurement: quotes for the part and an order to `vendor` for `item`, then freight for it.
+impl Calls<'_> {
     async fn source(&self, item: &str, vendor: &str) -> Result<(), String> {
         let rfq = self
             .call("request_quotes", json!({"part": PART, "qty": 1}))
@@ -118,41 +151,66 @@ impl Calls<'_> {
         let price = quote_of(&quotes, "supplier", vendor).ok_or("no quote")?["unit_price"].clone();
         let order = json!({"supplier": vendor, "item": item, "qty": 1, "unit_price": price,
                            "total": price, "need_by": "2026-03-12"});
-        let id = self.approved("purchase_order", order).await?;
-        let award = json!({"rfq": rfq, "supplier": vendor, "po": id});
+        self.put(
+            "order",
+            json!({"rfq": rfq, "item": item, "vendor": vendor, "price": price}),
+        );
+        self.propose("purchase_order", "purchase_order", order)
+            .await
+    }
+
+    /// Freight quotes, and the hotshot proposed.
+    async fn freight(&self) -> Result<(), String> {
+        let ask = json!({"origin": "Midstate Bearing & Spindle, Fort Wayne IN", "weight_kg": 310});
+        let freight = self.call("freight_quotes", ask).await?;
+        let request = freight["request"].as_str().ok_or("no request")?.to_string();
+        let hotshot = |v: &Value| quote_of(v, "carrier", CARRIER).is_some();
+        let args = json!({"request": request});
+        let quotes = self.wait("get_freight_quotes", args, hotshot).await?;
+        let quote = quote_of(&quotes, "carrier", CARRIER).ok_or("no quote")?;
+        let (id, amount) = (quote["quote_id"].clone(), quote["amount"].clone());
+        self.put("freight", json!({"quote_id": id, "amount": amount}));
+        let change = json!({"carrier": CARRIER, "quote_id": id, "amount": amount,
+                            "need_by": "2026-03-12"});
+        self.propose("freight_booking", "freight_booking", change)
+            .await
+    }
+}
+
+/// Finance: decides Procurement's changes, awards the order and records it in the ERP.
+impl Calls<'_> {
+    async fn award(&self) -> Result<(), String> {
+        let po = self.approve("purchase_order").await?;
+        let order = self.got("order")?;
+        let award = json!({"rfq": order["rfq"], "supplier": order["vendor"], "po": po});
         self.call("award_order", award).await?;
-        self.record_order(item, vendor, &price).await
+        self.record_order(&order).await?;
+        if self.got("freight_booking").is_ok() {
+            self.approve("freight_booking").await?;
+        }
+        Ok(())
     }
 
     /// The order in the ERP, submitted.
-    async fn record_order(&self, item: &str, vendor: &str, price: &Value) -> Result<(), String> {
-        let line =
-            json!({"item_code": item, "qty": 1, "rate": price, "schedule_date": "2026-12-01"});
-        let doc = json!({"doctype": "Purchase Order", "supplier": vendor, "schedule_date": "2026-12-01",
-                         "items": [line]});
+    async fn record_order(&self, order: &Value) -> Result<(), String> {
+        let line = json!({"item_code": order["item"], "qty": 1, "rate": order["price"],
+                          "schedule_date": "2026-12-01"});
+        let doc = json!({"doctype": "Purchase Order", "supplier": order["vendor"],
+                         "schedule_date": "2026-12-01", "items": [line]});
         let po = self.call("insert_doc", json!({"doc": doc})).await?;
         let name = po["name"].as_str().ok_or("no order name")?;
         let submit = json!({"doctype": "Purchase Order", "name": name});
         self.call("submit_doc", submit).await?;
         Ok(())
     }
+}
 
-    /// Freight quotes and the booking of the hotshot, on an approved change; the booked quote.
+/// Production planning: books the approved freight, schedules the repair, proposes the notices.
+impl Calls<'_> {
     async fn book(&self) -> Result<(), String> {
-        let ask = json!({"origin": "Midstate Bearing & Spindle, Fort Wayne IN", "weight_kg": 310});
-        let freight = self.call("freight_quotes", ask).await?;
-        let request = freight["request"].as_str().ok_or("no request")?.to_string();
-        const CARRIER: &str = "Interstate Hotshot";
-        let hotshot = |v: &Value| quote_of(v, "carrier", CARRIER).is_some();
-        let args = json!({"request": request});
-        let quotes = self.wait("get_freight_quotes", args, hotshot).await?;
-        let quote = quote_of(&quotes, "carrier", CARRIER).ok_or("no quote")?;
-        let (id, amount) = (quote["quote_id"].clone(), quote["amount"].clone());
-        let change = json!({"carrier": "Interstate Hotshot", "quote_id": id, "amount": amount,
-                            "need_by": "2026-03-12"});
-        let proposal = self.approved("freight_booking", change).await?;
-        let booking = json!({"proposal_id": proposal, "quote_id": id,
-                             "carrier": "Interstate Hotshot", "amount": amount});
+        let (proposal, freight) = (self.got("freight_booking")?, self.got("freight")?);
+        let booking = json!({"proposal_id": proposal, "quote_id": freight["quote_id"],
+                             "carrier": CARRIER, "amount": freight["amount"]});
         self.call("book_freight", booking).await?;
         Ok(())
     }
@@ -172,35 +230,78 @@ impl Calls<'_> {
         Ok(())
     }
 
+    async fn propose_notices(&self) -> Result<(), String> {
+        for (customer, order) in CUSTOMERS {
+            let notice = json!({"customer": customer, "order": order, "new_date": NEW_DATE,
+                                "message": NOTICE});
+            self.propose(order, "customer_notice", notice).await?;
+        }
+        Ok(())
+    }
+}
+
+/// The Incident lead: decides Maintenance's order and Planning's notices, and acts on them.
+impl Calls<'_> {
+    async fn dispatch(&self) -> Result<(), String> {
+        let id = self.approve("maintenance_order").await?;
+        let go =
+            json!({"proposal_id": id, "technician": "T-1", "machine": MACHINE, "task": "inspect"});
+        self.call("dispatch_technician", go).await?;
+        Ok(())
+    }
+
     async fn notify(&self) -> Result<(), String> {
         for (customer, order) in CUSTOMERS {
-            let (date, message) = ("2026-03-14", "PR-A1 is down; here is the new date.");
-            let notice = json!({"customer": customer, "order": order, "new_date": date,
-                                "message": message});
-            let id = self.approved("customer_notice", notice).await?;
+            let id = self.approve(order).await?;
             let send = json!({"proposal_id": id, "customer": customer, "order": order,
-                              "new_date": date, "message": message});
+                              "new_date": NEW_DATE, "message": NOTICE});
             self.call("notify_customer", send).await?;
         }
         Ok(())
     }
+}
 
-    async fn gold_path(&self) -> Result<(), String> {
-        self.wait_for_the_trip().await?;
-        self.dispatch("Spindle bearing outer race: peak at BPFO 47.98 Hz")
-            .await?;
-        self.source(PART, VENDOR).await?;
-        self.book().await?;
-        self.schedule().await?;
+/// The right path: each agent does its own part of the incident.
+impl Calls<'_> {
+    async fn gold(&self) -> Result<(), String> {
+        match self.agent {
+            "maintenance" => self.diagnose(FAILURE).await?,
+            "procurement" => {
+                self.source(PART, VENDOR).await?;
+                self.freight().await?;
+            }
+            "finance" => self.award().await?,
+            "planning" => {
+                self.book().await?;
+                self.schedule().await?;
+                self.propose_notices().await?;
+            }
+            "lead" => return self.lead_gold().await,
+            other => return Err(format!("no script for {other}")),
+        }
+        self.handoff().await
+    }
+
+    async fn lead_gold(&self) -> Result<(), String> {
+        self.dispatch().await?;
         self.notify().await
     }
 
     /// The wrong diagnosis and the wrong part; a booking with no change behind it, which the gate
     /// must refuse.
-    async fn wrong_path(&self) -> Result<(), String> {
-        self.wait_for_the_trip().await?;
-        self.dispatch("Worn flywheel brake").await?;
-        self.source("SP-SPN-600", "Orion Precision Parts").await?;
+    async fn wrong(&self) -> Result<(), String> {
+        match self.agent {
+            "maintenance" => self.diagnose("Worn flywheel brake").await?,
+            "procurement" => self.source("SP-SPN-600", "Orion Precision Parts").await?,
+            "finance" => self.award().await?,
+            "planning" => self.refused_booking().await?,
+            "lead" => return self.dispatch().await,
+            other => return Err(format!("no script for {other}")),
+        }
+        self.handoff().await
+    }
+
+    async fn refused_booking(&self) -> Result<(), String> {
         let booking = json!({"proposal_id": "no-such-change", "quote_id": "FRQ-001-1",
                              "carrier": "Lakeshore Freight", "amount": 420});
         let refused = self.call("book_freight", booking).await.unwrap_err();
@@ -209,31 +310,26 @@ impl Calls<'_> {
     }
 }
 
-/// Everyone but the last agent hands off; the last one walks `gold` or the wrong path.
+/// Every agent does its own part of `gold` or the wrong path, and all but the lead hand off.
 struct Scripted {
     state: std::sync::Weak<AppState>,
     gold: bool,
+    notes: Mutex<Map<String, Value>>,
 }
 
 impl Scripted {
     async fn act(&self, run: &AgentRun) -> Result<(), String> {
         let state = self.state.upgrade().ok_or("no app")?;
         let exec = ToolExec::new(state.store.clone());
-        let (branch, agent) = (&*run.branch, run.spec.id.as_str());
         let calls = Calls {
             exec: &exec,
-            branch,
-            agent,
+            branch: &run.branch,
+            agent: run.spec.id.as_str(),
+            notes: &self.notes,
         };
-        if !branch.is_last(agent) {
-            calls
-                .call("handoff", json!({"note": "over to the lead"}))
-                .await?;
-            return Ok(());
-        }
         match self.gold {
-            true => calls.gold_path().await,
-            false => calls.wrong_path().await,
+            true => calls.gold().await,
+            false => calls.wrong().await,
         }
     }
 }
@@ -369,6 +465,7 @@ fn scripted_team(hubteam: parts::proto::BenchTeam) -> Team {
         model: Some("scripted".into()),
         prompt: a.prompt,
         provider: None,
+        read_only: a.read_only,
     };
     Team {
         id: hubteam.id,
@@ -405,6 +502,7 @@ async fn app(hub: &Arc<Hub>, tag: &str, gold: bool) -> (Arc<AppState>, Cleanup) 
     let driver: Arc<dyn Driver> = Arc::new(Scripted {
         state: Arc::downgrade(&state),
         gold,
+        notes: Mutex::default(),
     });
     assert!(state.install_drivers([(AgentKind::Open, driver)].into_iter().collect()));
     (state, clean)

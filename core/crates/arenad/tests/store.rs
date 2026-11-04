@@ -24,6 +24,7 @@ fn team() -> Team {
             model: None,
             prompt: "p".into(),
             provider: None,
+            read_only: false,
         }],
     }
 }
@@ -204,6 +205,49 @@ fn open_marks_running_branches_interrupted() {
             store.branch(&passed).await.unwrap().status,
             BranchStatus::Passed
         );
+        done(admin, name, store).await;
+    })
+}
+
+/// Runs `sql` in the database `name`.
+async fn execute(admin: &Admin, name: &str, sql: &str) {
+    let (client, conn) = tokio_postgres::connect(&admin.db_url(name), tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let task = tokio::spawn(conn);
+    client.batch_execute(sql).await.unwrap();
+    drop(client);
+    let _ = task.await;
+}
+
+/// A pair's `read_only`, as the store reads its branch back.
+async fn read_only_of(store: &Store, b: &str) -> Vec<bool> {
+    let team = store.branch(b).await.unwrap().team;
+    team.agents.iter().map(|a| a.read_only).collect()
+}
+
+#[test]
+fn a_team_stored_before_read_only_keeps_the_old_rule() {
+    run(async {
+        let (admin, name, store, _clean) = fresh("readonly").await;
+        let mut pair = team();
+        pair.agents.push(AgentSpec {
+            id: "b".into(),
+            ..pair.agents[0].clone()
+        });
+        let run_id = store.create_run("task", &pair).await.unwrap();
+        let b = store
+            .create_branch(&run_id, None, &pair, &json!([]), None)
+            .await
+            .unwrap();
+        // Stored now: every agent writes, as the team says.
+        assert_eq!(read_only_of(&store, &b).await, [false, false]);
+        // Recorded before the field: only the last agent wrote then, and still does.
+        let strip = "UPDATE branches SET team = jsonb_set(team, '{agents}', \
+            (SELECT jsonb_agg(a - 'read_only' ORDER BY i) \
+             FROM jsonb_array_elements(team->'agents') WITH ORDINALITY e(a, i)))";
+        execute(&admin, &name, strip).await;
+        assert_eq!(read_only_of(&store, &b).await, [true, false]);
         done(admin, name, store).await;
     })
 }

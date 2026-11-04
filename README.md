@@ -226,7 +226,8 @@ other integration is checked on its own, and API mode has not been measured.
 - Only `postgres` has been used in an arenad run with agents; every other integration is checked on its own.
 - Two benchmarks are included: the retail example and `benchmarks/factory`, which needs a factory example that is
   not public yet. arenad runs one benchmark at a time.
-- Teams are a fixed sequence of agents with handoff notes; only the last agent writes.
+- Teams are a fixed sequence of agents with handoff notes: each runs once, in order, and none runs at the same time
+  as another. Any agent may write unless its team marks it `read_only`.
 - API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
   servers) are tested against fake servers only, with no real model call.
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).

@@ -23,9 +23,15 @@ pub struct AgentSpec {
     /// teams made before providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// True when the team keeps this agent from writing: it gets no write tools, and a write call
+    /// is refused. Absent means false, so every agent may use every tool unless its team says
+    /// otherwise. Always stored: a stored team without it was recorded under the old rule (only
+    /// the last agent writes), which [`legacy_read_only`] applies.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
-/// A chain of agents; the last agent writes.
+/// Agents run in order; each but the last hands a note to the next.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Team {
     pub id: String,
@@ -42,6 +48,23 @@ pub struct Change {
     /// rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Whether the agent is kept from writing (see [`AgentSpec::read_only`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
+}
+
+/// A stored team as it ran: an agent recorded before `read_only` existed (no such key) ran under
+/// the old rule, where only the last agent could write, so it is read-only unless it is last.
+pub fn legacy_read_only(team: &mut Value) {
+    let Some(agents) = team.get_mut("agents").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let last = agents.len().saturating_sub(1);
+    for (i, a) in agents.iter_mut().enumerate() {
+        if let Some(a) = a.as_object_mut() {
+            a.entry("read_only").or_insert(Value::Bool(i != last));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
-//! The incident's ticket, the rules every agent gets and the team this benchmark suggests. arenad
-//! runs a team as a sequence in which only the last agent writes, so the others read and hand off,
-//! and the Incident lead acts on what they found.
+//! The incident's ticket, the rules every agent gets and the team this benchmark suggests. As in the
+//! factory example, each role does its own work with its own tools, and a change is decided by
+//! another role than the one that proposed it. arenad runs the team in order, each agent handing off
+//! to the next, so a change is acted on by the role that decided it or a later one.
 use arena_part::proto::{BenchTeam, TeamRole};
 
 pub const INSTRUCTIONS_TITLE: &str = "Incident rules";
@@ -20,9 +21,10 @@ approvals system (`propose_change`, `list_changes`, `decide_change`). The waitin
 quotes and events arrive as the clock runs, so check again.
 
 Rules for every change:
-- Propose it first with `propose_change {action, summary, payload}`, then decide it. Tools that act on a \
-change refuse unless the change is approved and matches the call. Actions and their payload fields \
-(amounts are numbers in USD, dates YYYY-MM-DD):
+- Propose it first with `propose_change {action, summary, payload}`. Another role decides it with \
+`decide_change`: your instructions say which changes you decide. Never decide a change you proposed. \
+Tools that act on a change refuse unless the change is approved and matches the call. Actions and their \
+payload fields (amounts are numbers in USD, dates YYYY-MM-DD):
   - `maintenance_order {machine, failure, technician, planned_hours}`, then `dispatch_technician` with \
 its id as `proposal_id`;
   - `purchase_order {supplier, item, qty, unit_price, total, need_by}`, then `award_order` with its id \
@@ -39,45 +41,54 @@ vendors are approved.
 day the part arrives (`plant_state` lists the shipment once it is booked).
 - Never invent a number, an id or a reply.";
 
-const READ_ONLY: &str = " You can only read: writes are refused for you. Finish by calling the \
-handoff tool with what the Incident lead needs, stated as facts with their numbers.";
+const HANDOFF: &str =
+    " Finish by calling the handoff tool with what the next roles need, stated as \
+facts with their numbers and the ids of the changes you proposed or decided.";
 
 fn role(id: &str, name: &str, work: &str) -> TeamRole {
     TeamRole {
         id: id.into(),
         name: name.into(),
-        prompt: format!("You are {name} at Ridgeline Components. {work}{READ_ONLY}"),
+        prompt: format!("You are {name} at Ridgeline Components. {work}{HANDOFF}"),
+        read_only: false,
     }
 }
 
-const MAINTENANCE: &str = "Find what failed. No alarm says so: wait for PR-A1's trip in `recent_events`, read \
-its telemetry and `vibration_spectrum`, and match the largest peaks against the defect table in the \
-service manual. State the failed component, the evidence, the replacement part from the manual, and a \
-technician qualified for the work (`plant_state`).";
+const MAINTENANCE: &str = "Find what failed. No alarm says so: wait for PR-A1's trip in `recent_events`, \
+read its telemetry and `vibration_spectrum`, and match the largest peaks against the defect table in the \
+service manual. Name the failed component, the evidence, the replacement part from the manual, and a \
+technician qualified for the work (`plant_state`). Propose the `maintenance_order`; the Incident lead \
+decides it and dispatches the technician.";
 
-const PROCUREMENT: &str =
-    "From Maintenance's note and the ERP, say which vendors may supply the part and \
-what the limits mean for this order. Quotes can only be requested by the Incident lead.";
+const PROCUREMENT: &str = "Get the replacement part Maintenance named. Check in the ERP which vendors \
+are approved, request quotes, and wait for them with `get_quotes`. Propose a `purchase_order` to an \
+approved vendor within the limits. Then get freight quotes from that vendor's location and propose a \
+`freight_booking` within the limits. Finance decides both; do not award or book anything yourself.";
 
-const PLANNING: &str =
-    "List the orders on the stopped line and the customers they belong to, from the ERP's \
-Notes and `plant_state`, with the new dates you would tell them.";
+const FINANCE: &str = "Decide Procurement's `purchase_order` and `freight_booking` against the limits in \
+the rules and the ERP's approved vendors: approve what is within them, refuse the rest and say why. For \
+an approved purchase order, award it (`award_order`, its id as `po`) and record it in the ERP as a \
+submitted Purchase Order. Say what the order and the downtime will cost.";
 
-const FINANCE: &str =
-    "Check the plan against the limits in the rules, and what the downtime and the \
-order will cost.";
+const PLANNING: &str = "Book the freight Finance approved (`book_freight`, its id as `proposal_id`). \
+Wait until `plant_state` lists the shipment, then schedule the repair as a ToDo in the ERP that names the \
+press and the part, dated no earlier than the day the part arrives. From the ERP's Notes and \
+`plant_state`, find every order on the stopped line and its customer, and propose a `customer_notice` \
+for each with its new date. The Incident lead decides them.";
 
 const LEAD: &str = "You are the Incident lead at Ridgeline Components, and you hold the plant manager's \
-authority in this exercise, within the limits in the rules. Your input has your team's notes. Carry the \
-incident through with the tools: dispatch the technician, source and award the part, get freight booked, \
-schedule the repair, and notify every affected customer. Propose and decide each change as the rules \
-say. End with a short summary of what you did.";
+authority in this exercise, within the limits in the rules. Your input has your team's notes. Decide \
+Maintenance's `maintenance_order` and Planning's `customer_notice` changes. Dispatch the technician on \
+the approved maintenance order, and notify each customer on their approved notice. Check that the part \
+was awarded, the freight booked and the repair scheduled, and say plainly what is missing if not. End \
+with a short summary of what the team did.";
 
 pub fn team() -> BenchTeam {
     let lead = TeamRole {
         id: "lead".into(),
         name: "Incident lead".into(),
         prompt: LEAD.into(),
+        read_only: false,
     };
     BenchTeam {
         id: "incident".into(),
@@ -85,8 +96,8 @@ pub fn team() -> BenchTeam {
         agents: vec![
             role("maintenance", "Maintenance", MAINTENANCE),
             role("procurement", "Procurement", PROCUREMENT),
-            role("planning", "Production planning", PLANNING),
             role("finance", "Finance", FINANCE),
+            role("planning", "Production planning", PLANNING),
             lead,
         ],
     }
@@ -97,11 +108,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_last_agent_writes_and_the_others_read() {
+    fn every_role_writes_and_the_lead_is_last() {
         let t = team();
         let (last, others) = t.agents.split_last().unwrap();
         assert_eq!(last.id, "lead");
+        assert!(t.agents.iter().all(|a| !a.read_only));
         assert!(others.iter().all(|a| a.prompt.contains("handoff")));
         assert!(!last.prompt.contains("handoff"));
+    }
+
+    /// Each change is proposed by one role and decided by another.
+    #[test]
+    fn no_role_decides_what_it_proposes() {
+        let t = team();
+        let prompt = |id: &str| &t.agents.iter().find(|a| a.id == id).unwrap().prompt;
+        assert!(prompt("maintenance").contains("Incident lead decides"));
+        assert!(prompt("procurement").contains("Finance decides"));
+        assert!(prompt("finance").starts_with("You are Finance at Ridgeline Components. Decide"));
+        assert!(prompt("planning").contains("Incident lead decides"));
+        assert!(INSTRUCTIONS.contains("Never decide a change you proposed"));
     }
 }

@@ -255,12 +255,15 @@ pub struct TaskInfo {
     pub ticket: String,
 }
 
-/// One agent of a benchmark's suggested team: its id (`^[a-z0-9_-]+$`), name and system prompt.
+/// One agent of a benchmark's suggested team: its id (`^[a-z0-9_-]+$`), name and system prompt,
+/// and whether the team keeps it from writing (absent: it may use every tool).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TeamRole {
     pub id: String,
     pub name: String,
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 /// A link between two parts: an event of `from` of kind `event` calls `to`'s `tool`. In `args`, a

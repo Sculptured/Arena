@@ -55,11 +55,17 @@ rerun panel show, per part, how it will be restored and, for a replay, an estima
 ## Teams and agents
 
 A team is a list of agents that run one after another. Each agent's input is the task's ticket, the benchmark's
-instructions, and the previous agent's handoff note. Every agent sees the world's tools; only the last agent may
-call write tools (the others are refused), and every agent but the last must call `handoff` with a note for the
-next one, or the branch fails. `GET /api/team/default` gives the team the benchmark suggests, every agent
-Claude Code with model `sonnet` (the retail example suggests triage, then resolver). A benchmark that suggests
-none gets one generic agent.
+instructions, and the previous agent's handoff note. Every agent may call every one of the world's tools, writes
+included, unless its team marks it `read_only`: then it is given only the read tools, and a write call is refused
+and recorded. Who does what is the team's design, not arena's. Every agent but the last must call `handoff` with a
+note for the next one, or the branch fails. `GET /api/team/default` gives the team the benchmark suggests, every
+agent Claude Code with model `sonnet` (the retail example suggests a read-only triage, then a resolver). A
+benchmark that suggests none gets one generic agent.
+
+Runs recorded before `read_only` existed ran under the old rule, where only the last agent could write. A stored
+team whose agents carry no `read_only` is read that way (every agent but the last read-only), so those runs, and
+forks of them, show and keep the permissions they ran with. Every team stored since records `read_only` for each
+agent.
 
 An agent's `kind` picks its mode:
 
@@ -99,7 +105,8 @@ Isolation of the CLI agents (`core/crates/arenad/src/agents/`; checked live by t
 
 ## Forking
 
-You choose a step N and a change (prompt, model, provider, or kind of one or more agents) and a restore mode.
+You choose a step N and a change (prompt, model, provider, kind or `read_only` of one or more agents) and a
+restore mode.
 
 - Each part of the world is put back as it was just before the fork point, in the restore mode you choose.
 - Agents that finished before the fork point keep their recorded output (for example the handoff note).
@@ -116,6 +123,7 @@ You choose a step N and a change (prompt, model, provider, or kind of one or mor
 - Changing an API-mode agent's `provider` is a model change for these rules. It drops the old model, which
   belongs to the old provider, unless the same change sets one; only OpenRouter has a default model, so the web UI
   always sends a model with a provider. Naming the agent's own provider is no change.
+- Changing `read_only` is treated like a prompt change; setting it to what the agent already has is no change.
 
 ## Cost labels
 

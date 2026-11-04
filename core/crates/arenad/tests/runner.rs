@@ -43,6 +43,7 @@ fn agent(id: &str) -> AgentSpec {
         model: Some("fake/model".into()),
         prompt: format!("You are {id}."),
         provider: None,
+        read_only: false,
     }
 }
 

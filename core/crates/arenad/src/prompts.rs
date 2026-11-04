@@ -34,6 +34,7 @@ fn generic_team() -> Team {
         id: "agent".into(),
         name: "Agent".into(),
         prompt: GENERIC_PROMPT.into(),
+        read_only: false,
     };
     Team {
         id: "single-agent".into(),
@@ -58,6 +59,7 @@ fn agent(role: &TeamRole) -> AgentSpec {
         model: Some(MODEL.into()),
         prompt: role.prompt.clone(),
         provider: None,
+        read_only: role.read_only,
     }
 }
 
@@ -104,6 +106,7 @@ mod tests {
             id: id.into(),
             name: id.to_uppercase(),
             prompt: format!("be {id}"),
+            read_only: id == "first",
         };
         let given = BenchTeam {
             id: "pair".into(),
@@ -125,6 +128,8 @@ mod tests {
             ]
         );
         assert!(t.agents.iter().all(|a| a.kind == AgentKind::ClaudeCode));
+        let read_only: Vec<_> = t.agents.iter().map(|a| a.read_only).collect();
+        assert_eq!(read_only, [true, false]);
     }
 
     #[test]

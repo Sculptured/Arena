@@ -44,6 +44,7 @@ fn solo() -> Team {
         model: Some("fake/model".into()),
         prompt: "You are solo.".into(),
         provider: None,
+        read_only: false,
     };
     Team {
         id: "t".into(),

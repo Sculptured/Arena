@@ -59,6 +59,7 @@ input, select, textarea {
 textarea { resize: vertical; font-family: var(--font-mono); font-size: var(--text-sm); line-height: var(--leading); }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .field { display: flex; flex-direction: column; gap: var(--space-1); }
+.check-field { display: flex; align-items: center; gap: var(--space-1); }
 .label { color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: var(--tracking-caps); font-weight: var(--weight-medium); }
 
 .chip {
