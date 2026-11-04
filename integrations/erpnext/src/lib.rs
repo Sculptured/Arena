@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use arena_part::helpers::busy::BusySet;
-use arena_part::helpers::mariadb::{Dumps, Server};
+use arena_part::helpers::mariadb::{Dumps, Server, DEFAULT_REROOT_AFTER};
 use arena_part::helpers::save_dirs::SaveDirs;
 use arena_part::proto::*;
 use arena_part::{Part, PartError};

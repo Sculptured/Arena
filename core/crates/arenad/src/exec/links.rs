@@ -36,63 +36,48 @@ enum Reported {
     Link(LinkStep),
 }
 
-/// Makes `link`'s call for the event with `data`. A call that doesn't reach the part has no
-/// `part`, so a replay doesn't repeat it.
-async fn call_link(branch: &BranchCtx, link: &Link, data: &Value, clock_ms: i64) -> LinkStep {
-    let mut facts = CallFacts {
-        clock_ms: Some(clock_ms),
-        ..CallFacts::default()
-    };
-    let tool = link.tool.clone();
-    let args = match link_args(link, data) {
-        Ok(args) => args,
-        Err(e) => {
-            let (args, outcome) = (json!({}), Err(e));
-            return LinkStep {
-                tool,
-                args,
-                outcome,
-                facts,
-            };
-        }
-    };
-    let world = &branch.world;
-    let outcome = match world
-        .call_part_tool(&link.to, &tool, args.clone(), clock_ms)
-        .await
-    {
-        Err(e) => Err(failure(branch, e)),
-        Ok(output) => {
-            let outcome = outcome_of(&output);
-            if outcome.is_ok() && !output.writes.is_empty() {
-                world.mark_written(&link.to);
-            }
-            facts.events = part_events(Some(&link.to), output.events, clock_ms);
-            (facts.reads, facts.writes) = (output.reads, output.writes);
-            facts.part = Some(link.to.clone());
-            outcome
-        }
-    };
+/// A link's step that didn't reach the part: no `part`, so a replay doesn't repeat it.
+fn step_not_made(tool: &str, args: Value, error: String, clock_ms: i64) -> LinkStep {
     LinkStep {
-        tool,
+        tool: tool.to_string(),
         args,
-        outcome,
-        facts,
-    }
-}
-
-/// The step recorded when a report has made as many calls as it may.
-fn too_many_calls(link: &Link, clock_ms: i64) -> LinkStep {
-    LinkStep {
-        tool: link.tool.clone(),
-        args: json!({}),
-        outcome: Err(format!(
-            "links made {MAX_LINK_CALLS} calls in one step; this one and later ones were not made"
-        )),
+        outcome: Err(error),
         facts: CallFacts {
             clock_ms: Some(clock_ms),
             ..CallFacts::default()
         },
+    }
+}
+
+/// Makes `link`'s call for the event with `data`.
+async fn call_link(branch: &BranchCtx, link: &Link, data: &Value, clock_ms: i64) -> LinkStep {
+    let args = match link_args(link, data) {
+        Ok(args) => args,
+        Err(e) => return step_not_made(&link.tool, json!({}), e, clock_ms),
+    };
+    let world = &branch.world;
+    let called = world.call_part_tool(&link.to, &link.tool, args.clone(), clock_ms);
+    let output = match called.await {
+        Ok(output) => output,
+        Err(e) => return step_not_made(&link.tool, args, failure(branch, e), clock_ms),
+    };
+    let outcome = outcome_of(&output);
+    if outcome.is_ok() && !output.writes.is_empty() {
+        world.mark_written(&link.to);
+    }
+    let facts = CallFacts {
+        part: Some(link.to.clone()),
+        events: part_events(Some(&link.to), output.events, clock_ms),
+        reads: output.reads,
+        writes: output.writes,
+        clock_ms: Some(clock_ms),
+        ..CallFacts::default()
+    };
+    LinkStep {
+        tool: link.tool.clone(),
+        args,
+        outcome,
+        facts,
     }
 }
 
@@ -106,7 +91,15 @@ async fn run_links(branch: &BranchCtx, events: Vec<PartEvent>) -> Vec<Reported> 
         log.push(Reported::Event(e));
         for link in &links {
             if calls == MAX_LINK_CALLS {
-                log.push(Reported::Link(too_many_calls(link, clock_ms)));
+                let error = format!(
+                    "links made {MAX_LINK_CALLS} calls in one step; this one and later ones were not made"
+                );
+                log.push(Reported::Link(step_not_made(
+                    &link.tool,
+                    json!({}),
+                    error,
+                    clock_ms,
+                )));
                 return log;
             }
             calls += 1;

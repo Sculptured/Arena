@@ -306,8 +306,20 @@ async fn live_mariadb_dump_threshold() {
     check_dump_freed_last(&p, &e).await;
 }
 
+/// While an instance is live it needs the same binlog as `base_x`, which stays chained.
+async fn check_not_rerooted_while_live(p: &Mariadb, e: &Env, keep: &[String]) -> Manifest {
+    let big = "x".repeat(5000);
+    exec(p, "a", &format!("INSERT INTO t VALUES (2, '{big}')")).await;
+    rotate_binlogs(e, 2).await;
+    let keep = keep.to_vec();
+    p.gc(GcParams { keep }).await.unwrap();
+    let held = Manifest::read(&e.save_dir("base_x")).unwrap();
+    assert!(!held.segments.is_empty(), "{held:?}");
+    held
+}
+
 /// A save kept by a pattern is rewritten as a dump once it holds too much binlog alone, and the
-/// binlog can go; it still restores what it held, and a save kept by name is left as it was.
+/// binlog can go; it still restores what it held.
 #[tokio::test]
 #[ignore]
 async fn live_mariadb_reroots_standing_saves() {
@@ -317,25 +329,10 @@ async fn live_mariadb_reroots_standing_saves() {
     p.start(start("a", &cfg, None)).await.unwrap();
     exec(&p, "a", "INSERT INTO t VALUES (1, 'in the save')").await;
     save(&p, &e, "a", "base_x").await;
-    assert!(!Manifest::read(&e.save_dir("base_x"))
-        .unwrap()
-        .segments
-        .is_empty());
-    let big = "x".repeat(5000);
-    exec(&p, "a", &format!("INSERT INTO t VALUES (2, '{big}')")).await;
-    rotate_binlogs(&e, 2).await;
     let keep = vec!["base_*".to_string()];
-    p.gc(GcParams { keep: keep.clone() }).await.unwrap();
-    let held = Manifest::read(&e.save_dir("base_x")).unwrap();
-    assert!(
-        !held.segments.is_empty(),
-        "a live instance needs the same binlog"
-    );
-    p.stop(IdParams {
-        instance: "a".into(),
-    })
-    .await
-    .unwrap();
+    let held = check_not_rerooted_while_live(&p, &e, &keep).await;
+    let stop = |i: &str| IdParams { instance: i.into() };
+    p.stop(stop("a")).await.unwrap();
     p.gc(GcParams { keep }).await.unwrap();
     let m = Manifest::read(&e.save_dir("base_x")).unwrap();
     assert!(m.segments.is_empty() && m.root.is_some(), "{m:?}");
@@ -346,11 +343,7 @@ async fn live_mariadb_reroots_standing_saves() {
     );
     restore(&p, &cfg, "b", "base_x").await;
     assert_eq!(rows(&p, "b").await, json!([{"id": 1, "v": "in the save"}]));
-    p.stop(IdParams {
-        instance: "b".into(),
-    })
-    .await
-    .unwrap();
+    p.stop(stop("b")).await.unwrap();
 }
 
 /// The binlog files before s2's oldest position are gone (drop_save and gc both purge).

@@ -193,11 +193,12 @@ fn world_event_payload(e: PartEvent) -> WorldEventPayload {
 }
 
 /// `events` a tool call on `part` gave at `clock_ms`, as part events.
-fn part_events(part: Option<&str>, events: Vec<WorldEvent>, clock_ms: i64) -> Vec<PartEvent> {
+fn part_events(part: Option<&str>, events: Box<[WorldEvent]>, clock_ms: i64) -> Vec<PartEvent> {
     let Some(part) = part else {
         return vec![];
     };
     events
+        .into_vec()
         .into_iter()
         .map(|event| PartEvent {
             part: part.to_string(),

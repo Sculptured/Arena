@@ -196,6 +196,27 @@ fn assert_alarm_then_link(evs: &[Event]) {
     assert!(step["saves"]["src"].is_string(), "{step}");
 }
 
+/// An exact fork after the link's step gets its effect from the record and calls nothing again.
+async fn assert_fork_replays_the_step(fx: &Fx, parent: &str, evs: &[Event]) {
+    let (st, v) = fx.fork(parent, model_call(evs, 1)).await;
+    assert_eq!(st, 200, "{v}");
+    let child = v["branch_id"].as_str().unwrap();
+    let b = fx.finished(child).await;
+    assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
+    let start = fx
+        .state
+        .store
+        .branch(child)
+        .await
+        .unwrap()
+        .start_seq
+        .unwrap();
+    let cevs = fx.state.store.events(child).await.unwrap();
+    assert!(get_value(&cevs, start) >= 1000, "the replay added it again");
+    let own: Vec<Event> = cevs.iter().filter(|e| e.seq >= start).cloned().collect();
+    assert!(link_steps(&own).is_empty(), "{own:?}");
+}
+
 /// The alarm calls `add` as a `link` step at the alarm's time, agents don't get `add`, and an
 /// exact fork replays the step from the record without calling it again.
 #[test]
@@ -214,27 +235,7 @@ fn an_event_calls_the_linked_tool_and_a_replay_repeats_it() {
             "{offered}"
         );
 
-        let (st, v) = fx.fork(&parent, model_call(&evs, 1)).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap();
-        let b = fx.finished(child).await;
-        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-        let start = fx
-            .state
-            .store
-            .branch(child)
-            .await
-            .unwrap()
-            .start_seq
-            .unwrap();
-        let cevs = fx.state.store.events(child).await.unwrap();
-        assert!(get_value(&cevs, start) >= 1000, "the replay added it again");
-        let own = cevs
-            .iter()
-            .filter(|e| e.seq >= start)
-            .cloned()
-            .collect::<Vec<_>>();
-        assert!(link_steps(&own).is_empty(), "{own:?}");
+        assert_fork_replays_the_step(&fx, &parent, &evs).await;
     })
 }
 

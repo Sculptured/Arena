@@ -130,8 +130,8 @@ pub struct ToolOutput {
     #[serde(default)]
     pub writes: Vec<String>,
     /// Events the call itself gives the world: recorded, and matched against the world's links.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<WorldEvent>,
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    pub events: Box<[WorldEvent]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
