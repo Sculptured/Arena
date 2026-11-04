@@ -368,24 +368,145 @@ fn model_cutoff_is_failed_not_infra_error() {
     })
 }
 
+/// The second agent started without a note, and every agent was offered `message` and `inbox`.
+fn assert_second_agent_has_no_note_and_talk_tools(up: &FakeUpstream) {
+    let input = up.requests()[1]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!input.contains("Handoff note"), "{input}");
+    let tools = up.requests()[0]["tools"].to_string();
+    assert!(
+        tools.contains("\"message\"") && tools.contains("\"inbox\""),
+        "{tools}"
+    );
+}
+
+/// A new run never needs a handoff: an agent that leaves none ends normally, the next one
+/// starts without a note, and the run's rules are recorded in `RunStart`.
 #[test]
-fn missing_handoff_fails() {
+fn a_run_goes_on_without_handoffs() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("I forgot to hand off.")]).await;
+        let up = FakeUpstream::start(vec![text_msg("Nothing to hand off.")]).await;
         let fx = setup("nohandoff", Some(&up), false).await;
         let (_run, branch) = runner::start_run(&fx.state, "27", team()).await.unwrap();
         let b = finished(&fx, &branch).await;
-        assert_eq!(b.status, BranchStatus::Failed);
-        assert_eq!(b.error.as_deref(), Some("no handoff"));
+        // Nothing was written, so the world differs from the gold one: failed, but not for a
+        // missing handoff.
+        assert_eq!((b.status, b.error), (BranchStatus::Failed, None));
         let evs = fx.state.store.events(&branch).await.unwrap();
         assert_eq!(
             kinds(&evs),
             vec![
                 EventKind::RunStart,
                 EventKind::AgentStart,
-                EventKind::AgentEnd
+                EventKind::AgentEnd,
+                EventKind::AgentStart,
+                EventKind::AgentEnd,
+                EventKind::Check
             ]
         );
+        let rs = &evs[0].payload;
+        assert_eq!(
+            (&rs["runner"], &rs["handoff"]),
+            (&json!("chain"), &json!("optional"))
+        );
+        assert_second_agent_has_no_note_and_talk_tools(&up);
+    })
+}
+
+/// A branch under the old rules (a fork of a run recorded before runners) still fails when an
+/// agent but the last leaves no handoff.
+#[test]
+fn a_legacy_branch_still_needs_its_handoff() {
+    run(async {
+        let up = FakeUpstream::start(vec![text_msg("I forgot to hand off.")]).await;
+        let fx = setup("legacyhandoff", Some(&up), false).await;
+        let (branch, ctx) = live_branch(&fx).await;
+        assert_eq!(ctx.rules, Rules::legacy());
+        runner::run_branch(fx.state.clone(), ctx, StartPoint::default()).await;
+        let b = fx.state.store.branch(&branch).await.unwrap();
+        assert_eq!(b.status, BranchStatus::Failed);
+        assert_eq!(b.error.as_deref(), Some("no handoff"));
+        let evs = fx.state.store.events(&branch).await.unwrap();
+        assert_eq!(
+            kinds(&evs),
+            vec![EventKind::AgentStart, EventKind::AgentEnd]
+        );
+    })
+}
+
+/// Two agents that only finish once each has seen the other's message: possible only when
+/// they run at once.
+struct Pen {
+    state: std::sync::Weak<AppState>,
+}
+
+impl Pen {
+    async fn act(&self, exec: &ToolExec, run: &AgentRun) -> Result<(), String> {
+        let (b, me) = (&run.branch, run.spec.id.as_str());
+        let other = if me == "triage" { "resolver" } else { "triage" };
+        let msg = json!({"to": other, "text": format!("hello from {me}")});
+        exec.run_outcome(b, me, "message", msg, None).await?;
+        for _ in 0..100 {
+            let inbox = exec.run_outcome(b, me, "inbox", json!({}), None).await?;
+            if inbox["messages"].as_array().is_some_and(|m| !m.is_empty()) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(format!("{me} never heard from {other}"))
+    }
+}
+
+impl Driver for Pen {
+    fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
+        Box::pin(async move {
+            let exec = ToolExec::new(self.state.upgrade().unwrap().store.clone());
+            let error = self.act(&exec, &run).await.err();
+            AgentResult {
+                ok: error.is_none(),
+                error,
+                tokens: json!({}),
+                cost_usd: None,
+                cost_source: None,
+                seconds: 0.0,
+                failure: None,
+            }
+        })
+    }
+}
+
+#[test]
+fn the_concurrent_runner_runs_every_agent_at_once() {
+    run(async {
+        let make: MakeDriver = Box::new(|s| {
+            Arc::new(Pen {
+                state: Arc::downgrade(s),
+            })
+        });
+        let fx = setup_full("concurrent", None, Drv::Make(make), &[], "retail").await;
+        let started = runner::start_run_with(&fx.state, "27", team(), Runner::Concurrent);
+        let (_run, branch) = started.await.unwrap();
+        let b = finished(&fx, &branch).await;
+        // Both agents finished (nothing was written, so the check fails).
+        assert_eq!((b.status, b.error), (BranchStatus::Failed, None));
+        let evs = fx.state.store.events(&branch).await.unwrap();
+        assert_eq!(evs[0].payload["runner"], "concurrent");
+        let k = kinds(&evs);
+        assert_eq!(&k[1..3], [EventKind::AgentStart, EventKind::AgentStart]);
+        let messages: Vec<_> = evs
+            .iter()
+            .filter(|e| e.kind == EventKind::Message)
+            .collect();
+        assert_eq!(messages.len(), 2);
+        let inbox = evs.iter().rfind(|e| e.payload["name"] == "inbox").unwrap();
+        let got = &inbox.payload["result"]["messages"][0];
+        assert_eq!(
+            (got["kind"].as_str(), got["to"].as_str()),
+            (Some("message"), inbox.agent.as_deref())
+        );
+        assert_eq!(k.last(), Some(&EventKind::Check));
     })
 }
 

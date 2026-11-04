@@ -2,7 +2,9 @@
 //! over the benchmark's instructions. A benchmark's own `team` and `instructions_title` win.
 use parts::proto::{BenchDescribe, BenchTeam, TeamRole};
 
-use crate::model::{AgentKind, AgentSpec, Team};
+use serde::Deserialize;
+
+use crate::model::{trimmed, AgentKind, AgentSpec, Team};
 
 /// The heading over the instructions when the benchmark gives none.
 pub const INSTRUCTIONS_TITLE: &str = "Instructions";
@@ -27,6 +29,33 @@ pub fn instructions_title(bench: &BenchDescribe) -> &str {
 /// The team suggested for `bench`: its own, or one generic agent. Every agent is Claude Code.
 pub fn default_team(bench: &BenchDescribe) -> Team {
     bench.team.as_ref().map_or_else(generic_team, team_of)
+}
+
+/// How to run the suggested agents instead of Claude Code with `sonnet`.
+#[derive(Debug, Default, Deserialize)]
+pub struct Pick {
+    pub kind: Option<AgentKind>,
+    /// Blank: the kind's default model.
+    pub model: Option<String>,
+    pub provider: Option<String>,
+}
+
+/// `default_team` with every agent run as `pick` says. A new kind without a model gets the
+/// kind's default model (none).
+pub fn default_team_with(bench: &BenchDescribe, pick: &Pick) -> Team {
+    let mut team = default_team(bench);
+    for a in &mut team.agents {
+        if let Some(k) = pick.kind.filter(|k| *k != a.kind) {
+            (a.kind, a.model) = (k, None);
+        }
+        if let Some(m) = &pick.model {
+            a.model = trimmed(m);
+        }
+        if let Some(p) = &pick.provider {
+            a.provider = trimmed(p);
+        }
+    }
+    team
 }
 
 fn generic_team() -> Team {
@@ -130,6 +159,28 @@ mod tests {
         assert!(t.agents.iter().all(|a| a.kind == AgentKind::ClaudeCode));
         let read_only: Vec<_> = t.agents.iter().map(|a| a.read_only).collect();
         assert_eq!(read_only, [true, false]);
+    }
+
+    #[test]
+    fn the_suggested_team_can_run_on_any_kind_and_model() {
+        let open = Pick {
+            kind: Some(AgentKind::Open),
+            model: None,
+            provider: Some("local:box".into()),
+        };
+        let t = default_team_with(&bench(None, None), &open);
+        let a = &t.agents[0];
+        assert_eq!((a.kind, a.model.as_deref()), (AgentKind::Open, None));
+        assert_eq!(a.provider.as_deref(), Some("local:box"));
+        let model = Pick {
+            model: Some("opus".into()),
+            ..Pick::default()
+        };
+        let a = &default_team_with(&bench(None, None), &model).agents[0];
+        assert_eq!(
+            (a.kind, a.model.as_deref()),
+            (AgentKind::ClaudeCode, Some("opus"))
+        );
     }
 
     #[test]

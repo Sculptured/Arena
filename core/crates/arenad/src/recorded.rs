@@ -10,7 +10,7 @@ use parts::proto::WorldPart;
 use serde_json::{Map, Value};
 
 use crate::{
-    model::{Event, EventKind},
+    model::{Event, EventKind, Rules},
     world::Saves,
 };
 
@@ -75,6 +75,12 @@ pub fn run_info(events: &[Event]) -> RunInfo {
         world: world.unwrap_or_default(),
         fingerprints: fingerprints.unwrap_or_default(),
     }
+}
+
+/// The rules the run of `events` runs under, from its `RunStart` (legacy when there is none).
+pub fn rules(events: &[Event]) -> Rules {
+    let start = events.iter().find(|e| e.kind == EventKind::RunStart);
+    start.map_or_else(Rules::legacy, |e| Rules::of_run_start(&e.payload))
 }
 
 /// The arena clock just before step `before_seq`: the `clock_ms` of the last event before it

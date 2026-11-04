@@ -20,7 +20,7 @@ use crate::{
     model::*,
     overhead::{self, Cat},
     providers::ProviderConfig,
-    recorded::{run_info, saves_at_except},
+    recorded::{self, run_info, saves_at_except},
     restore::{restored, Refused},
     runner::{self, StartPoint},
     world::Saves,
@@ -32,6 +32,7 @@ pub const REASON_EARLIER: &str = "a change targets an agent that finished earlie
 pub const REASON_CLI: &str = "Claude Code and Codex sessions restart from the agent's start";
 pub const REASON_KIND: &str = "the agent's mode changes";
 pub const REASON_TOOL: &str = "a tool call is redone from the model call that chose it";
+pub const REASON_CONCURRENT: &str = "agents that ran at once all restart from the run's start";
 pub const REASON_RUN_START: &str = "the run restarts from the first agent's start";
 pub const REASON_AGENT_RESTART: &str = "the agent restarts from its first start";
 pub const REASON_LAST_MODEL_CALL: &str =
@@ -244,6 +245,18 @@ impl Planner<'_> {
         }
     }
 
+    /// A concurrent run's agents all restart, from the first agent's start (or right after
+    /// `RunStart` if none began).
+    fn restart_all(&self) -> Start {
+        let first = self.events.iter().find(|e| e.kind == EventKind::AgentStart);
+        Start {
+            seq: first.map_or(self.at_seq + 1, |e| e.seq),
+            reason: Some(REASON_CONCURRENT),
+            agent: 0,
+            resume: None,
+        }
+    }
+
     /// Restart agent `i` from its first start, for `reason`.
     fn restart(&self, i: usize, reason: &'static str) -> Result<Start, ForkError> {
         Ok(Start {
@@ -396,8 +409,11 @@ pub fn plan_fork_with(
         at_seq,
         at,
     };
-    let active = planner.active_agent()?;
-    let mut start = planner.start_for(changes, &changed, active)?;
+    let rules = recorded::rules(events);
+    let mut start = match rules.runner {
+        Runner::Concurrent => planner.restart_all(),
+        Runner::Chain => planner.start_for(changes, &changed, planner.active_agent()?)?,
+    };
     let a = start.agent;
     if start.seq == planner.first_start(a).unwrap_or(i64::MIN) {
         start.resume = None;
@@ -405,7 +421,11 @@ pub fn plan_fork_with(
     // 5. The world just before the start: per part, the save of its last write before it.
     let restore = saves_at_except(events, start.seq - 1, &run_info(events).base, replayed)
         .map_err(|n| ForkError::NoRestorePoint { seq: n.seq })?;
-    let notes = planner.handoff_notes(a, start.seq)?;
+    let notes = match rules.handoff_required {
+        true => planner.handoff_notes(a, start.seq)?,
+        // An agent's input then has the notes recorded before its start, copied with the prefix.
+        false => vec![],
+    };
     Ok(finish_plan(start, at_seq, restore, notes))
 }
 
@@ -488,6 +508,7 @@ pub async fn fork_with(
     let new_id = create_child(state, &parent, &rerun, &team, &req).await?;
     let world = start_child_world(state, &events, &parent.id, &new_id, &mut rerun).await?;
     let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id)
+        .with_rules(recorded::rules(&events))
         .with_clock(BranchClock::from_env(rerun.clock_ms));
     Ok(spawn_child(state, ctx, rerun.plan))
 }
@@ -732,6 +753,40 @@ mod tests {
 
     fn change(agent: &str, c: Change) -> HashMap<String, Change> {
         [(agent.to_string(), c)].into_iter().collect()
+    }
+
+    /// `events()` as a run of today recorded it, with `runner`.
+    fn events_of(runner: &str) -> Vec<Event> {
+        let mut evs = events();
+        evs[0].payload = json!({"task_id": "27", "runner": runner, "handoff": "optional"});
+        evs
+    }
+
+    #[test]
+    fn a_concurrent_run_restarts_every_agent() {
+        let p = plan_fork(
+            &events_of("concurrent"),
+            &team(AgentKind::Open),
+            12,
+            &no_changes(),
+        );
+        let p = p.unwrap();
+        assert_eq!((p.start_seq, p.agent_index), (2, 0));
+        assert_eq!(p.reason.as_deref(), Some(REASON_CONCURRENT));
+        assert_eq!((p.restore, p.resume, p.notes), (base(), None, vec![]));
+    }
+
+    #[test]
+    fn a_new_chain_needs_no_handoff_to_fork_after_it() {
+        let mut evs = events_of("chain");
+        evs.retain(|e| e.kind != EventKind::Handoff);
+        let p = plan_fork(&evs, &team(AgentKind::Open), 11, &no_changes()).unwrap();
+        assert_eq!((p.start_seq, p.agent_index, p.notes), (11, 1, vec![]));
+        // A legacy run without the handoff can't be forked there.
+        let mut legacy = events();
+        legacy.retain(|e| e.kind != EventKind::Handoff);
+        let refused = plan_fork(&legacy, &team(AgentKind::Open), 11, &no_changes());
+        assert!(matches!(refused, Err(ForkError::MissingHandoff(_))));
     }
 
     #[test]

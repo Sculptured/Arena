@@ -31,7 +31,7 @@ pub struct AgentSpec {
     pub read_only: bool,
 }
 
-/// Agents run in order; each but the last hands a note to the next.
+/// The agents of a run. How they run (in order, at once) is the run's runner, not the team's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Team {
     pub id: String,
@@ -63,6 +63,63 @@ pub fn legacy_read_only(team: &mut Value) {
     for (i, a) in agents.iter_mut().enumerate() {
         if let Some(a) = a.as_object_mut() {
             a.entry("read_only").or_insert(Value::Bool(i != last));
+        }
+    }
+}
+
+/// Who drives a run's agents.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runner {
+    /// arenad runs the agents one after another, in the team's order.
+    #[default]
+    Chain,
+    /// arenad runs every agent at once.
+    Concurrent,
+}
+
+/// The rules a branch runs under, recorded in its run's `RunStart` (`runner`, `handoff`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rules {
+    pub runner: Runner,
+    /// True for runs recorded before handoffs were optional: every agent but the last must hand
+    /// off, the last may not, and an agent's input has only the previous agent's note.
+    pub handoff_required: bool,
+}
+
+impl Rules {
+    /// What a new run gets with `runner`: handoffs and messages optional.
+    pub fn new(runner: Runner) -> Rules {
+        Rules {
+            runner,
+            handoff_required: false,
+        }
+    }
+
+    /// The rules of a run recorded before runners: a chain with a handoff required.
+    pub fn legacy() -> Rules {
+        Rules {
+            runner: Runner::Chain,
+            handoff_required: true,
+        }
+    }
+
+    /// The rules a `RunStart` payload records; one without `runner` is a legacy run.
+    pub fn of_run_start(payload: &Value) -> Rules {
+        match serde_json::from_value::<Runner>(payload["runner"].clone()) {
+            Ok(runner) => Rules {
+                runner,
+                handoff_required: payload["handoff"] == "required",
+            },
+            Err(_) => Rules::legacy(),
+        }
+    }
+
+    /// How `RunStart` writes `handoff_required` (its field `handoff`).
+    pub fn handoff_word(self) -> &'static str {
+        match self.handoff_required {
+            true => "required",
+            false => "optional",
         }
     }
 }
@@ -119,6 +176,7 @@ pub enum EventKind {
     ModelCall,
     ToolCall,
     Handoff,
+    Message,
     AgentEnd,
     Check,
     WorldEvent,
@@ -132,6 +190,7 @@ impl EventKind {
             EventKind::ModelCall => "model_call",
             EventKind::ToolCall => "tool_call",
             EventKind::Handoff => "handoff",
+            EventKind::Message => "message",
             EventKind::AgentEnd => "agent_end",
             EventKind::Check => "check",
             EventKind::WorldEvent => "world_event",
@@ -145,6 +204,7 @@ impl EventKind {
             "model_call" => EventKind::ModelCall,
             "tool_call" => EventKind::ToolCall,
             "handoff" => EventKind::Handoff,
+            "message" => EventKind::Message,
             "agent_end" => EventKind::AgentEnd,
             "check" => EventKind::Check,
             "world_event" => EventKind::WorldEvent,
@@ -240,7 +300,20 @@ pub struct AgentEndPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HandoffPayload {
     pub note: String,
+    /// The agent the note is for; absent: for whoever comes next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
 }
+
+/// Payload of `EventKind::Message`: one agent's message to another, or to all (`to` = `*`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MessagePayload {
+    pub to: String,
+    pub text: String,
+}
+
+/// `to` of a message for every agent.
+pub const EVERYONE: &str = "*";
 
 /// Payload of `EventKind::Check`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

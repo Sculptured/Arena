@@ -317,9 +317,13 @@ async fn tasks(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
     ))
 }
 
-/// The team the benchmark suggests, or arenad's generic one.
-async fn default_team(State(state): State<Arc<AppState>>) -> ApiResult<Team> {
-    Ok(Json(prompts::default_team(&state.bench().await?)))
+/// The team the benchmark suggests, or arenad's generic one; `kind`, `model` and `provider`
+/// in the query set every agent's (Claude Code with `sonnet` when absent).
+async fn default_team(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<prompts::Pick>,
+) -> ApiResult<Team> {
+    Ok(Json(prompts::default_team_with(&state.bench().await?, &q)))
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSummary>> {
@@ -332,6 +336,9 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSumma
 struct NewRun {
     task_id: String,
     team: Team,
+    /// `chain` (default) or `concurrent`.
+    #[serde(default)]
+    runner: Runner,
 }
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
@@ -345,7 +352,8 @@ async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResul
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
         let _cleanup = cleanup;
-        Ok(runner::start_run(&state, &req.task_id, req.team).await?)
+        let (task, team) = (&req.task_id, req.team);
+        Ok(runner::start_run_with(&state, task, team, req.runner).await?)
     })
     .await?;
     Ok(Json(json!({"run_id": run_id, "branch_id": branch_id})))

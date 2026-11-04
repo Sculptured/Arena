@@ -1,4 +1,5 @@
 mod links;
+mod talk;
 
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
@@ -16,6 +17,7 @@ use crate::{
 };
 
 pub use links::LINK_ACTOR;
+pub use talk::{handoff_schema, mail_for, HANDOFF, INBOX, MESSAGE};
 
 /// One running branch: its world, team, arena clock and per-agent handoff notes.
 pub struct BranchCtx {
@@ -27,7 +29,9 @@ pub struct BranchCtx {
     pub clock: BranchClock,
     /// Sends `advance` to the world's clock parts while the branch runs.
     ticker: tokio::sync::Mutex<Option<Ticker>>,
-    /// agent id -> handoff note, set once the agent has called `handoff`.
+    /// The rules the branch runs under (from its run's `RunStart`).
+    pub rules: Rules,
+    /// agent id -> its latest handoff note.
     pub handoffs: Mutex<HashMap<String, String>>,
     /// Set when a program of the world has stopped: the branch ends `infra_error` with it.
     fatal: Mutex<Option<String>>,
@@ -36,7 +40,8 @@ pub struct BranchCtx {
 }
 
 impl BranchCtx {
-    /// A branch whose clock starts at 0 (at the speed `ARENA_CLOCK_SPEED` sets).
+    /// A branch whose clock starts at 0 (at the speed `ARENA_CLOCK_SPEED` sets), under the rules
+    /// of runs recorded before runners (see [`Rules::legacy`]) until `with_rules` says otherwise.
     pub fn new(branch_id: String, world: Arc<World>, team: Team, task_id: String) -> BranchCtx {
         BranchCtx {
             branch_id,
@@ -45,10 +50,17 @@ impl BranchCtx {
             task_id,
             clock: BranchClock::from_env(0),
             ticker: tokio::sync::Mutex::new(None),
+            rules: Rules::legacy(),
             handoffs: Mutex::new(HashMap::new()),
             fatal: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// The same branch under `rules`.
+    pub fn with_rules(mut self, rules: Rules) -> BranchCtx {
+        self.rules = rules;
+        self
     }
 
     /// The same branch with `clock` as its arena clock.
@@ -143,17 +155,9 @@ pub struct ToolExec {
     pub store: Arc<Store>,
 }
 
-pub fn handoff_schema() -> Value {
-    json!({"name": "handoff",
-           "description": "Pass the conversation to the next agent with a note summarising what you learned and what remains. Call it exactly once, when you are done.",
-           "inputSchema": {"type": "object",
-                           "properties": {"note": {"type": "string"}},
-                           "required": ["note"]}})
-}
-
 /// The tools `agent` gets on `branch`, in MCP shape (`name`, `description`, `inputSchema`): the
-/// world's (only its read tools when the agent's team made it read-only), and `handoff` unless it
-/// is the last agent.
+/// world's (only its read tools when the agent's team made it read-only), and the tools agents
+/// talk with (see `talk`).
 pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
     let read_only = branch.read_only(agent);
     let mut list: Vec<Value> = branch
@@ -162,9 +166,7 @@ pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
         .filter(|t| !read_only || t.effect != Effect::Write)
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
         .collect();
-    if !branch.is_last(agent) {
-        list.push(handoff_schema());
-    }
+    list.extend(talk::schemas(branch, agent));
     list
 }
 
@@ -274,27 +276,6 @@ fn failure(branch: &BranchCtx, e: WorldError) -> String {
     }
 }
 
-/// Records `agent`'s handoff note, or says why it can't.
-fn take_handoff(branch: &BranchCtx, agent: &str, args: &Value) -> Result<String, String> {
-    let note = args
-        .get("note")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
-    if branch.is_last(agent) {
-        return Err("handoff is not available to the last agent".to_string());
-    }
-    if note.is_empty() {
-        return Err("handoff() requires a non-empty 'note' string".to_string());
-    }
-    let mut h = branch.handoffs.lock().unwrap();
-    if h.contains_key(agent) {
-        return Err("handoff already sent".to_string());
-    }
-    h.insert(agent.to_string(), note.to_string());
-    Ok(note.to_string())
-}
-
 impl ToolExec {
     pub fn new(store: Arc<Store>) -> ToolExec {
         ToolExec { store }
@@ -384,8 +365,8 @@ impl ToolExec {
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
         let _gate = branch.gate_timed().await;
-        if name == "handoff" {
-            return self.handoff(branch, agent, args, tool_call_id).await;
+        if talk::is_talk(branch, name) {
+            return self.talk(branch, agent, name, args, tool_call_id).await;
         }
         let (outcome, mut facts) = self.execute(branch, agent, name, &args).await;
         let events = std::mem::take(&mut facts.events);
@@ -394,40 +375,6 @@ impl ToolExec {
             .await?;
         self.report(branch, events).await?;
         outcome
-    }
-
-    async fn handoff(
-        &self,
-        branch: &BranchCtx,
-        agent: &str,
-        args: Value,
-        tool_call_id: Option<String>,
-    ) -> Result<Value, String> {
-        match take_handoff(branch, agent, &args) {
-            Ok(note) => {
-                self.record(
-                    branch,
-                    Some(agent),
-                    EventKind::Handoff,
-                    &HandoffPayload { note },
-                )
-                .await?;
-                Ok(json!({"ok": true}))
-            }
-            Err(e) => {
-                let outcome = Err(e);
-                let payload = tool_call_payload(
-                    "handoff",
-                    args,
-                    &outcome,
-                    tool_call_id,
-                    CallFacts::default(),
-                );
-                self.record(branch, Some(agent), EventKind::ToolCall, &payload)
-                    .await?;
-                outcome
-            }
-        }
     }
 
     async fn record<T: serde::Serialize>(
