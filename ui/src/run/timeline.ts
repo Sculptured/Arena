@@ -37,7 +37,8 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
       case 'agent_start': step.kind = 'start'; step.label = 'start'; break;
       case 'agent_end': step.kind = 'end'; step.label = p.ok === false ? 'end (failed)' : 'end'; break;
       case 'model_call': step.kind = 'model'; step.label = 'model'; break;
-      case 'handoff': step.kind = 'handoff'; step.label = 'handoff'; break;
+      case 'handoff': step.kind = 'handoff'; step.label = typeof p.to === 'string' ? `handoff → ${p.to}` : 'handoff'; break;
+      case 'message': step.kind = 'handoff'; step.label = `message → ${String(p.to ?? '?')}`; break;
       case 'tool_call':
         step.kind = 'tool';
         step.label = typeof p.name === 'string' ? p.name : 'tool';

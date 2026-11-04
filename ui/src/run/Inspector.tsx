@@ -113,7 +113,8 @@ export default function Inspector({ branchId, event, team, autoRows }: { branchI
       );
       break;
     }
-    case 'handoff': body = <Block title="Handoff note" value={p.note} />; break;
+    case 'handoff': body = <Block title={p.to ? `Handoff note for ${p.to}` : 'Handoff note'} value={p.note} />; break;
+    case 'message': body = <Block title={`Message to ${p.to === '*' ? 'everyone' : p.to}`} value={p.text} />; break;
     case 'check':
       body = (
         <>

@@ -1,6 +1,9 @@
 // Mirrors arenad's model.rs / fork.rs / compare.rs / recorded.rs (serde snake_case).
 
-export type AgentKind = 'claude_code' | 'codex' | 'open';
+export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external';
+
+/** Who drives a run's agents (`model.rs` `Runner`). `external`: the design's own system, over the API. */
+export type Runner = 'chain' | 'concurrent' | 'external';
 
 /** Model arenad uses for an OpenRouter agent with no model set (`providers/mod.rs`). */
 export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-chat-v3.1';
@@ -30,8 +33,10 @@ export type EventKind =
   | 'model_call'
   | 'tool_call'
   | 'handoff'
+  | 'message'
   | 'agent_end'
-  | 'check';
+  | 'check'
+  | 'world_event';
 
 export type RestoreMode = 'exact' | 'approximate';
 /** How one part of a rerun's world is (or was) restored (`model.rs` `RestoredHow`). */
@@ -73,6 +78,9 @@ export interface RunStartPayload {
   /** Each part's integration fingerprint at the run's start. */
   fingerprints?: Record<string, unknown>;
   saves?: Saves;
+  /** The run's rules; absent in runs recorded before runners (a chain with a handoff required). */
+  runner?: Runner;
+  handoff?: 'required' | 'optional';
 }
 
 export interface AgentSpec {
@@ -184,9 +192,45 @@ export interface Branch {
   restored?: RestoredPart[];
 }
 
-/** GET /api/branches/{id}: the branch plus its events. */
+/** Arena's own time per kind, in ms (`overhead.rs`); a kind with none is absent. */
+export type Overhead = Partial<Record<'save' | 'restore' | 'record' | 'gateway' | 'gate' | 'link' | 'mcp' | 'wait' | 'score', number>>;
+
+/** A cost and where it comes from (`metrics.rs`). */
+export interface Cost {
+  usd: number | null;
+  /** `reported`, `list-price estimate`, `no API charge`, `unknown` or `mixed`. */
+  label: string;
+  source: string | null;
+  as_of: string | null;
+}
+
+export interface AgentUse {
+  agent: string;
+  kind: AgentKind | null;
+  model: string | null;
+  provider: string | null;
+  tokens: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  cost: Cost;
+}
+
+/** A branch's numbers for deployment estimates (`metrics.rs`). */
+export interface Metrics {
+  measured_s: number;
+  overhead_ms: Overhead;
+  overhead_s: number;
+  overhead_recorded: boolean;
+  estimated_s: number | null;
+  tokens: number;
+  cost: Cost;
+  agents: AgentUse[];
+}
+
+/** GET /api/branches/{id}: the branch plus its events and metrics. */
 export interface BranchDetail extends Branch {
   events: Event[];
+  metrics?: Metrics;
 }
 
 export interface RunSummary {

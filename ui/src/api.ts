@@ -1,6 +1,6 @@
 import type {
   Branch, BranchDetail, Change, CompareResponse, Event, ForkResponse, Health, NewRunResponse,
-  ProviderStatus, RestoreMode, RestorePlan, RowsResponse, RunSummary, StatusEvent, TaskSummary, Team,
+  ProviderStatus, RestoreMode, RestorePlan, RowsResponse, RunSummary, Runner, StatusEvent, TaskSummary, Team,
 } from './types';
 
 export class ApiError extends Error {
@@ -35,7 +35,7 @@ export const health = () => call<Health>('/api/health');
 export const providers = () => call<ProviderStatus[]>('/api/providers');
 export const tasks = () => call<TaskSummary[]>('/api/tasks');
 export const defaultTeam = () => call<Team>('/api/team/default');
-export const startRun = (task_id: string, team: Team) => post<NewRunResponse>('/api/runs', { task_id, team });
+export const startRun = (task_id: string, team: Team, runner: Runner = 'chain') => post<NewRunResponse>('/api/runs', { task_id, team, runner });
 export const runs = () => call<RunSummary[]>('/api/runs');
 export const branch = (id: string) => call<BranchDetail>(`/api/branches/${encodeURIComponent(id)}`);
 export const rows = (id: string, seq: number, keys: string[]) =>

@@ -4,12 +4,25 @@ import { branch as fetchBranch, runs as fetchRuns, stream } from '../api';
 import { ApproximateMark, StatusChip } from '../components';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
+import MetricsPanel from '../run/Metrics';
 import Timeline from '../run/Timeline';
 import { formatCost, lanes, summarize } from '../run/timeline';
-import type { Branch, BranchDetail, Event } from '../types';
+import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
 import { worldLine } from '../restore';
 import { costIsUnknown, teamProviders } from '../providers';
 import { branchTree } from './Runs';
+
+/** How the run's agents ran, from its `run_start` (old runs: a chain with a handoff required). */
+export function runnerLine(events: Event[]): string {
+  const rs = events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined;
+  if (!rs) return '';
+  if (!rs.runner) return 'Agents ran one after another, each handing off to the next (recorded before runners).';
+  return {
+    chain: 'Agents ran one after another; handoffs and messages optional.',
+    concurrent: 'Agents ran at once; handoffs and messages optional.',
+    external: 'An external system drove the agents through their endpoints.',
+  }[rs.runner];
+}
 
 export default function Run() {
   const { runId = '', branchId = '' } = useParams();
@@ -105,6 +118,8 @@ export default function Run() {
           {detail.error && <div className="notice error">{detail.error}</div>}
           {detail.fork_note && <div className="muted small">{detail.fork_note}</div>}
           {world && <div className="muted small world-line" title={world}>{world}</div>}
+          {runnerLine(detail.events) && <div className="muted small">{runnerLine(detail.events)}</div>}
+          {detail.metrics && <MetricsPanel m={detail.metrics} />}
           <div className="panel pane">
             <Timeline lanes={ls} team={detail.team} selected={selected} onSelect={(s) => { setSelected(s); }} />
           </div>

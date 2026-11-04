@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { deleteRun, runs as fetchRuns, startRun, tasks as fetchTasks } from '../api';
 import { ApproximateMark, DISK_CHANGED, StatusChip, formatTime } from '../components';
 import { loadTeam, teamForRun } from '../team';
-import type { Branch, RunSummary, TaskSummary } from '../types';
+import type { Branch, RunSummary, Runner, TaskSummary } from '../types';
 
 /** Branches in tree order with their depth (parent before children, oldest first). */
 export function branchTree(branches: Branch[]): { branch: Branch; depth: number }[] {
@@ -28,6 +28,7 @@ function NewRun({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string 
   const nav = useNavigate();
   const [taskId, setTaskId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [runner, setRunner] = useState<Runner>('chain');
   const selected = taskId || tasks[0]?.id || '';
 
   const start = async () => {
@@ -36,7 +37,7 @@ function NewRun({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string 
     onError(null);
     try {
       const team = teamForRun(await loadTeam());
-      const r = await startRun(selected, team);
+      const r = await startRun(selected, team, runner);
       nav(`/runs/${r.run_id}/${r.branch_id}`);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -52,6 +53,14 @@ function NewRun({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string 
           {tasks.map((t) => (
             <option key={t.id} value={t.id}>{t.id} · {t.reason}</option>
           ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="label">Agents run</span>
+        <select value={runner} onChange={(e) => setRunner(e.target.value as Runner)} disabled={busy}
+          title="Arena tracks every agent either way and imposes no order or handoff. An external system can also drive a run through the API.">
+          <option value="chain">one after another</option>
+          <option value="concurrent">all at once</option>
         </select>
       </label>
       <button className="btn primary" onClick={start} disabled={busy || !selected}>

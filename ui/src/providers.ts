@@ -7,7 +7,7 @@ import type { AgentKind, AgentSpec, ProviderKind, ProviderStatus, Team } from '.
 /** The cost source of a local server's calls (`providers/mod.rs` `LOCAL_COST_SOURCE`). */
 export const LOCAL_COST_SOURCE = 'local (no API charge)';
 
-export const MODE_LABEL: Record<AgentKind, string> = { claude_code: 'Claude Code', codex: 'Codex', open: 'API mode' };
+export const MODE_LABEL: Record<AgentKind, string> = { claude_code: 'Claude Code', codex: 'Codex', open: 'API mode', external: 'External' };
 
 /** The provider id `p` stands for: itself trimmed, else the default (`openrouter`). */
 export function providerId(p: string | null | undefined): string {
