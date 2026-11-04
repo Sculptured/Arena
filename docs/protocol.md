@@ -47,7 +47,7 @@ mounted at `/saves`.
 |---|---|---|
 | `describe` | `{}` | `{name, version, protocol, restore: {exact: "save"\|"replay"\|"none", approximate: bool}, uses_clock: bool, fingerprint: {...}, tools: [ToolSchema]}` |
 | `start` | `{instance, config, seed, clock_ms, from?: {save, mode: "exact"\|"approximate"}}` | `{}` |
-| `call_tool` | `{instance, name, args, clock_ms}` | `{result?, error?, reads: [key], writes: [key]}` |
+| `call_tool` | `{instance, name, args, clock_ms}` | `{result?, error?, reads: [key], writes: [key], events?: [{kind, text, data}]}` |
 | `advance` | `{instance, clock_ms}` | `{changed: bool, events: [{kind, text, data}]}` |
 | `save` | `{instance, save, dir}` | `{bytes, exact: bool}` |
 | `inspect` | `{target: {instance}\|{save}, keys: [key]}` | `{docs: {key: doc\|null}}` |
@@ -68,6 +68,8 @@ mounted at `/saves`.
   `-32002` only when the folder is missing.
 - `advance` moves the part's clock to `clock_ms`. Parts with `uses_clock: false` never get it. Events the
   part reports (an alarm, a shipment arriving) are recorded as world events.
+- `events` in a `call_tool` result are recorded as world events right after the call, for a part that has
+  something to report at once (`advance` is the other way; parts without the clock have only this one).
 - `save` reports `exact: false` when the save may not capture everything (an approximate save).
 - `inspect` with an empty `keys` list returns every key the part has for that target.
 - `usage` counts only what the part keeps outside `ARENA_SAVES` (databases, files elsewhere). arenad
@@ -84,7 +86,7 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema]}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link]}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
@@ -97,6 +99,30 @@ A benchmark program speaks the same transport.
   arenad offers one agent with a generic prompt.
 - The CLI agents know the world's MCP server by the benchmark's `name` (any character outside
   `[A-Za-z0-9_-]` replaced by `_`), so their tools are `mcp__<name>__<tool>` in Claude Code.
+
+### Links between parts
+
+Parts never call each other. A benchmark's `describe` may declare `links`, and arenad makes the calls:
+
+```json
+{"from": "hub", "event": "shipment_booked", "to": "plant", "tool": "add_shipment",
+ "args": {"part": "/part", "origin": "/origin", "note": "a constant"}}
+```
+
+- When `from` gives an event of kind `event` (from `advance`, or in a `call_tool` result), arenad calls `to`'s
+  `tool` with `clock_ms` set to the event's time. In `args`, a string starting with `/` is a JSON pointer into
+  the event's `data`; anything else is a constant. An argument the event lacks makes the step an error, and the
+  part is not called.
+- Each call is recorded as a normal tool call step with the actor `link` (no agent may have that id), after the
+  world events of that report and before any later step. The events a call gives can set off more links, up to
+  64 calls in one report; the 65th step says it was not made.
+- All the calls of one report are made and the parts they changed saved before any of them is recorded, and the
+  saves go on the last one, so a fork can't land on a state with only some of them.
+- A replay repeats the calls from the record like any other input of `to`, and compares what they give. Events a
+  rerun's start drops were recorded already, so their links don't run again.
+- A world is refused when a link names a part it doesn't have or a tool `to` doesn't list. A tool that a link
+  calls is not offered to agents.
+- Links don't run while the base and gold saves are made, because nothing advances the clock then.
 
 A benchmark's tools reach parts only through `connect` info. Only parts with exact saves may be connected
 (replay re-sends a part's own inputs, which a benchmark's direct writes are not).

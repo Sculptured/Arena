@@ -4,6 +4,7 @@
 
 mod clocked;
 mod ids;
+mod links;
 mod plan;
 mod saving;
 mod standard;
@@ -16,8 +17,8 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use parts::{
     proto::{
-        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Mode, ToolOutput,
-        ToolSchema, WorldPart,
+        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Link, Mode,
+        ToolOutput, ToolSchema, WorldPart,
     },
     CallError, Client, Hub,
 };
@@ -28,6 +29,7 @@ use crate::restore::{in_shared_saves, keeps_saves};
 
 pub use clocked::PartEvent;
 pub use ids::{instance_id, new_save_id};
+pub use links::link_args;
 pub use plan::{plan, Plan, PlannedPart, Route};
 pub use saving::StepSaves;
 pub use standard::{ensure_base, ensure_gold, SHARED_SEED};
@@ -177,6 +179,7 @@ pub struct World {
     bench_client: Option<Arc<Client>>,
     parts: Vec<Part>,
     tools: Vec<(ToolSchema, Route)>,
+    links: Vec<Link>,
     connections: Map<String, Value>,
     track: Mutex<Track>,
 }
@@ -245,6 +248,7 @@ impl World {
         bench: &str,
         bench_client: Option<Arc<Client>>,
         tools: Vec<(ToolSchema, Route)>,
+        links: Vec<Link>,
     ) -> World {
         World {
             hub,
@@ -252,6 +256,7 @@ impl World {
             bench_client,
             parts: vec![],
             tools,
+            links,
             connections: Map::new(),
             track: Mutex::default(),
         }
@@ -267,9 +272,13 @@ impl World {
         seed: u64,
         from: Option<&StartSaves>,
     ) -> Result<World> {
-        let Plan { parts, tools } = planned;
+        let Plan {
+            parts,
+            tools,
+            links,
+        } = planned;
         let bench_client = hub.client(&bench.name).await?;
-        let mut world = World::new(hub, &bench.name, Some(bench_client), tools);
+        let mut world = World::new(hub, &bench.name, Some(bench_client), tools, links);
         for p in parts {
             if let Err(e) = world.add_part(p, branch_id, seed, from).await {
                 world.stop().await;
@@ -454,6 +463,7 @@ impl World {
             error: o.error,
             reads: o.reads,
             writes: o.writes,
+            ..Default::default()
         };
         Ok(Called {
             output,

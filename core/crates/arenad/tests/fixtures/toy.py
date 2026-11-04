@@ -3,7 +3,7 @@
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
               [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
               [--save-sleep MS] [--refuse-start-if FILE] [--describe-fails] [--describe-hangs] [--gc] [--gc-fails]
-              [--gc-waits-for FILE]
+              [--gc-waits-for FILE] [--tool-event KIND]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -15,12 +15,13 @@
       reports a change whenever the clock moved, and an `alarm` event on an instance's first
       advance (on every advance with --event-every). --save-sleep makes every `save` take MS
       milliseconds. With --refuse-start-if, `start` answers -32003 (fingerprint mismatch) while
-      FILE exists. With --gc-waits-for, `gc` answers only once FILE exists.
+      FILE exists. With --gc-waits-for, `gc` answers only once FILE exists. With --tool-event,
+      `poke`'s result gives an event of that kind with data {"n": <the new value>}.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
-               [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]]
+               [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]] [--link JSON ...]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
       --part list; each part's config is `{}` or the --config given for it. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
-      ran on PART (default `box`). Gold: one TOOL with JSON args (default `poke` with `{}`).
+      ran on PART (default `box`). --link adds a link to the world. Gold: one TOOL with JSON args (default `poke` with `{}`).
 """
 import json
 import os
@@ -109,7 +110,10 @@ class Part:
         n = self.lookup(self.counters, i, "instance")
         if p["name"] == PREFIX + "poke":
             self.counters[i] = n + 1
-            return {"result": {"n": n + 1}, "reads": [], "writes": ["box/n"]}
+            out = {"result": {"n": n + 1}, "reads": [], "writes": ["box/n"]}
+            if "--tool-event" in ARGS:
+                out["events"] = [{"kind": opt("--tool-event", ""), "text": "poked", "data": {"n": n + 1}}]
+            return out
         if p["name"] == PREFIX + "peek":
             return {"result": {"n": n}, "reads": ["box/n"], "writes": []}
         return {"error": "unknown tool " + p["name"], "reads": [], "writes": []}
@@ -183,7 +187,8 @@ class Bench:
         tools += [RING] if "--bench-tool" in ARGS else []
         return {"name": "toybench", "version": "0.1.0", "protocol": 1, "world": world(),
                 "tasks": [{"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n"}],
-                "instructions": "Be kind to the box.", "tools": tools}
+                "instructions": "Be kind to the box.", "tools": tools,
+                "links": [json.loads(link) for link in opts("--link")]}
 
     def seed(self, p):
         return {}

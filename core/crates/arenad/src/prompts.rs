@@ -76,6 +76,7 @@ mod tests {
             instructions_title: title.map(Into::into),
             team,
             tools: vec![],
+            links: vec![],
         }
     }
 

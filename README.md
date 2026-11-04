@@ -229,8 +229,8 @@ other integration is checked on its own, and API mode has not been measured.
 - API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
   servers) are tested against fake servers only, with no real model call.
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).
-- Cross-part calls: protocol v1 has no calls between parts. `proposal_id` is accepted by the `ridgeline-hub`
-  and `isaac-sim` tools and not checked.
+- Cross-part calls: parts only reach each other through a benchmark's `links`, one tool call per event
+  (`docs/protocol.md`); tested with toy parts.
 - A world with agents made of several integrations (for example ERPNext, the hub, Sculptured and the plant
   together) has not been built or run.
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and

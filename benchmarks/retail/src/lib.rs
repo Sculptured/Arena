@@ -93,6 +93,7 @@ impl Benchmark for Retail {
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
             team: Some(team::team()),
             tools: schemas(),
+            links: vec![],
         })
     }
 

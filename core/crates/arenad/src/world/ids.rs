@@ -90,6 +90,7 @@ mod tests {
             instructions_title: None,
             team: None,
             tools: vec![],
+            links: vec![],
         }
     }
 

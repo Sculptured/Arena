@@ -1,6 +1,8 @@
+mod links;
+
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
-use parts::proto::ToolOutput;
+use parts::proto::{ToolOutput, WorldEvent};
 use serde_json::{json, Value};
 
 use crate::{
@@ -11,6 +13,8 @@ use crate::{
     ticker::Ticker,
     world::{Called, PartEvent, Saves, World, WorldError},
 };
+
+pub use links::LINK_ACTOR;
 
 /// One running branch: its world, team, arena clock and per-agent handoff notes.
 pub struct BranchCtx {
@@ -142,6 +146,8 @@ struct CallFacts {
     save_error: Option<String>,
     clock_ms: Option<i64>,
     paused_ms: Option<i64>,
+    /// Events the call gave the world, reported after the call is recorded.
+    events: Vec<PartEvent>,
 }
 
 fn tool_call_payload(
@@ -184,6 +190,21 @@ fn world_event_payload(e: PartEvent) -> WorldEventPayload {
         data: e.event.data,
         clock_ms: e.clock_ms,
     }
+}
+
+/// `events` a tool call on `part` gave at `clock_ms`, as part events.
+fn part_events(part: Option<&str>, events: Vec<WorldEvent>, clock_ms: i64) -> Vec<PartEvent> {
+    let Some(part) = part else {
+        return vec![];
+    };
+    events
+        .into_iter()
+        .map(|event| PartEvent {
+            part: part.to_string(),
+            event,
+            clock_ms,
+        })
+        .collect()
 }
 
 /// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent is not
@@ -271,19 +292,14 @@ impl ToolExec {
         self.advance(branch, branch.clock.now_ms()).await
     }
 
-    /// Advances the clock parts to `clock_ms` and records the events they report.
+    /// Advances the clock parts to `clock_ms` and reports the events they give.
     async fn advance(&self, branch: &BranchCtx, clock_ms: i64) -> Result<(), String> {
         let events = branch
             .world
             .advance_all(clock_ms)
             .await
             .map_err(|e| failure(branch, e))?;
-        for e in events {
-            let payload = world_event_payload(e);
-            self.record(branch, None, EventKind::WorldEvent, &payload)
-                .await?;
-        }
-        Ok(())
+        self.report(branch, events).await
     }
 
     /// Runs a tool call on the branch's world at the branch clock (the clock parts advanced to
@@ -310,6 +326,7 @@ impl ToolExec {
             Err(e) => return (Err(failure(branch, e)), facts),
         };
         let outcome = outcome_of(&output);
+        facts.events = part_events(part.as_deref(), output.events, clock);
         (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
         let wrote = outcome.is_ok() && !facts.writes.is_empty();
         let written = facts.part.clone().filter(|_| wrote);
@@ -330,10 +347,12 @@ impl ToolExec {
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }
-        let (outcome, facts) = self.execute(branch, agent, name, &args).await;
+        let (outcome, mut facts) = self.execute(branch, agent, name, &args).await;
+        let events = std::mem::take(&mut facts.events);
         let payload = tool_call_payload(name, args, &outcome, tool_call_id, facts);
         self.record(branch, Some(agent), EventKind::ToolCall, &payload)
             .await?;
+        self.report(branch, events).await?;
         outcome
     }
 

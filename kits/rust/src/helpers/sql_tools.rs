@@ -94,7 +94,7 @@ pub fn tool_output(tool: SqlTool, out: Result<Value, String>, keys: Vec<String>)
         result,
         reads,
         writes,
-        error: None,
+        ..ToolOutput::default()
     }
 }
 

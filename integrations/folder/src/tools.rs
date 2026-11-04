@@ -62,6 +62,7 @@ fn ok(result: Value, reads: Vec<String>, writes: Vec<String>) -> ToolOutput {
         error: None,
         reads,
         writes,
+        ..ToolOutput::default()
     }
 }
 

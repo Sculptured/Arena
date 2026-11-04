@@ -31,6 +31,7 @@ fn failed(error: String, reads: Vec<String>) -> ToolOutput {
         error: Some(error),
         reads,
         writes: vec![],
+        ..ToolOutput::default()
     }
 }
 
@@ -73,6 +74,7 @@ async fn get_doc(rest: &Rest, site: &str, args: &Value) -> Result<Outcome, PartE
                 error: None,
                 reads,
                 writes: vec![],
+                ..ToolOutput::default()
             }),
             Reply::Refused { message: e, .. } => Err(failed(e, reads)),
         },
@@ -123,6 +125,7 @@ async fn list_docs(rest: &Rest, site: &str, args: &Value) -> Result<Outcome, Par
                     error: None,
                     reads,
                     writes: vec![],
+                    ..ToolOutput::default()
                 })
             }
             Reply::Refused { message: e, .. } => Err(failed(e, vec![])),
@@ -154,6 +157,7 @@ fn written(doctype: &str, reply: Reply, known: Option<&str>) -> Outcome {
                 error: None,
                 reads: vec![],
                 writes,
+                ..ToolOutput::default()
             })
         }
         Reply::Refused { message: e, .. } => Err(failed(

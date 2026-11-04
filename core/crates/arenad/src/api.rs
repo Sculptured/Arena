@@ -183,6 +183,12 @@ fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
                 a.id
             )));
         }
+        if a.id == crate::exec::LINK_ACTOR {
+            return Err(ApiError::bad(format!(
+                "agent id {:?} is kept for steps made by a world's links",
+                a.id
+            )));
+        }
         if !seen.insert(a.id.as_str()) {
             return Err(ApiError::bad(format!("duplicate agent id {:?}", a.id)));
         }

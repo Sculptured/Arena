@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
 use parts::{
-    proto::{BenchDescribe, Describe, ToolSchema, WorldPart},
+    proto::{BenchDescribe, Describe, Link, ToolSchema, WorldPart},
     Hub,
 };
 
@@ -26,10 +26,12 @@ pub enum Route {
 pub struct Plan {
     pub parts: Vec<PlannedPart>,
     pub tools: Vec<(ToolSchema, Route)>,
+    pub links: Vec<Link>,
 }
 
 /// The parts of `bench`'s world and its tool table: the benchmark's tools, then each part's.
-/// Refuses a world in which two tools share a name (`handoff` counts as one).
+/// Refuses a world in which two tools share a name (`handoff` counts as one) or a link names a
+/// part or tool it doesn't have. A tool a link calls is the world's own: agents don't get it.
 pub async fn plan(hub: &Hub, bench: &BenchDescribe) -> Result<Plan> {
     let parts = describe_parts(hub, bench).await?;
     let mut tools: Vec<(ToolSchema, Route)> = bench
@@ -44,7 +46,30 @@ pub async fn plan(hub: &Hub, bench: &BenchDescribe) -> Result<Plan> {
     if let Some((t, _)) = tools.iter().find(|(t, _)| !seen.insert(t.name.as_str())) {
         bail!("two tools are called {}", t.name);
     }
-    Ok(Plan { parts, tools })
+    check_links(&bench.links, &parts)?;
+    tools.retain(|(t, _)| !bench.links.iter().any(|l| l.tool == t.name));
+    let links = bench.links.clone();
+    Ok(Plan {
+        parts,
+        tools,
+        links,
+    })
+}
+
+fn check_links(links: &[Link], parts: &[PlannedPart]) -> Result<()> {
+    let part = |name: &str| parts.iter().find(|p| p.part.part == name);
+    for l in links {
+        if part(&l.from).is_none() {
+            bail!("a link comes from {}, which is not a part", l.from);
+        }
+        let Some(to) = part(&l.to) else {
+            bail!("a link goes to {}, which is not a part", l.to);
+        };
+        if !to.describe.tools.iter().any(|t| t.name == l.tool) {
+            bail!("a link calls {}, which {} does not have", l.tool, l.to);
+        }
+    }
+    Ok(())
 }
 
 async fn describe_parts(hub: &Hub, bench: &BenchDescribe) -> Result<Vec<PlannedPart>> {

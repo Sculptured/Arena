@@ -129,6 +129,9 @@ pub struct ToolOutput {
     pub reads: Vec<String>,
     #[serde(default)]
     pub writes: Vec<String>,
+    /// Events the call itself gives the world: recorded, and matched against the world's links.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<WorldEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -260,6 +263,18 @@ pub struct TeamRole {
     pub prompt: String,
 }
 
+/// A link between two parts: an event of `from` of kind `event` calls `to`'s `tool`. In `args`, a
+/// string starting with `/` is a JSON pointer into the event's `data`; anything else is a constant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    pub from: String,
+    pub event: String,
+    pub to: String,
+    pub tool: String,
+    #[serde(default)]
+    pub args: Map<String, Value>,
+}
+
 /// The team a benchmark suggests: its agents in the order they run (the last one writes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchTeam {
@@ -283,6 +298,9 @@ pub struct BenchDescribe {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<BenchTeam>,
     pub tools: Vec<ToolSchema>,
+    /// Calls between the parts of the world.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
