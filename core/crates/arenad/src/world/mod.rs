@@ -3,10 +3,12 @@
 //! the benchmark's own tools.
 
 mod clocked;
+mod gates;
 mod ids;
 mod links;
 mod plan;
 mod saving;
+mod scoring;
 mod standard;
 
 use std::{
@@ -17,7 +19,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use parts::{
     proto::{
-        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Link, Mode,
+        BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Gate, Link, Mode,
         ToolOutput, ToolSchema, WorldPart,
     },
     CallError, Client, Hub,
@@ -180,6 +182,7 @@ pub struct World {
     parts: Vec<Part>,
     tools: Vec<(ToolSchema, Route)>,
     links: Vec<Link>,
+    gates: Vec<Gate>,
     connections: Map<String, Value>,
     track: Mutex<Track>,
 }
@@ -249,6 +252,7 @@ impl World {
         bench_client: Option<Arc<Client>>,
         tools: Vec<(ToolSchema, Route)>,
         links: Vec<Link>,
+        gates: Vec<Gate>,
     ) -> World {
         World {
             hub,
@@ -257,6 +261,7 @@ impl World {
             parts: vec![],
             tools,
             links,
+            gates,
             connections: Map::new(),
             track: Mutex::default(),
         }
@@ -276,9 +281,10 @@ impl World {
             parts,
             tools,
             links,
+            gates,
         } = planned;
         let bench_client = hub.client(&bench.name).await?;
-        let mut world = World::new(hub, &bench.name, Some(bench_client), tools, links);
+        let mut world = World::new(hub, &bench.name, Some(bench_client), tools, links, gates);
         for p in parts {
             if let Err(e) = world.add_part(p, branch_id, seed, from).await {
                 world.stop().await;
@@ -397,28 +403,30 @@ impl World {
             .ok_or_else(|| WorldError::other(format!("there is no part {name} in this world")))
     }
 
-    /// Runs a tool: the benchmark's own, or the part's that lists it. An unknown tool is a tool error.
+    /// Runs a tool: the benchmark's own, or the part's that lists it. An unknown tool, or one a
+    /// gate holds back, is a tool error and reaches no part.
     pub async fn call_tool(
         &self,
         name: &str,
         args: Value,
         clock_ms: i64,
     ) -> Result<Called, WorldError> {
-        match self
-            .tools
-            .iter()
-            .find(|(t, _)| t.name == name)
-            .map(|(_, r)| *r)
-        {
-            None => Ok(Called {
+        let route = self.tools.iter().find(|(t, _)| t.name == name);
+        let Some(route) = route.map(|(_, r)| *r) else {
+            return Ok(Called {
                 output: ToolOutput {
                     error: Some(format!("unknown tool {name}")),
                     ..Default::default()
                 },
                 part: None,
-            }),
-            Some(Route::Bench) => self.call_bench_tool(name, args).await,
-            Some(Route::Part(i)) => {
+            });
+        };
+        if let Some(output) = self.gate_refusal(name, &args).await? {
+            return Ok(Called { output, part: None });
+        }
+        match route {
+            Route::Bench => self.call_bench_tool(name, args).await,
+            Route::Part(i) => {
                 let p = &self.parts[i];
                 let output = p.call_tool(name, args, clock_ms).await?;
                 Ok(Called {

@@ -1,5 +1,6 @@
-//! Links between a world's parts: an event of one part calls a tool of another, recorded as a step
-//! of the actor `link` and repeated from the record by a replay.
+//! What a benchmark wires into its world. Links: an event of one part calls a tool of another,
+//! recorded as a step of the actor `link` and repeated from the record by a replay. Gates: a tool
+//! is held back unless a document of another part allows it. And named checks over the end state.
 #[path = "support/app.rs"]
 mod app_support;
 #[path = "support/fake_upstream.rs"]
@@ -341,5 +342,102 @@ fn a_link_to_nothing_is_refused() {
             let bench = hub.hub.bench_describe("toybench").await.unwrap();
             assert!(plan(&hub.hub, &bench).await.is_err());
         }
+    })
+}
+
+fn gated_world(tag: &str) -> ToyRoot {
+    let gate = json!({"tool": "a_poke", "part": "guard", "key": "box/n", "require": {"/n": 1}});
+    let gate = gate.to_string();
+    let args = [
+        "bench",
+        "--gold",
+        "g_poke",
+        "--part",
+        "guard=toy-g",
+        "--part",
+        "act=toy-a",
+        "--gate",
+        &gate,
+    ];
+    package_root(
+        tag,
+        &[
+            toy("toy-g", "integration", &["part", "--prefix", "g_"]),
+            toy("toy-a", "integration", &["part", "--prefix", "a_"]),
+            toy("toybench", "benchmark", &args),
+        ],
+    )
+}
+
+/// A gated call is refused until the other part's document allows it; a refused one is no input
+/// of the part, so a replay would not repeat it.
+#[test]
+fn a_gate_holds_a_tool_back_until_the_document_allows_it() {
+    run(async {
+        let script = vec![
+            call("a_poke"),
+            call("g_poke"),
+            call("a_poke"),
+            call("a_peek"),
+            done(),
+        ];
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("gated", gated_world("gated"), &up).await;
+        let (_, evs) = fx.run_to_end().await;
+        let pokes: Vec<&Event> = evs
+            .iter()
+            .filter(|e| e.payload["name"] == "a_poke")
+            .collect();
+        let refused = &pokes[0].payload;
+        assert!(refused["part"].is_null(), "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap().contains("/n"),
+            "{refused}"
+        );
+        assert_eq!(pokes[1].payload["result"]["n"], 1);
+        let peek = evs.iter().find(|e| e.payload["name"] == "a_peek").unwrap();
+        assert_eq!(
+            peek.payload["result"]["n"], 1,
+            "the refused call changed nothing"
+        );
+    })
+}
+
+async fn assert_scored(tag: &str, script: Vec<Value>, status: BranchStatus, failed: Vec<String>) {
+    let up = FakeUpstream::start(script).await;
+    let args = [
+        "bench",
+        "--integration",
+        "toy-box",
+        "--gold",
+        "nope",
+        "--scored",
+    ];
+    let root = package_root(
+        tag,
+        &[
+            toy("toy-box", "integration", &["part"]),
+            toy("toybench", "benchmark", &args),
+        ],
+    );
+    let fx = setup(tag, root, &up).await;
+    let (branch, evs) = fx.run_to_end().await;
+    assert_eq!(fx.finished(&branch).await.status, status);
+    let check = evs.iter().find(|e| e.kind == EventKind::Check).unwrap();
+    let c: CheckPayload = serde_json::from_value(check.payload.clone()).unwrap();
+    assert_eq!(c.differing_rows, Some(failed));
+    assert_eq!(c.checks.unwrap()[0].name, "poked");
+    assert!(c.final_saves.unwrap().contains_key("box"));
+}
+
+/// A benchmark that scores itself gets the world's end state; a branch passes when every named
+/// check does, and no gold world is made.
+#[test]
+fn a_scored_benchmark_checks_the_end_state() {
+    run(async {
+        let pass = vec![call("poke"), done()];
+        assert_scored("scorepass", pass, BranchStatus::Passed, vec![]).await;
+        let failed = vec!["poked".to_string()];
+        assert_scored("scorefail", vec![done()], BranchStatus::Failed, failed).await;
     })
 }

@@ -91,6 +91,8 @@ mod tests {
             team: None,
             tools: vec![],
             links: vec![],
+            gates: vec![],
+            scored: false,
         }
     }
 

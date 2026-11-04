@@ -382,10 +382,31 @@ fn verdict(check: &CheckPayload, parts: &[String]) -> Ending {
     }
 }
 
+/// Saves every part's final state and has the benchmark check the world's end state.
+async fn score_by_checks(ctx: &BranchCtx) -> Result<CheckPayload> {
+    // Behind the gate: no late tool call lands between the final save and the checks.
+    let _gate = ctx.gate().await;
+    let final_saves = ctx.world.save_all().await?;
+    let checks = ctx.world.score(&ctx.task_id).await?;
+    let failed = checks.iter().filter(|c| !c.passed);
+    let failed: Vec<String> = failed.map(|c| c.name.clone()).collect();
+    Ok(CheckPayload {
+        passed: !checks.is_empty() && failed.is_empty(),
+        gold_db: None,
+        differing_rows: Some(failed),
+        checks: Some(checks),
+        final_saves: Some(final_saves),
+        unchecked: vec![],
+    })
+}
+
 /// Saves every part's final state and compares the world with the task's gold saves; parts not
-/// in them are listed as unchecked.
+/// in them are listed as unchecked. A benchmark that scores itself has no gold saves.
 async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
     let bench = state.hub.bench_describe(ctx.world.bench()).await?;
+    if bench.scored {
+        return score_by_checks(ctx).await;
+    }
     let gold = world::ensure_gold(&state.hub, &bench, &ctx.task_id).await?;
     // Behind the gate: no late tool call lands between the final save and the diff.
     let _gate = ctx.gate().await;
@@ -402,6 +423,7 @@ async fn score(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<CheckPayload> {
         passed: differing.is_empty() && unchecked.len() < ctx.world.part_names().len(),
         gold_db,
         differing_rows: Some(differing),
+        checks: None,
         final_saves: Some(final_saves),
         unchecked,
     })
@@ -416,6 +438,7 @@ mod tests {
             passed,
             gold_db: None,
             differing_rows: Some(vec![]),
+            checks: None,
             final_saves: None,
             unchecked: unchecked.iter().map(|p| p.to_string()).collect(),
         }

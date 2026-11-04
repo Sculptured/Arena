@@ -77,6 +77,8 @@ mod tests {
             team,
             tools: vec![],
             links: vec![],
+            gates: vec![],
+            scored: false,
         }
     }
 

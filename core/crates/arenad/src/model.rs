@@ -223,6 +223,10 @@ pub struct CheckPayload {
     /// Keys (`<table>/<id>`) whose documents differ from the gold save, sorted; prefixed
     /// `part:` when the world has more than one part.
     pub differing_rows: Option<Vec<String>>,
+    /// The benchmark's named checks, for a benchmark that scores the end state itself. Then
+    /// `differing_rows` lists the checks that failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<parts::proto::NamedCheck>>,
     /// `{part: save}` of every part's final state, saved before its instance stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_saves: Option<std::collections::BTreeMap<String, String>>,

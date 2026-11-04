@@ -230,7 +230,8 @@ other integration is checked on its own, and API mode has not been measured.
   servers) are tested against fake servers only, with no real model call.
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).
 - Cross-part calls: parts only reach each other through a benchmark's `links`, one tool call per event
-  (`docs/protocol.md`); tested with toy parts.
+  (`docs/protocol.md`); tested with toy parts. `proposal_id` on the `ridgeline-hub` and `isaac-sim` tools binds
+  only in a world whose benchmark puts a gate on them.
 - A world with agents made of several integrations (for example ERPNext, the hub, Sculptured and the plant
   together) has not been built or run.
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and

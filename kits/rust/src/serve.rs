@@ -44,6 +44,10 @@ pub trait Benchmark: Send + Sync + 'static {
     async fn seed(&self, p: SeedParams) -> R<()>;
     async fn call_tool(&self, p: BenchCallTool) -> R<BenchToolOutput>;
     async fn gold_actions(&self, p: GoldParams) -> R<GoldActions>;
+    /// Named checks over the world's end state, for a benchmark whose `describe` says `scored`.
+    async fn score(&self, _p: ScoreParams) -> R<Score> {
+        Err(PartError::method_not_found("score"))
+    }
 }
 
 /// Serve a part on stdin and stdout until stdin closes.
@@ -264,6 +268,7 @@ async fn bench_dispatch<B: Benchmark>(b: &B, method: &str, params: Value) -> R<V
         "seed" => out(b.seed(parse(params)?).await.map(|_| json!({}))),
         "call_tool" => out(b.call_tool(parse(params)?).await),
         "gold_actions" => out(b.gold_actions(parse(params)?).await),
+        "score" => out(b.score(parse(params)?).await),
         m => Err(PartError::method_not_found(m)),
     }
 }

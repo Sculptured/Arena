@@ -94,6 +94,8 @@ impl Benchmark for Retail {
             team: Some(team::team()),
             tools: schemas(),
             links: vec![],
+            gates: vec![],
+            scored: false,
         })
     }
 

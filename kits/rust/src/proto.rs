@@ -275,6 +275,19 @@ pub struct Link {
     pub args: Map<String, Value>,
 }
 
+/// A gate on a tool: the call goes through only if a document of `part` says so. `key` is the
+/// document's key, with `{arg}` standing for the call's argument `arg`. Each entry of `require` is
+/// a JSON pointer into the document and the value it must have; the string `"{arg}"` is the call's
+/// argument. A world's gates hold for agents' calls, not a link's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gate {
+    pub tool: String,
+    pub part: String,
+    pub key: String,
+    #[serde(default)]
+    pub require: Map<String, Value>,
+}
+
 /// The team a benchmark suggests: its agents in the order they run (the last one writes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchTeam {
@@ -301,6 +314,13 @@ pub struct BenchDescribe {
     /// Calls between the parts of the world.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// Conditions on tools, checked against other parts' documents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<Gate>,
+    /// True: a branch is scored by the benchmark's `score` over the world's end state, and no gold
+    /// world is made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -344,6 +364,27 @@ pub struct Action {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GoldActions {
     pub actions: Vec<Action>,
+}
+
+/// `score`: a task and every part's end state, `{part: {key: doc}}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoreParams {
+    pub task: String,
+    pub docs: Map<String, Value>,
+}
+
+/// One named pass-or-fail check of a branch's end state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedCheck {
+    pub name: String,
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Score {
+    pub checks: Vec<NamedCheck>,
 }
 
 #[cfg(test)]

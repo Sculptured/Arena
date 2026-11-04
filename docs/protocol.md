@@ -86,10 +86,11 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link]}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
+| `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?}]}` |
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
   `Instructions` when it is absent.
@@ -123,6 +124,33 @@ Parts never call each other. A benchmark's `describe` may declare `links`, and a
 - A world is refused when a link names a part it doesn't have or a tool `to` doesn't list. A tool that a link
   calls is not offered to agents.
 - Links don't run while the base and gold saves are made, because nothing advances the clock then.
+
+### Gates on tools
+
+A gate lets a call through only if a document of another part says so. It is how a world makes one part's
+decision bind another part without either knowing the other:
+
+```json
+{"tool": "book_freight", "part": "approvals", "key": "change/{proposal_id}",
+ "require": {"/decision/approved": true, "/action": "freight_booking", "/payload/amount": "{amount}"}}
+```
+
+- Before running `tool` for an agent, arenad reads `key` with `inspect` on `part`'s live instance. In `key`,
+  `{arg}` is the call's argument `arg`. Each entry of `require` is a JSON pointer into the document and the value
+  it must have; the string `"{arg}"` is the call's argument. Numbers count as equal within 0.005.
+- A missing argument or document, or a value that differs, is the tool's `error`. The tool's part is not called,
+  so the step has no `part` and a replay doesn't repeat it. A call that passes is an ordinary input of its part: a
+  replay repeats it without asking again.
+- A gate holds for agents and for gold actions, not for a link's calls.
+- A world is refused when a gate reads a part it doesn't have, or is on a tool agents don't get.
+
+### Scoring by named checks
+
+Usually a branch is scored by comparing the world with a gold world. A benchmark whose end state can't be compared
+that way (ids a part makes up, the time things happened at) says `scored: true`. arenad then makes no gold world:
+it saves every part's final state, gives the benchmark every part's `inspect` with no keys, and records the
+answer as the branch's check, which passes when there is at least one check and all of them pass. `differing_rows`
+lists the checks that failed.
 
 A benchmark's tools reach parts only through `connect` info. Only parts with exact saves may be connected
 (replay re-sends a part's own inputs, which a benchmark's direct writes are not).
