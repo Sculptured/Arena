@@ -84,7 +84,7 @@ helper this integration uses: `arena_part::helpers::mariadb`).
   `view-<pid>-<n>.localhost` on database `ev_<pid>_<n>`, made from it and removed after. `inspect`
   with no keys gives every document of the target's `diff_doctypes`; `diff` lists all fields of every
   document of both targets' `diff_doctypes` and compares them by key. A target diffed with itself is
-  not read. In `inspect`, a key Frappe answers 404 for is null; other refusals are errors.
+  not read. In `inspect`, a key Frappe answers 404 for, or of a doctype it doesn't have, is null; other refusals are errors.
 - **drop_save** and **gc {keep}**: as mariadb (remove the dumps no save, live instance or the base
   needs; purge the binlog before the oldest position still needed), and when nothing needs any
   position and no site is being made, the binlog is rotated first so all of it goes. `gc` also drops

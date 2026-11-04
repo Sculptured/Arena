@@ -132,10 +132,21 @@ async fn some_docs(
             Reply::Ok(doc) => doc,
             Reply::Refused { status: 404, .. } => Value::Null,
             Reply::Refused { message, .. } => {
-                return Err(PartError::internal(format!("reading {k}: {message}")))
+                if doctype_exists(rest, site, doctype).await? {
+                    return Err(PartError::internal(format!("reading {k}: {message}")));
+                }
+                Value::Null
             }
         };
         out.insert(k.clone(), doc);
     }
     Ok(out)
+}
+
+/// False when Frappe has no such doctype: it answers a read of one with a server error, not 404,
+/// and a key of a doctype that doesn't exist names no document (arenad probes saves with one).
+async fn doctype_exists(rest: &Rest, site: &str, doctype: &str) -> Result<bool, PartError> {
+    let path = ["resource", "DocType", doctype];
+    let reply = rest.get(site, &path, &[]).await?;
+    Ok(!matches!(reply, Reply::Refused { status: 404, .. }))
 }
