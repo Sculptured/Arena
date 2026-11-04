@@ -48,7 +48,7 @@ The core never depends on an integration or a benchmark, and they never depend o
    (cd kits/python && uv run --with pytest pytest -q)
    (cd ui && npm test && npm run build)
    ```
-   The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from `Sculptured-Examples/factory` next to your checkout. **That example is not public yet**, so outside contributors can't run those two suites: without it every test in them is skipped. CI runs everything above and only imports those two packages. Likewise the Sculptured program that `integrations/sculptured` runs is not published yet; its only test is `live_` and is skipped without it.
+   The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from `Sculptured-Examples/factory` next to your checkout. **That example is not public yet**, so outside contributors can't run those two suites: without it every test in them is skipped. CI runs everything above and only imports those two packages. Likewise the Sculptured program that `integrations/sculptured` runs is not published yet; its only test is `live_` and is skipped without it. `benchmarks/factory` needs both: its unit tests run anywhere, and its `live_` test skips without them.
 4. If you changed a test that makes databases, run `core/scripts/leakcheck.sh` from `core/`: it fails if a test leaves databases behind.
 5. If you changed the UI, look at it in the running app and say in the pull request what you checked.
 6. Open a pull request and fill in the template.
@@ -73,7 +73,7 @@ Give the integration a README that says what it puts in the world, its config, h
 
 ## Write a benchmark
 
-A benchmark is a package with `kind = "benchmark"` that names its world and answers `describe`, `seed`, `call_tool` and `gold_actions` ([docs/protocol.md](docs/protocol.md), "Benchmark calls"). In Rust, implement `arena_part::Benchmark` and end `main` with `serve_benchmark(..)`; `benchmarks/retail` is the example to copy. Credit and license any third-party data you include, as `data/retail/LICENSE` does.
+A benchmark is a package with `kind = "benchmark"` that names its world and answers `describe`, `seed`, `call_tool` and `gold_actions` ([docs/protocol.md](docs/protocol.md), "Benchmark calls"). In Rust, implement `arena_part::Benchmark` and end `main` with `serve_benchmark(..)`; `benchmarks/retail` is the example to copy, and `benchmarks/factory` shows links, gates and named checks. Credit and license any third-party data you include, as `data/retail/LICENSE` does.
 
 ## Code rules
 

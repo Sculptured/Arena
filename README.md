@@ -224,7 +224,8 @@ other integration is checked on its own, and API mode has not been measured.
 <summary><b>Limits and not built yet</b></summary>
 
 - Only `postgres` has been used in an arenad run with agents; every other integration is checked on its own.
-- Only one benchmark is included, the retail example. arenad runs one benchmark at a time.
+- Two benchmarks are included: the retail example and `benchmarks/factory`, which needs a factory example that is
+  not public yet. arenad runs one benchmark at a time.
 - Teams are a fixed sequence of agents with handoff notes; only the last agent writes.
 - API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
   servers) are tested against fake servers only, with no real model call.
@@ -232,8 +233,9 @@ other integration is checked on its own, and API mode has not been measured.
 - Cross-part calls: parts only reach each other through a benchmark's `links`, one tool call per event
   (`docs/protocol.md`); tested with toy parts. `proposal_id` on the `ridgeline-hub` and `isaac-sim` tools binds
   only in a world whose benchmark puts a gate on them.
-- A world with agents made of several integrations (for example ERPNext, the hub, Sculptured and the plant
-  together) has not been built or run.
+- A world with real agents made of several integrations has not been run. `benchmarks/factory` builds one (ERPNext,
+  the hub, Sculptured and the plant) and reads a factory example that is not public yet; it has run with a scripted
+  team only.
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and
   the branch fails with "no part of this world can be checked against the task's expected result".
 - Community publishing of integrations and benchmarks (design only). Packages install from a local folder.

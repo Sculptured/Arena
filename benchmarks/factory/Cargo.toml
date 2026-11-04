@@ -1,0 +1,23 @@
+[package]
+name = "arena-factory"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arena_factory"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-factory"
+path = "src/main.rs"
+
+[dependencies]
+arena-part = { path = "../../kits/rust" }
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[lints]
+workspace = true

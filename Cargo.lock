@@ -46,6 +46,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-factory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arena-part",
+ "async-trait",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "arena-folder"
 version = "0.1.0"
 dependencies = [

@@ -56,3 +56,8 @@ and `src/tasks.rs` reads the tasks and gold actions from `data/retail/tasks.json
 ids in `data/retail/demo_tasks.json`); `src/team.rs` holds the team it suggests and the `Store policy` heading
 over its policy. Its tests are in `benchmarks/retail/tests`. arenad runs one benchmark at a time, chosen with
 `ARENA_BENCHMARK`.
+
+`benchmarks/factory` is a benchmark over four integrations (`erpnext`, `ridgeline-hub`, the stand-in plant,
+`sculptured`). It shows what a world of several parts adds: `links` between parts, `gates` on tools, and scoring by
+named checks with `scored` (`docs/protocol.md`). It reads a factory example that is not public yet, so its
+world can't start without it; see `benchmarks/factory/README.md`.
