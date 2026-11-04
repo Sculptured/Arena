@@ -1,0 +1,40 @@
+# List prices arenad uses to estimate a run's cost when the provider reports none.
+#
+# Each entry is the public list price, in US dollars per million tokens, of one model on one
+# provider: the base input price and the output price. Cache writes, cache hits, batch discounts,
+# long-context tiers and taxes are not modelled, so a figure made from this table is labelled
+# "list-price estimate" with the entry's source and date, never shown as a charge.
+#
+# Only prices read on the provider's own pricing page are listed. A model that is not here has an
+# "unknown" cost: never add a price you have not read at its source.
+#
+# `provider` is the one an agent's model calls go to: `anthropic` for an open agent on the
+# Anthropic provider and for Claude Code, `openai` for an open agent on OpenAI and for Codex.
+# `model` is the model id the agent names, exactly.
+
+[[price]]
+provider = "anthropic"
+model = "claude-fable-5-1"
+input_per_mtok = 10.0
+output_per_mtok = 50.0
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+as_of = "2026-11-04"
+
+[[price]]
+provider = "anthropic"
+model = "claude-opus-5-5"
+input_per_mtok = 4.0
+output_per_mtok = 20.0
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+as_of = "2026-11-04"
+
+[[price]]
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+input_per_mtok = 2.0
+output_per_mtok = 10.0
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+as_of = "2026-11-04"
+
+# Claude Haiku 5.5 is left out: its price depends on the prompt's length (two tiers), which a
+# per-agent token total can't tell apart.

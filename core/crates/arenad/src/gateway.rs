@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{Path, State},
@@ -11,8 +11,11 @@ use serde_json::{json, Value};
 
 use crate::{
     app::AppState,
+    exec::BranchCtx,
     model::*,
+    overhead::{self, ms_since, Cat},
     providers::{Provider, Upstream},
+    store::Store,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -128,27 +131,28 @@ fn model_call_payload(
 }
 
 async fn record(
-    state: &AppState,
-    branch: &str,
+    ctx: &BranchCtx,
+    store: &Store,
     agent: &str,
     payload: &ModelCallPayload,
 ) -> Result<(), String> {
     let v = serde_json::to_value(payload).map_err(|e| e.to_string())?;
-    state
-        .store
-        .append(branch, Some(agent), EventKind::ModelCall, v)
+    ctx.append(store, Some(agent), EventKind::ModelCall, v)
         .await
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
 }
 
-/// The provider of `agent` on the live `branch` (`Some(None)`: the default one); `None` when the
+/// The live `branch` and the provider of its `agent` (`None`: the default one); `None` when the
 /// branch isn't live or has no such agent.
-fn live_provider(state: &AppState, branch: &str, agent: &str) -> Option<Option<String>> {
-    let live = state.live.read().unwrap();
-    live.get(branch)?
-        .provider_of(agent)
-        .map(|p| p.map(str::to_string))
+fn live_agent(
+    state: &AppState,
+    branch: &str,
+    agent: &str,
+) -> Option<(Arc<BranchCtx>, Option<String>)> {
+    let ctx = state.live.read().unwrap().get(branch)?.clone();
+    let provider = ctx.provider_of(agent)?.map(str::to_string);
+    Some((ctx, provider))
 }
 
 async fn handle(
@@ -156,7 +160,8 @@ async fn handle(
     Path((branch, agent)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Response {
-    let Some(provider) = live_provider(&state, &branch, &agent) else {
+    let since = Instant::now();
+    let Some((ctx, provider)) = live_agent(&state, &branch, &agent) else {
         return error_response(StatusCode::NOT_FOUND, "unknown branch or agent");
     };
     if !body.is_object() {
@@ -166,9 +171,14 @@ async fn handle(
         );
     }
     let provider = state.config.providers.resolve(provider.as_deref());
+    let asked = Instant::now();
     let upstream = send_upstream(&state, &provider, &body).await;
+    let upstream_ms = ms_since(asked);
     let (status, payload) = model_call_payload(body, &provider, &upstream);
-    if let Err(e) = record(&state, &branch, &agent, &payload).await {
+    // The gateway's own handling: everything but the provider's answer (and the record's time,
+    // which the store counts).
+    overhead::add(&branch, Cat::Gateway, ms_since(since) - upstream_ms);
+    if let Err(e) = record(&ctx, &state.store, &agent, &payload).await {
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("recording model call: {e}"),

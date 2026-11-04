@@ -263,6 +263,45 @@ fn scripted_team_passes_task_27() {
     })
 }
 
+/// The step's arena overhead of kind `cat` (0 when it has none).
+fn overhead(e: &Event, cat: &str) -> f64 {
+    e.payload["overhead_ms"][cat].as_f64().unwrap_or(0.0)
+}
+
+/// Saves, recording, scoring and the world's start are timed on the steps they belong to, and
+/// the metrics estimate production as the measured time minus them.
+#[test]
+fn arena_overhead_is_recorded_and_taken_out_of_the_estimate() {
+    run(async {
+        let mut script = triage_script();
+        script.extend([gold_write(), text_msg("Exchanged.")]);
+        let up = FakeUpstream::start(script).await;
+        let fx = setup("overhead", Some(&up), false).await;
+        let (_run, branch) = runner::start_run(&fx.state, "27", team()).await.unwrap();
+        let b = finished(&fx, &branch).await;
+        assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
+        let evs = fx.state.store.events(&branch).await.unwrap();
+        assert!(overhead(&evs[0], "restore") > 0.0, "{}", evs[0].payload);
+        let write = evs
+            .iter()
+            .find(|e| e.kind == EventKind::ToolCall && e.payload["saves"].is_object());
+        let write = write.expect("the write was saved");
+        assert!(overhead(write, "save") > 0.0, "{}", write.payload);
+        assert!(evs[1..].iter().all(|e| overhead(e, "record") > 0.0));
+        assert!(overhead(evs.last().unwrap(), "score") > 0.0);
+        let m = arenad::metrics::metrics(&b, &evs, arenad::prices::table(), chrono::Utc::now());
+        assert!(m.overhead_recorded && m.overhead_s > 0.0);
+        let est = m.estimated_s.unwrap();
+        assert!((est - (m.measured_s - m.overhead_s).max(0.0)).abs() < 1e-9);
+        assert_eq!(m.agents.len(), 2);
+        // The fake upstream is a local server to arenad: five calls' tokens, no API charge.
+        assert_eq!(
+            (m.tokens, m.cost.label.as_str()),
+            (75, arenad::metrics::NO_CHARGE)
+        );
+    })
+}
+
 #[test]
 fn wrong_write_fails_with_differing_rows() {
     run(async {

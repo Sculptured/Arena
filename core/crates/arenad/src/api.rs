@@ -30,9 +30,9 @@ use crate::{
     app::AppState,
     compare::{self, FinalState},
     fork::{self, ForkError},
-    gc,
+    gc, metrics,
     model::*,
-    prompts,
+    prices, prompts,
     providers::{self, ProviderStatus},
     recorded::{final_saves, run_info, saves_at},
     runner,
@@ -361,8 +361,11 @@ async fn get_branch(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("there is no branch \"{id}\"")))?;
     let events = state.store.events(&id).await?;
+    let now = chrono::Utc::now();
+    let m = metrics::metrics(&branch, &events, prices::table(), now);
     let mut v = serde_json::to_value(branch).map_err(anyhow::Error::from)?;
     v["events"] = serde_json::to_value(events).map_err(anyhow::Error::from)?;
+    v["metrics"] = serde_json::to_value(m).map_err(anyhow::Error::from)?;
     Ok(Json(v))
 }
 

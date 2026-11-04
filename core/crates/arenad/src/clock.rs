@@ -110,6 +110,11 @@ impl Paused<'_> {
     pub fn elapsed_ms(&self) -> i64 {
         self.since.elapsed().as_millis() as i64
     }
+
+    /// Real milliseconds since the pause began, with the fraction kept.
+    pub fn elapsed_ms_f64(&self) -> f64 {
+        crate::overhead::ms_since(self.since)
+    }
 }
 
 impl Drop for Paused<'_> {

@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::{
     clock::BranchClock,
     model::*,
+    overhead::{self, Cat},
     recorded::LEGACY_PART,
     store::Store,
     ticker::Ticker,
@@ -102,6 +103,26 @@ impl BranchCtx {
     /// Holds the branch gate: no tool call runs on the world until the guard drops.
     pub async fn gate(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.gate.lock().await
+    }
+
+    /// Records an event of this branch with the world clock paused: recording is arena's work.
+    pub async fn append(
+        &self,
+        store: &Store,
+        agent: Option<&str>,
+        kind: EventKind,
+        payload: Value,
+    ) -> anyhow::Result<Event> {
+        let _paused = self.clock.paused();
+        store.append(&self.branch_id, agent, kind, payload).await
+    }
+
+    /// Waits for the branch gate, counting the wait as arena's overhead.
+    async fn gate_timed(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        let since = std::time::Instant::now();
+        let guard = self.gate.lock().await;
+        overhead::add_since(&self.branch_id, Cat::Wait, since);
+        guard
     }
 
     /// Why the branch can't go on (a world program stopped), once that has happened.
@@ -237,6 +258,7 @@ async fn save_step(branch: &BranchCtx, written: Option<&str>, facts: &mut CallFa
     let step = branch.world.save_changed(written).await;
     if !step.saves.is_empty() || step.error.is_some() {
         facts.paused_ms = Some(paused.elapsed_ms());
+        overhead::add(&branch.branch_id, Cat::Save, paused.elapsed_ms_f64());
     }
     facts.saves = (!step.saves.is_empty()).then_some(step.saves);
     facts.save_error = step.error.map(|e| failure(branch, e));
@@ -333,11 +355,16 @@ impl ToolExec {
         if let Err(e) = self.advance(branch, clock).await {
             return (Err(e), facts);
         }
-        let Called { output, part } = match branch.world.call_tool(name, args.clone(), clock).await
-        {
+        let called = branch.world.call_tool(name, args.clone(), clock).await;
+        let Called {
+            output,
+            part,
+            gate_ms,
+        } = match called {
             Ok(c) => c,
             Err(e) => return (Err(failure(branch, e)), facts),
         };
+        overhead::add(&branch.branch_id, Cat::Gate, gate_ms);
         let outcome = outcome_of(&output);
         facts.events = part_events(part.as_deref(), output.events, clock);
         (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
@@ -356,7 +383,7 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
-        let _gate = branch.gate().await;
+        let _gate = branch.gate_timed().await;
         if name == "handoff" {
             return self.handoff(branch, agent, args, tool_call_id).await;
         }
@@ -411,8 +438,8 @@ impl ToolExec {
         payload: &T,
     ) -> Result<(), String> {
         let v = serde_json::to_value(payload).map_err(|e| format!("internal error: {e}"))?;
-        self.store
-            .append(&branch.branch_id, agent, kind, v)
+        branch
+            .append(&self.store, agent, kind, v)
             .await
             .map_err(|e| format!("internal error: recording event: {e:#}"))?;
         Ok(())

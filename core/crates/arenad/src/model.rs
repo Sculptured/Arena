@@ -226,6 +226,11 @@ pub struct AgentEndPayload {
     pub ok: bool,
     pub error: Option<String>,
     pub tokens: Option<i64>,
+    /// The input and output tokens of `tokens` (absent in runs recorded before they were kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     pub cost_source: Option<String>,
     pub seconds: Option<f64>,

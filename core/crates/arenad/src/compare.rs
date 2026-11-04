@@ -5,7 +5,9 @@ use parts::{proto::WorldPart, Hub};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    metrics::metrics,
     model::*,
+    prices,
     restore::keeps_saves,
     saves::{self, part_code},
     world::Saves,
@@ -32,6 +34,7 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
         "tokens": ends.iter().map(|e| e.tokens.unwrap_or(0)).sum::<i64>(),
         "cost_usd": ends.iter().try_fold(0.0f64, |c, e| add_cost(Some(c), e.cost_usd)),
         "cost_source": combined_source(&ends),
+        "metrics": metrics(branch, events, prices::table(), chrono::Utc::now()),
     })
 }
 

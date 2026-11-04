@@ -126,6 +126,27 @@ impl std::fmt::Display for StartingPart {
 pub struct Called {
     pub output: ToolOutput,
     pub part: Option<String>,
+    /// Milliseconds spent checking the world's gates before the call (arena's own work).
+    pub gate_ms: f64,
+}
+
+impl Called {
+    fn new(output: ToolOutput, part: Option<String>) -> Called {
+        Called {
+            output,
+            part,
+            gate_ms: 0.0,
+        }
+    }
+
+    /// A tool error that reached no part.
+    fn error(message: String) -> Called {
+        let output = ToolOutput {
+            error: Some(message),
+            ..Default::default()
+        };
+        Called::new(output, None)
+    }
 }
 
 struct Part {
@@ -413,28 +434,22 @@ impl World {
     ) -> Result<Called, WorldError> {
         let route = self.tools.iter().find(|(t, _)| t.name == name);
         let Some(route) = route.map(|(_, r)| *r) else {
-            return Ok(Called {
-                output: ToolOutput {
-                    error: Some(format!("unknown tool {name}")),
-                    ..Default::default()
-                },
-                part: None,
-            });
+            return Ok(Called::error(format!("unknown tool {name}")));
         };
-        if let Some(output) = self.gate_refusal(name, &args).await? {
-            return Ok(Called { output, part: None });
-        }
-        match route {
-            Route::Bench => self.call_bench_tool(name, args).await,
-            Route::Part(i) => {
+        let since = std::time::Instant::now();
+        let refused = self.gate_refusal(name, &args).await?;
+        let gate_ms = crate::overhead::ms_since(since);
+        let mut called = match (refused, route) {
+            (Some(output), _) => Called::new(output, None),
+            (None, Route::Bench) => self.call_bench_tool(name, args).await?,
+            (None, Route::Part(i)) => {
                 let p = &self.parts[i];
                 let output = p.call_tool(name, args, clock_ms).await?;
-                Ok(Called {
-                    output,
-                    part: Some(p.name.clone()),
-                })
+                Called::new(output, Some(p.name.clone()))
             }
-        }
+        };
+        called.gate_ms = gate_ms;
+        Ok(called)
     }
 
     /// Runs `part`'s own tool `name` (for a replay).
@@ -458,13 +473,7 @@ impl World {
         )
         .await?;
         if let Some(error) = self.bench_part_error(&o) {
-            return Ok(Called {
-                output: ToolOutput {
-                    error: Some(error),
-                    ..Default::default()
-                },
-                part: None,
-            });
+            return Ok(Called::error(error));
         }
         let output = ToolOutput {
             result: o.result,
@@ -473,10 +482,7 @@ impl World {
             writes: o.writes,
             ..Default::default()
         };
-        Ok(Called {
-            output,
-            part: Some(o.part),
-        })
+        Ok(Called::new(output, Some(o.part)))
     }
 
     /// Why a benchmark tool's answer can't stand: it names an unknown part, or wrote to a part

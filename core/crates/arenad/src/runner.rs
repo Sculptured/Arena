@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Result};
 use parts::proto::BenchDescribe;
@@ -9,6 +9,7 @@ use crate::{
     app::AppState,
     exec::BranchCtx,
     model::*,
+    overhead::{self, Cat},
     prompts,
     store::{BranchId, RunId},
     world::{self, Plan, World, WorldFrom},
@@ -101,7 +102,9 @@ async fn start_world(
 ) -> Result<World> {
     let seed = new_seed();
     let hub = state.hub.clone();
+    let since = Instant::now();
     let world = World::start_planned(hub, bench, planned, branch_id, seed, WorldFrom::Base).await?;
+    overhead::add_since(branch_id, Cat::Restore, since);
     let start = json!({
         "task_id": task_id,
         "team": team,
@@ -264,9 +267,7 @@ async fn run_agent(
         start["provider"] = json!(p);
     }
     let id = Some(spec.id.as_str());
-    state
-        .store
-        .append(&ctx.branch_id, id, EventKind::AgentStart, start)
+    ctx.append(&state.store, id, EventKind::AgentStart, start)
         .await?;
     let run = AgentRun {
         branch: ctx.clone(),
@@ -291,9 +292,7 @@ async fn record_end(
         freeze(ctx).await;
     }
     let end = serde_json::to_value(agent_end(result))?;
-    state
-        .store
-        .append(&ctx.branch_id, Some(agent), EventKind::AgentEnd, end)
+    ctx.append(&state.store, Some(agent), EventKind::AgentEnd, end)
         .await?;
     Ok(())
 }
@@ -320,6 +319,8 @@ fn agent_end(result: &AgentResult) -> AgentEndPayload {
         ok: result.ok,
         error: result.error.clone(),
         tokens: result.tokens["total_tokens"].as_i64(),
+        prompt_tokens: result.tokens["prompt_tokens"].as_i64(),
+        completion_tokens: result.tokens["completion_tokens"].as_i64(),
         cost_usd: result.cost_usd,
         cost_source: result.cost_source.clone(),
         seconds: Some(result.seconds),
@@ -353,16 +354,12 @@ fn agent_ending(ctx: &BranchCtx, agent: &str, result: AgentResult) -> Option<End
 
 /// Scores the world and records the Check.
 async fn check(state: &Arc<AppState>, ctx: &BranchCtx) -> Result<Ending> {
+    let since = Instant::now();
     let check = score(state, ctx).await?;
+    overhead::add_since(&ctx.branch_id, Cat::Score, since);
     let ending = verdict(&check, &ctx.world.part_names());
-    state
-        .store
-        .append(
-            &ctx.branch_id,
-            None,
-            EventKind::Check,
-            serde_json::to_value(&check)?,
-        )
+    let payload = serde_json::to_value(&check)?;
+    ctx.append(&state.store, None, EventKind::Check, payload)
         .await?;
     Ok(ending)
 }

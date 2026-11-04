@@ -5,7 +5,11 @@ use serde_json::Value;
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use tokio_postgres::{Client, NoTls, Row};
 
-use crate::{model::*, pg::Admin};
+use crate::{
+    model::*,
+    overhead::{self, Cat},
+    pg::Admin,
+};
 use parts::proto::Mode;
 
 pub type RunId = String;
@@ -168,7 +172,25 @@ impl Store {
         Ok(())
     }
 
+    /// Records an event of a branch; an object payload also gets the branch's `overhead_ms` built
+    /// up since its last event. The time this takes is overhead of the kind `record`.
     pub async fn append(
+        &self,
+        branch_id: &str,
+        agent: Option<&str>,
+        kind: EventKind,
+        mut payload: Value,
+    ) -> Result<Event> {
+        let since = std::time::Instant::now();
+        if let (Some(o), Some(obj)) = (overhead::take(branch_id), payload.as_object_mut()) {
+            obj.insert("overhead_ms".into(), serde_json::to_value(o)?);
+        }
+        let ev = self.insert_event(branch_id, agent, kind, payload).await;
+        overhead::add_since(branch_id, Cat::Record, since);
+        ev
+    }
+
+    async fn insert_event(
         &self,
         branch_id: &str,
         agent: Option<&str>,
@@ -210,6 +232,10 @@ impl Store {
         status: BranchStatus,
         error: Option<String>,
     ) -> Result<()> {
+        if status != BranchStatus::Running {
+            // What built up after the branch's last event has no event to go on.
+            overhead::take(branch_id);
+        }
         self.client
             .execute(
                 "UPDATE branches SET status = $2, error = $3,

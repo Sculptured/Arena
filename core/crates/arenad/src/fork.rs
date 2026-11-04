@@ -18,6 +18,7 @@ use crate::{
     clock::BranchClock,
     exec::BranchCtx,
     model::*,
+    overhead::{self, Cat},
     providers::ProviderConfig,
     recorded::{run_info, saves_at_except},
     restore::{restored, Refused},
@@ -603,7 +604,10 @@ async fn start_child_world(
     let started = async {
         let start = rerun.plan.start_seq;
         state.store.copy_prefix(parent, new_id, start).await?;
-        rerun::start_world(state, events, new_id, rerun).await
+        let since = std::time::Instant::now();
+        let world = rerun::start_world(state, events, new_id, rerun).await?;
+        overhead::add_since(new_id, Cat::Restore, since);
+        Ok(world)
     }
     .await;
     if let Err(e) = &started {

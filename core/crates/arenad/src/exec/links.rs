@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::{
     model::EventKind,
+    overhead::{self, Cat},
     world::{link_args, PartEvent},
 };
 
@@ -130,7 +131,11 @@ impl ToolExec {
         branch: &BranchCtx,
         events: Vec<PartEvent>,
     ) -> Result<(), String> {
+        let since = std::time::Instant::now();
         let mut log = run_links(branch, events).await;
+        if log.iter().any(|r| matches!(r, Reported::Link(_))) {
+            overhead::add_since(&branch.branch_id, Cat::Link, since);
+        }
         save_on_last(branch, &mut log).await;
         for entry in log {
             self.record_reported(branch, entry).await?;
