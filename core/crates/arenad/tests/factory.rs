@@ -80,7 +80,8 @@ impl Calls<'_> {
             .ok_or(format!("no {key} in the notes"))
     }
 
-    /// `name`'s answer once `ready` says it holds what is waited for; the clock runs meanwhile.
+    /// `name`'s answer once `ready` says it holds what is waited for, asked 600 times at most,
+    /// every 2 s of arena time (every 100 ms at the test's speed of 20); the clock runs meanwhile.
     async fn wait(
         &self,
         name: &str,
@@ -92,7 +93,7 @@ impl Calls<'_> {
             if ready(&v) {
                 return Ok(v);
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(poll_interval()).await;
         }
         Err(format!("{name} never had what was waited for"))
     }
@@ -119,6 +120,13 @@ impl Calls<'_> {
         self.call("handoff", json!({"note": note})).await?;
         Ok(())
     }
+}
+
+/// 2 s of arena time at `ARENA_CLOCK_SPEED`, and never under 100 ms.
+fn poll_interval() -> Duration {
+    let speed = std::env::var("ARENA_CLOCK_SPEED").ok();
+    let speed: f64 = speed.and_then(|s| s.parse().ok()).unwrap_or(20.0);
+    Duration::from_secs_f64((2.0 / speed).max(0.1))
 }
 
 /// Maintenance: the trip, the evidence, and a maintenance order for the failure it diagnosed.
@@ -474,12 +482,17 @@ fn scripted_team(hubteam: parts::proto::BenchTeam) -> Team {
     }
 }
 
-/// Runs the team on one path to its end; the status and the checks that failed.
-async fn walk(state: &Arc<AppState>, team: Team) -> (Branch, CheckPayload) {
+/// Runs the team on one path to its end, polling every 200 ms up to `polls` times; the branch,
+/// the checks that failed, and the branch's events.
+async fn walk_for(
+    state: &Arc<AppState>,
+    team: Team,
+    polls: usize,
+) -> (Branch, CheckPayload, Vec<Event>) {
     let (_run, id) = runner::start_run(state, "press-a1-bearing", team)
         .await
         .unwrap();
-    for _ in 0..3000 {
+    for _ in 0..polls {
         let b = state.store.branch(&id).await.unwrap();
         if b.status != BranchStatus::Running {
             let evs = state.store.events(&id).await.unwrap();
@@ -488,11 +501,17 @@ async fn walk(state: &Arc<AppState>, team: Team) -> (Branch, CheckPayload) {
                 .unwrap_or_else(|| panic!("no check: {b:?}"))
                 .payload
                 .clone();
-            return (b, serde_json::from_value(payload).unwrap());
+            return (b, serde_json::from_value(payload).unwrap(), evs);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     panic!("the branch did not finish");
+}
+
+/// Runs the team on one path to its end (10 minutes at most); the status and the checks.
+async fn walk(state: &Arc<AppState>, team: Team) -> (Branch, CheckPayload) {
+    let (b, check, _) = walk_for(state, team, 3000).await;
+    (b, check)
 }
 
 async fn app(hub: &Arc<Hub>, tag: &str, gold: bool) -> (Arc<AppState>, Cleanup) {
@@ -550,4 +569,44 @@ fn live_factory_right_path_passes_and_wrong_path_fails() {
     let hub = Arc::new(hub.with_env(stack.env()));
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(assert_paths(&hub));
+}
+
+/// The gold path only, then its checks and metrics (measured time, arena's overhead, the
+/// estimate in production) printed as JSON. For a run whose parts are not the defaults, set by
+/// the environment: `ARENA_RUN_FACTORY` (e.g. `--backend isaac --plant-config ...`),
+/// `ARENA_RUN_ISAAC_SIM` (the plant on another machine) and `ARENA_CLOCK_SPEED` (default 20). It
+/// waits up to an hour, since Isaac Sim starts and steps far slower than the stand-in.
+#[test]
+#[ignore]
+fn live_factory_gold_path_report() {
+    if let Some(why) = missing() {
+        eprintln!("skipped: {why}");
+        return;
+    }
+    build();
+    if std::env::var_os("ARENA_CLOCK_SPEED").is_none() {
+        // SAFETY: set before the runtime or any thread that reads the environment starts.
+        unsafe { std::env::set_var("ARENA_CLOCK_SPEED", "20") };
+    }
+    let stack = Stack::new();
+    let hub = Hub::new(
+        Registry::scan(&package_roots()).unwrap(),
+        bin_dir(),
+        stack.saves.clone(),
+    );
+    let hub = Arc::new(hub.with_env(stack.env()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(report_gold(&hub));
+}
+
+async fn report_gold(hub: &Arc<Hub>) {
+    let bench = hub.bench_describe("factory").await.unwrap();
+    let (state, _clean) = app(hub, "report", true).await;
+    let team = scripted_team(bench.team.unwrap());
+    let (b, check, events) = walk_for(&state, team, 18_000).await;
+    let m = arenad::metrics::metrics(&b, &events, arenad::prices::table(), chrono::Utc::now());
+    let report = json!({"status": b.status, "error": b.error, "check": check, "metrics": m});
+    println!("REPORT {}", serde_json::to_string_pretty(&report).unwrap());
+    assert_eq!(check.differing_rows, Some(vec![]), "{check:?}");
+    assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
 }

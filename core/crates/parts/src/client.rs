@@ -1,5 +1,6 @@
 //! A running part program and its JSON-RPC calls.
 use crate::manifest::{Manifest, Run};
+use crate::run_override;
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -100,6 +101,15 @@ fn command_for(
     saves_root: &Path,
     env: &[(String, String)],
 ) -> Result<(Command, Option<String>)> {
+    if let Some(line) = run_override::from_env(&m.name) {
+        eprintln!(
+            "parts: {} runs `{line}` ({})",
+            m.name,
+            run_override::var_name(&m.name)
+        );
+        let argv = run_override::argv(&line);
+        return Ok((program_command(m, &argv, bin_dir, saves_root, env), None));
+    }
     match &m.run {
         Run::Command(argv) => Ok((program_command(m, argv, bin_dir, saves_root, env), None)),
         Run::Image(image) => {

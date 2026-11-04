@@ -439,3 +439,83 @@ def test_diff_tolerance_is_only_for_physics_readings():
                                                                           "pose": {"x": 1.02}})
     assert not same({"boost": 1.2}, {"boost": 1.21}) and not same({"t": 20.0}, {"t": 20.01})
     assert not same({"sensors": {"zone": "B"}}, {"sensors": {"zone": "C"}})
+
+
+def test_bad_recording_config_is_invalid():
+    for config, text in [({"record": ""}, "record"), ({"record": "v.mp4", "camera": 5}, "camera"),
+                         ({"record": "v.mp4", "record_fps": 0}, "record_fps")]:
+        with pytest.raises(PartError) as e:
+            started(**config)
+        assert e.value.code == -32602 and text in e.value.message
+    with pytest.raises(PartError) as e:
+        started(record="v.mp4")
+    assert e.value.code == -32602 and "record needs the isaac backend" in e.value.message
+    with pytest.raises(PartError) as e:  # checked before Isaac Sim is needed
+        started(part=isaac(), record="v.mp4", camera="nope")
+    assert e.value.code == -32602 and "camera must be one of" in e.value.message and "'nope'" in e.value.message
+
+
+class FakeVideo:
+    """Stands in for isaac_video.Video: notes the plant step of each frame."""
+    made = []
+
+    def __init__(self, cfg, _io, physics_hz, path):
+        from isaac_part.recording import frame_every
+        self.every, self.path, self.at, self.closed = frame_every(physics_hz, cfg.record_fps), path, [], False
+        FakeVideo.made.append(self)
+
+    def frame(self, plant):
+        self.at.append(plant.steps)
+
+    def close(self):
+        self.closed = True
+
+
+def test_recording_frames_fall_on_arena_time_and_change_nothing(saves_root):
+    FakeVideo.made.clear()
+    part = started(part=IsaacSim(dataclasses.replace(BACKENDS["standin"], video=FakeVideo)), record="run.mp4",
+                   camera="auto", record_fps=30)
+    plain = started("i2")
+    for clock_ms in (500, 1_234, 3_000):
+        assert part.advance("i1", clock_ms) == plain.advance("i2", clock_ms)
+    video = FakeVideo.made[0]
+    assert video.path == saves_root / "isaac-sim" / "run-i1.mp4"
+    assert video.every == 12 and video.at == list(range(12, 1081, 12))  # 3 s at 360 Hz, 30 frames a second
+    part.stop("i1")
+    assert video.closed
+
+
+def test_recording_paths_and_frame_spacing(tmp_path):
+    from isaac_part.recording import frame_every, next_frame, path_for
+    assert path_for("out/run.mp4", tmp_path, "b1") == tmp_path / "out" / "run-b1.mp4"
+    assert path_for("/v/run", tmp_path, "b1") == Path("/v/run-b1.mp4")
+    assert (frame_every(360, 30), frame_every(360, 1000), next_frame(0, 12), next_frame(12, 12)) == (12, 1, 12, 24)
+
+
+def test_save_goes_to_the_save_folder_by_convention(saves_root, tmp_path):
+    """arenad's `dir` is its own path; the program, which may run elsewhere, keeps saves under its ARENA_SAVES."""
+    part = started()
+    part.save("i1", "s1", str(tmp_path / "arenad-side" / "s1"))
+    assert (saves_root / "isaac-sim" / "s1" / "plant.pkl.gz").exists()
+    assert not (tmp_path / "arenad-side").exists()
+
+
+def test_steps_that_never_reach_the_plant_are_an_error():
+    """A backend whose physics callback has stopped must not leave the plant silently standing still."""
+    part = started(part=IsaacSim(dataclasses.replace(BACKENDS["standin"], run=lambda *_args: None)))
+    with pytest.raises(PartError) as e:
+        part.advance("i1", 1_000)
+    assert e.value.code == -32603 and "physics callback is not running" in e.value.message
+
+
+def test_only_the_newest_physics_callback_reaches_a_plant():
+    from types import SimpleNamespace
+    from isaac_part import isaac_backend
+    callbacks, stepped = [], []
+    sim_io = SimpleNamespace(on_physics_step=callbacks.append)
+    isaac_backend._APP["step"] = stepped.append
+    isaac_backend._register_callback(sim_io)
+    isaac_backend._register_callback(sim_io)  # a second plant's stage
+    callbacks[0](1.0)
+    callbacks[1](2.0)
+    assert stepped == [2.0]

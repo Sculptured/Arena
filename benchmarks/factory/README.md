@@ -65,7 +65,9 @@ The repair itself isn't waited for: a truck takes hours of plant time. The task 
 
 `arena-factory --backend standin|isaac` (default `standin`) picks the plant's integration; it is a program argument
 because `describe` has no config. To use Isaac Sim, put a copy of this manifest under an `ARENA_PACKAGES` root with
-`--backend isaac` in its command. **The `isaac` backend has never run in this world, or on Isaac Sim at all.**
+`--backend isaac` in its command, or set `ARENA_RUN_FACTORY` to that command line (`docs/protocol.md`).
+`--plant-config '<JSON object>'` sets the plant part's config, such as `isaac-sim`'s `record` (an MP4 of the run).
+With `ARENA_RUN_ISAAC_SIM` the plant can run on a GPU machine over ssh (`integrations/isaac-sim/README.md`).
 
 ## Tests
 
@@ -79,6 +81,16 @@ because `describe` has no config. To use Isaac Sim, put a copy of this manifest 
 of Sculptured and the stand-in plant, with the clock at 20 times real time. It covers one run of each path. That was
 with the earlier script, in which the lead made every change; the script with the work divided between the roles
 compiles but has not been run yet. **Not
-run:** real agents or models, the `isaac` backend, a rerun or fork of this world, and `arena-part-check` on
+run:** real agents or models, a rerun or fork of this world, and `arena-part-check` on
 `isaac-sim-standin`. Each new run makes arenad check that the base save exists, which on ERPNext rebuilds a scratch
 site.
+
+**Verified with Isaac Sim (2026-11-04):**
+- What ran: `live_factory_gold_path_report`, which runs only the gold path and prints its checks and metrics. It
+  used `ARENA_RUN_FACTORY="… arena-factory --backend isaac --plant-config '{"record": …}'"` and
+  `ARENA_CLOCK_SPEED=0.1`.
+- Where: the plant ran on Isaac Sim 6.2.0 on a rented RTX 3090 (RunPod), over ssh. The rest of the world ran
+  locally.
+- Result: it passed all nine checks. It measured 1311.0 s, with 156.9 s of overhead, so 1154.1 s estimated, and
+  recorded the run to MP4. Details are in `integrations/isaac-sim/README.md`.
+- The wrong path has not been run on Isaac Sim.

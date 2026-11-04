@@ -121,6 +121,26 @@ fn registry_rejects_duplicates() {
 }
 
 #[tokio::test]
+async fn run_override_replaces_the_manifest_command() {
+    build_counter();
+    let (root, saves) = (temp("override"), temp("override-saves"));
+    // The manifest's own command doesn't exist: only the override can start the part.
+    write_pkg(&root, "relay-counter", r#"["/nonexistent/relay-counter"]"#);
+    // Only this test uses the package, so no other test sees the variable.
+    std::env::set_var(
+        "ARENA_RUN_RELAY_COUNTER",
+        "exec \"${ARENA_BIN_DIR}/examples/counter\"",
+    );
+    let hub = hub_for(std::slice::from_ref(&root), &saves);
+    let d = hub.describe("relay-counter").await.unwrap();
+    std::env::remove_var("ARENA_RUN_RELAY_COUNTER");
+    assert_eq!(d.protocol, 1);
+    drop(hub);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&saves).unwrap();
+}
+
+#[tokio::test]
 async fn hub_spawns_rust_counter_and_saves() {
     build_counter();
     let (root, saves) = (temp("rust"), temp("rust-saves"));

@@ -1,7 +1,9 @@
 """One instance's plant: the factory's Factory on the arena clock, stepped at a fixed physics rate."""
 from datetime import datetime, timedelta, timezone
 
-from . import views
+from arena_part import errors
+
+from . import recording, views
 from .log import log
 
 
@@ -34,9 +36,9 @@ def physics_hz(cfg, mods) -> int:
 
 
 class Plant:
-    def __init__(self, mods, backend, cfg, clock_ms: int):
+    def __init__(self, mods, backend, cfg, clock_ms: int, video_path=None):
         """A Factory on `backend` with erp and triggers None, its threads never started: the part's thread calls
-        it directly."""
+        it directly. With `video_path`, the backend renders the plant there as it steps."""
         self.backend, self.cfg = backend, cfg
         self.hz = physics_hz(cfg, mods)
         self.steps = clock_ms * self.hz // 1000  # physics steps done, counted from arena time 0
@@ -46,6 +48,7 @@ class Plant:
         CLOCK.plant = self
         self.io = backend.make(cfg, data, self.hz)
         self.factory = mods.factory.Factory(self.io, data, log=log)
+        self.video = None if video_path is None else backend.video(cfg, self.io, self.hz, video_path)
 
     def plant_now(self) -> datetime:
         return self.cfg.plant_start + timedelta(seconds=self.steps / self.hz)
@@ -68,14 +71,37 @@ class Plant:
     def step_to(self, clock_ms: int) -> int:
         """Physics steps of 1/hz s up to `clock_ms` (none when it is behind), then the factory's queued work.
         Events stay queued for `advance`. Returns the number of steps."""
-        n = max(0, clock_ms * self.hz // 1000 - self.steps)
+        target = clock_ms * self.hz // 1000
+        n = max(0, target - self.steps)
         CLOCK.plant = self
         if n:
-            self.backend.run(self.io, n, 1.0 / self.hz, self._physics_step)
+            self._run_to(target)
         self.factory.drain()
         return n
 
+    def _run_to(self, target: int) -> None:
+        """Physics steps up to step `target`. With a recording, a frame at each frame boundary on the way. Steps
+        that rendering itself makes still reach Factory.physics_step and count, so the clock stays right."""
+        if self.video is None:
+            self._run(target - self.steps)
+            return
+        every = self.video.every
+        while self.steps < target:
+            self._run(min(target, recording.next_frame(self.steps, every)) - self.steps)
+            if self.steps % every == 0:
+                self.video.frame(self)
+
+    def _run(self, n: int) -> None:
+        """`n` backend steps; each must reach Factory.physics_step, or the plant would silently stand still."""
+        before = self.steps
+        self.backend.run(self.io, n, 1.0 / self.hz, self._physics_step)
+        if self.steps < before + n:
+            raise errors.internal(f"{n} physics steps ran but only {self.steps - before} reached the plant: the "
+                                  "physics callback is not running")
+
     def stop(self) -> None:
+        if self.video is not None:
+            self.video.close()
         self.backend.stop(self.io)
 
     def new_events(self) -> list:

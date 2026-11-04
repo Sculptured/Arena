@@ -3,6 +3,7 @@ mod check;
 mod client;
 mod hub;
 mod manifest;
+mod run_override;
 
 /// The protocol's wire types, for the core's crates (only `parts` depends on the kit).
 pub use arena_part::proto;

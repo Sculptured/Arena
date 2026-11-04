@@ -13,6 +13,8 @@
 //! - `ARENA_BIN_DIR`: substituted for `${ARENA_BIN_DIR}` in package commands
 //!   (default `<arena>/core/target/release`; build with `cargo build --release` in `<arena>`);
 //! - `ARENA_SAVES`: save storage (default `<arena>/core/saves`).
+//! - `ARENA_RUN_<PACKAGE>`: a command line (`/bin/sh -c`) run in place of a package's `run`,
+//!   e.g. `ssh <host> -- <command>` for a part on another machine (`docs/protocol.md`).
 //!
 //! `<arena>` is the folder above `core`, fixed when arenad is built (from `CARGO_MANIFEST_DIR`,
 //! which is `<arena>/core/crates/arenad`), so the defaults hold wherever arenad is started from.

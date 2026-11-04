@@ -6,7 +6,7 @@ from typing import Callable
 
 from arena_part import sources
 
-from . import isaac_backend
+from . import isaac_backend, isaac_video
 from .gpu import gpu_host
 
 
@@ -22,6 +22,7 @@ class Backend:
     stop: Callable  # io -> None: the instance is stopped
     host: Callable  # () -> what the fingerprint records of the machine
     max_live: int | None = None  # live instances one process can hold (None: any number)
+    video: Callable | None = None  # (cfg, io, physics_hz, path) -> a recording (None: it can't render)
 
 
 def _standin_load(cfg):
@@ -56,5 +57,5 @@ STANDIN = Backend("standin", ("tests/fake_sim.py", "tests/press_dynamics.py"), _
                   _standin_run, _standin_get, _standin_set, _nothing, _nothing)
 ISAAC = Backend("isaac", ("sim_io.py", "ridgeline_scene.py"), isaac_backend.load, isaac_backend.make,
                 isaac_backend.run, isaac_backend.get_state, isaac_backend.set_state, isaac_backend.stop,
-                gpu_host, max_live=1)
+                gpu_host, max_live=1, video=isaac_video.Video)
 BACKENDS = {b.name: b for b in (STANDIN, ISAAC)}

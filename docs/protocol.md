@@ -34,6 +34,12 @@ which gives it the host's network (every service the host can reach, not only th
 arenad does not enforce `services`); no environment from arenad; disk only under its own save folder,
 mounted at `/saves`.
 
+`ARENA_RUN_<PACKAGE>` in arenad's environment (the name upper-cased, `-` as `_`; `ARENA_RUN_ISAAC_SIM` for
+`isaac-sim`) replaces `run`. arenad runs it with `/bin/sh -c`, as a `command` (in the package folder, with the same
+environment, and `${ARENA_BIN_DIR}` substituted). Use it for a part on another machine, such as
+`ssh <host> -- <command>`, whose stdin and stdout carry the protocol. Such a part keeps its saves under its own
+`ARENA_SAVES` there, by the convention below, and arenad doesn't count their bytes.
+
 ## Ids and keys
 
 - Instance and save ids are chosen by arenad and match `^[a-z0-9_]{1,63}$`. The kits answer `-32602` to any

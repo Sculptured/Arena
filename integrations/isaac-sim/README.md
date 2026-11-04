@@ -2,9 +2,10 @@
 
 Puts the Ridgeline factory plant in the world, with Isaac Sim as the physics (the `isaac` backend) or a stand-in
 double (the `standin` backend). Restore: exact by replay from the seed and inputs; approximate from a save
-(a pickle of the factory and simulation state). `uses_clock`: true. Verified on the stand-in only, by its pytest
-suite and the `arena-part-check` conformance check; **the `isaac` backend has never run on Isaac Sim** (no Isaac
-Sim image or 16 GB GPU here). Its package `isaac-sim-mirror` (see `integrations/isaac-sim-mirror/README.md`)
+(a pickle of the factory and simulation state). `uses_clock`: true. Verified on the stand-in by its pytest suite
+and the `arena-part-check` conformance check. The `isaac` backend has run once on Isaac Sim 6.2.0, on a rented
+RTX 3090, through the factory benchmark's gold path, and recorded it to MP4 (see "Verified on Isaac Sim"). Its
+package `isaac-sim-mirror` (see `integrations/isaac-sim-mirror/README.md`)
 only follows a live plant.
 
 **The factory example this package wraps is not public yet.** Its default `isaac_path` points into a private
@@ -16,9 +17,9 @@ The Ridgeline factory as an `arena-part/1` integration, on the arena clock. In t
 that demo's `isaac/factory.py` class `Factory` without editing it. Factory is plain Python and reaches the
 simulation only through a `PlantIO`.
 
-**The `isaac` backend has not run on Isaac Sim.** The machine it was written on has no Isaac Sim image and no
-16 GB GPU. Everything below that says *verified* ran on the `standin` backend: the factory's own offline double,
-`isaac/tests/fake_sim.FakeIO`, which is backed by `isaac/tests/press_dynamics.py`.
+Unless a line says Isaac Sim, *verified* below means the `standin` backend: the factory's own offline double,
+`isaac/tests/fake_sim.FakeIO`, which is backed by `isaac/tests/press_dynamics.py`. What ran on Isaac Sim is in
+"Verified on Isaac Sim".
 
 ## Backends
 
@@ -57,6 +58,26 @@ changes the fingerprint.
 - `physics_hz` is a knob, not a fix for speed. The factory's signal chain assumes `press_model.PHYSICS_HZ`
   (`VibrationChannel`'s sample rate, telemetry every `PHYSICS_HZ` steps), so any other rate changes the
   readings.
+
+## Recording: `record`, `camera`, `record_fps`
+
+| key | default |
+|---|---|
+| `record` | none. An MP4 path, relative to `$ARENA_SAVES/isaac-sim/`. Each instance writes `<stem>-<instance>.mp4` (arenad runs a base, then a branch) |
+| `camera` | `auto`: the factory's camera director, which cuts to events. Or `free`, or a rig in the factory's `layout.CAMERAS` |
+| `record_fps` | 30: frames per second of arena time. The MP4 plays at this rate, so it runs in arena time |
+
+- Only the `isaac` backend renders; `record` on `standin` is -32602. An unknown camera is -32602 before Isaac Sim
+  starts.
+- It reuses the factory's own code, read only: `visuals.Visuals` (tower lights, labels, crate, truck, camera
+  director) and `record.Recorder` (a Replicator render product on the main camera, piped to ffmpeg), headless at
+  1280x720 with the RaytracedLighting renderer, as `run.py --headless --record` does. The difference is the clock:
+  a frame is rendered every `physics_hz / record_fps` physics steps, so frames fall on arena time, not wall time.
+- Label textures go to `<stem>-<instance>_labels/` beside the MP4, and the recorder's `<stem>-<instance>.json`
+  (frames, duration) too. The MP4 is finished on `stop` (or when the process exits normally); the log says
+  `[isaac-sim] wrote <path>`. Fetch it from the machine the program ran on.
+- If physics steps stop reaching the plant (its physics callback is not running), `advance` and `call_tool` fail
+  with -32603 instead of leaving the plant standing still.
 
 ## Fingerprint
 
@@ -194,34 +215,90 @@ factory (config `plant_url`, default `http://127.0.0.1:8090`) and only ever GETs
   -32001, and arenad's restore table refuses to fork a world that contains the mirror.
 - It has no `[[example]]`, so `arena-part-check` can't run on it. Its test uses a stub HTTP server on a free port.
 
-## Running the `isaac` backend on a DGX Spark (not yet done)
+## Running on another machine: `ARENA_RUN_ISAAC_SIM`
 
-The factory's `isaac/spark/run.sh` shows how Isaac Sim 6.2 runs there: the `nvcr.io/nvidia/isaac-sim:6.2.0`
-container, its cache mounts, `-u 1234:1234`, `--network=host`, and `LD_PRELOAD` of libgomp on aarch64. This
-integration needs the same container, with three changes:
-- `-i` instead of `-t`, because the protocol is stdin and stdout;
-- the `Sculptured` folder (holding both `arena/` and `Sculptured-Examples/`) mounted, for example at `/work`;
-- `ARENA_SAVES` passed and mounted read-write.
-
-Inside the container, the command is:
+arenad replaces a package's run command with the command line in `ARENA_RUN_<PACKAGE>` (here
+`ARENA_RUN_ISAAC_SIM`), run by `/bin/sh -c` (`docs/protocol.md`). Pointed at `ssh <host> -- <command>`, the part
+runs on a GPU machine with the protocol on the ssh session's stdio:
 
 ```bash
-cd /work/arena/integrations/isaac-sim && PYTHONPATH=/work/arena/kits/python \
-  exec /isaac-sim/python.sh -m isaac_part --backend isaac
+export ARENA_RUN_ISAAC_SIM="exec ssh -p <port> -i <key> -o BatchMode=yes isaac@<host> -- 'cd /isaac-sim/work/arena/integrations/isaac-sim && \
+  ARENA_SAVES=/isaac-sim/work/saves PYTHONPATH=/isaac-sim/work/arena/kits/python exec /isaac-sim/python.sh -m isaac_part --backend isaac'"
 ```
 
-Put that `docker run` in a manifest under a separate `ARENA_PACKAGES` root, named `isaac-sim`, in place of the
-`uv run` command. Then check:
-1. `start` builds the scene and steps;
-2. `inspect` shows `plant/sim.isaac_version`;
-3. the zone C, zone D and trip events land near the stand-in's times;
-4. an approximate restore continues without a jump in the vibration readings.
+- The remote machine needs this folder, `kits/python` and the factory's `isaac/` and `data/` in the same layout
+  (`arena/` next to `Sculptured-Examples/`), since the default paths and the fingerprint are relative to it.
+- Saves and recordings stay on the remote machine, under its `ARENA_SAVES`: `save` writes to
+  `$ARENA_SAVES/isaac-sim/<save>` (the protocol's convention) rather than arenad's `dir`, which is a local path.
+  arenad's own count of save bytes doesn't see them.
+- The `nvcr.io/nvidia/isaac-sim:6.2.0` image has no sshd and runs as uid 1234 without root, so `remote/sshd.py`
+  is a small SSH server (asyncssh, key login only, one command per session) to start inside the container.
+
+## Verified on Isaac Sim (RunPod, 2026-11-04)
+
+**What ran where.**
+- On a RunPod community-cloud pod, the plant ran: this part with `--backend isaac`. The pod had:
+  - an NVIDIA GeForce RTX 3090 (24 GB), driver 580.95.05;
+  - the image `nvcr.io/nvidia/isaac-sim:6.2.0`, whose `plant/sim.isaac_version` reads `6.2.0.rc.14.6`;
+  - a 40 GB container disk and no volume.
+- Everything else ran on a Linux workstation: arenad (`live_factory_gold_path_report`), the factory benchmark with
+  `--backend isaac`, ERPNext (`frappe/erpnext:v16.53.0`), `ridgeline-hub` and Sculptured.
+- arenad started the part over `ssh` (`ARENA_RUN_ISAAC_SIM`, `remote/sshd.py` on the pod), with
+  `ARENA_CLOCK_SPEED=0.1` and `{"record": "factory-gold.mp4", "camera": "auto", "record_fps": 10}`.
+- The team was the scripted, no-model team, on the gold path.
+
+**Result.**
+- The branch passed, with all nine checks.
+- Its metrics: 1311.0 s measured, 156.9 s of arena overhead (145.9 s of it restoring the base, mostly ERPNext), so
+  1154.1 s estimated in production. That estimate is at 0.1× clock speed, so it measures the slow clock more than
+  the team.
+- The test took 1324 s.
+- The branch started from the base save approximately, so `set_state` (`set_dof_positions` ...) ran on 6.2
+  without an error. The continuity of the readings after it was not measured.
+
+**The recording.** 1158 frames, 115.8 s of arena time at 10 fps, 1280x720 H.264, 21.5 MB. The camera director
+cut to PR-A1 near 35 s and near 50 s. From about 65 s to 75 s it showed "Press Line A DOWN" at 0 spm, then went
+back to the wide shot. That is near the stand-in's zone C (33.7 s), zone D (46.4 s) and trip (61.9 s). The events'
+own times were not compared.
+
+**Speed on the RTX 3090.**
+
+| What | Measured |
+|---|---|
+| First start (shader and asset caches empty) | about 4.5 min |
+| Later starts | 31 s; another plant in the same process: 6 to 8 s |
+| Physics alone | about 4 s of wall time per second of arena time (about 11 ms per 360 Hz step) |
+| Recording at 30 fps | 9.4 s per arena second |
+| Recording at 10 fps | 5.9 s per arena second |
+
+That is why the clock ran at 0.1. The plant must step faster than the arena clock runs, or every call waits
+longer than the last.
+
+**Found and fixed on the way.**
+- The physics callback registered for the first plant's stage stopped running after `ctx.new_stage()`. A second
+  plant in the process then stood still, and a recorded one looped forever. Each plant now registers its own
+  callback, and only the newest one reaches a plant.
+- Fetching the 21 MB MP4 through `remote/sshd.py` broke off partway several times ("Broken pipe"). It came back
+  whole in 256 kB `dd` pieces (sha256 checked). `sshd.py` now copies output with backpressure. The local test sends
+  25 MB whole, but this version has not run over the internet link.
+
+**Seen, not chased.**
+- Right after a start, the readings are not like the stand-in's: PR-A1 read 16.4 mm/s (zone D) at 3 s.
+- The early frames' labels show PR-C1 at 888.8 mm/s. This looks like the presses spinning up from rest.
+
+**Not run on Isaac Sim:**
+- `arena-part-check`, which needs three live instances, one more than the backend allows;
+- a replay, a fork or a rerun;
+- the wrong path;
+- real models.
 
 ## Tests
 
 ```
-uv run --with pytest pytest -q
+uv run --with pytest --with asyncssh pytest -q
 ```
+
+Without `asyncssh`, the tests of `remote/sshd.py` are skipped.
 
 All tests run on `standin`. The conformance test runs `arena-part-check` on a copy of the manifest that uses
 `--backend standin`; it is skipped when the binary is not built (`cargo build -p parts --bin

@@ -4,7 +4,7 @@ version = "0.1.0"
 protocol = 1
 run = { command = ["uv", "run", "--project", ".", "python", "-m", "isaac_part", "--backend", "isaac"] }
 needs = { gpu_vram_gb = 16, services = [] }
-config_schema = { type = "object", properties = { isaac_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, physics_hz = { type = "integer" }, scenario = { type = "boolean" } } }
+config_schema = { type = "object", properties = { isaac_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, physics_hz = { type = "integer" }, scenario = { type = "boolean" }, record = { type = "string" }, camera = { type = "string" }, record_fps = { type = "integer" } } }
 
 [[example]]
 tool = "plant_state"

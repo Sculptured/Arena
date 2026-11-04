@@ -1,7 +1,9 @@
 """The arena-part/1 integration: one Plant per instance; exact by replay, approximate from a save."""
+import importlib
+
 from arena_part import errors, saves
 
-from . import source, state, views
+from . import recording, source, state, views
 from .base import DocsPart
 from .config import parse_config
 from .plant import Plant, physics_hz
@@ -46,18 +48,27 @@ class IsaacSim(DocsPart):
             raise errors.internal(f"the {self.backend.name} backend runs {cap} plant per process; stop {live[0]} "
                                   "first")
 
+    def _check_record(self, cfg):
+        if cfg.record is not None and self.backend.video is None:
+            raise errors.invalid(f"record needs the isaac backend (Isaac Sim's RTX renders the frames); the "
+                                 f"{self.backend.name} backend can't render")
+
     def start(self, instance, config, seed, clock_ms, from_=None):
         cfg = parse_config(config)
         self._check_from(from_)
         self._check_room(instance)
         source.check(cfg, self.backend)
+        self._check_record(cfg)
         mods = source.load(cfg)
+        if cfg.record is not None:
+            recording.check_camera(cfg.camera, importlib.import_module("layout").CAMERAS)
         self.backend.load(cfg)  # the factory's and the backend's modules come before any unpickling
         snap = None
         if from_ is not None:
             snap = state.read(saves.root(NAME) / from_["save"])
             state.check_made_with(snap, state.made_with(self.backend, physics_hz(cfg, mods), cfg))
-        plant = Plant(mods, self.backend, cfg, clock_ms)
+        video = None if cfg.record is None else recording.path_for(cfg.record, saves.root(NAME), instance)
+        plant = Plant(mods, self.backend, cfg, clock_ms, video)
         if snap is None:
             plant.begin(seed, cfg.scenario)
         else:
@@ -78,7 +89,10 @@ class IsaacSim(DocsPart):
         return self._instance(instance).advance(clock_ms)
 
     def save(self, instance, save, dir):
-        return {"bytes": state.write(dir, self._instance(instance)), "exact": False}
+        """Written to `$ARENA_SAVES/isaac-sim/<save>`, which is `dir` when arenad runs this program itself. When it
+        runs on another machine (ARENA_RUN_ISAAC_SIM), `dir` is arenad's path and the saves stay on this one."""
+        del dir
+        return {"bytes": state.write(saves.root(NAME) / save, self._instance(instance)), "exact": False}
 
     def _live_docs(self, instance) -> dict:
         return views.docs_of(self._instance(instance).state())

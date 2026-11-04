@@ -27,7 +27,8 @@ fn part(part: &str, integration: &str, config: Value) -> WorldPart {
     }
 }
 
-pub fn parts(backend: Backend) -> Vec<WorldPart> {
+/// The world's parts; `plant` is the plant's config (`--plant-config`, else `{}`).
+pub fn parts(backend: Backend, plant: Value) -> Vec<WorldPart> {
     let doctypes = [
         "Item",
         "Supplier",
@@ -39,7 +40,7 @@ pub fn parts(backend: Backend) -> Vec<WorldPart> {
     vec![
         part("erp", "erpnext", json!({"diff_doctypes": doctypes})),
         part("hub", "ridgeline-hub", json!({})),
-        part("plant", backend.integration(), json!({})),
+        part("plant", backend.integration(), plant),
         part("approvals", "sculptured", json!({})),
     ]
 }
@@ -103,7 +104,7 @@ mod tests {
 
     #[test]
     fn the_backend_picks_the_plants_integration() {
-        let plant = |b| parts(b)[2].integration.clone();
+        let plant = |b| parts(b, json!({}))[2].integration.clone();
         assert_eq!(plant(Backend::Standin), "isaac-sim-standin");
         assert_eq!(plant(Backend::Isaac), "isaac-sim");
     }

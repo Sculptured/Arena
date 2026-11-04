@@ -24,12 +24,23 @@ pub const TASK: &str = "press-a1-bearing";
 pub struct Factory {
     backend: Backend,
     data: PathBuf,
+    plant_config: Value,
 }
 
 impl Factory {
     /// `data` is the factory's `ridgeline.json`; it is read when the world is seeded and scored.
     pub fn new(backend: Backend, data: PathBuf) -> Factory {
-        Factory { backend, data }
+        Factory {
+            backend,
+            data,
+            plant_config: json!({}),
+        }
+    }
+
+    /// The plant part's config in the world, e.g. `{"record": "run.mp4"}` for `isaac-sim`.
+    pub fn with_plant_config(mut self, config: Value) -> Factory {
+        self.plant_config = config;
+        self
     }
 
     fn data(&self) -> R<Value> {
@@ -53,7 +64,7 @@ impl Benchmark for Factory {
             name: "factory".into(),
             version: "0.1.0".into(),
             protocol: PROTOCOL,
-            world: world::parts(self.backend),
+            world: world::parts(self.backend, self.plant_config.clone()),
             tasks: vec![task()],
             instructions: team::INSTRUCTIONS.into(),
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
