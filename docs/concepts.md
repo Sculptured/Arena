@@ -1,7 +1,12 @@
 # Concepts
 
 How Arena models a run: the world it runs in, the team that works in it, and how a run is recorded, forked
-and scored. The protocol each program speaks is in [protocol.md](protocol.md); routes, settings and disk use
+and scored.
+
+Arena is a staging environment. It observes and never dictates: it knows every agent so that it can monitor,
+record, save and rewind it, but it imposes no team shape, order, permission or handoff protocol of its own.
+Whatever the design does in production, it does here. Arena is slower than production (it saves the world and
+writes the record at every step), so it times its own work and reports what the run would take without it. The protocol each program speaks is in [protocol.md](protocol.md); routes, settings and disk use
 are in [reference.md](reference.md).
 
 ## Glossary
@@ -27,7 +32,8 @@ are in [reference.md](reference.md).
   base world plus the task's gold actions, made once and kept). The branch passes when no key differs and at
   least one part could be checked.
 - **Clock**: parts with `uses_clock` get the arena clock, which runs with real time (times
-  `ARENA_CLOCK_SPEED`) while agents work and stands still while the world is saved or restored.
+  `ARENA_CLOCK_SPEED`) while agents work and stands still while the world is saved or restored and while the
+  record is written, so time-based world logic sees about the time it would see in production.
 
 ## Restore modes
 
@@ -54,13 +60,34 @@ rerun panel show, per part, how it will be restored and, for a replay, an estima
 
 ## Teams and agents
 
-A team is a list of agents that run one after another. Each agent's input is the task's ticket, the benchmark's
-instructions, and the previous agent's handoff note. Every agent may call every one of the world's tools, writes
-included, unless its team marks it `read_only`: then it is given only the read tools, and a write call is refused
-and recorded. Who does what is the team's design, not arena's. Every agent but the last must call `handoff` with a
-note for the next one, or the branch fails. `GET /api/team/default` gives the team the benchmark suggests, every
-agent Claude Code with model `sonnet` (the retail example suggests a read-only triage, then a resolver). A
-benchmark that suggests none gets one generic agent.
+A team is a description: agents, each with an id, a name, a kind, a model and a prompt. It is not a protocol.
+Every agent may call every one of the world's tools, writes included, unless its team marks it `read_only`: then
+it is given only the read tools, and a write call is refused and recorded. Who does what is the team's design,
+not arena's. `GET /api/team/default` gives the team the benchmark suggests (the retail example suggests a
+read-only triage, then a resolver), every agent Claude Code with model `sonnet` unless the query names another
+kind, model or provider. A benchmark that suggests none gets one generic agent.
+
+Every agent also gets three tools for talking to the others, all optional and recorded when used:
+
+- `handoff {note, to?}`: a note for the agents that start after it (or for one agent). It ends nothing, and an
+  agent may leave several.
+- `message {to, text}`: a message to one agent, or to every agent with `to: "*"`.
+- `inbox {}`: the notes and messages sent to the agent so far, oldest first.
+
+**Who drives the agents** is the run's runner, chosen when it starts and recorded in its `RunStart`:
+
+- `chain` (the default): arenad runs the agents one after another, in the team's order. Each agent's input is the
+  task's ticket, the benchmark's instructions, and the handoff notes left for it so far.
+- `concurrent`: arenad starts every agent at once with the ticket and instructions. The branch is scored when all
+  of them are done.
+- `external`: the design's own code drives the agents (see [External designs](#external-designs)).
+
+In every runner the world freezes (no tick, no clock) once the agents are done, and is then scored.
+
+**Runs recorded before runners** (no `runner` in their `RunStart`) keep the rules they ran under, and so do their
+forks: a chain where every agent but the last must call `handoff` with a note, or the branch fails; the last
+agent has no `handoff`; an agent's input has only the previous agent's note; and the world freezes before the
+last agent's end is recorded.
 
 Runs recorded before `read_only` existed ran under the old rule, where only the last agent could write. A stored
 team whose agents carry no `read_only` is read that way (every agent but the last read-only), so those runs, and
@@ -70,9 +97,9 @@ agent.
 An agent's `kind` picks its mode:
 
 - **CLI mode** (`claude_code` or `codex`): arenad starts the CLI headless and gives it only the world's tools
-  (the benchmark's tools plus any tools the parts declare) and `handoff`, through an MCP endpoint of arenad. It
-  records every tool call (arguments, result, keys read and written), the handoff note, and the tokens and
-  cost the CLI reports. It does not see the raw model calls.
+  (the benchmark's tools plus any tools the parts declare) and the talk tools, through an MCP endpoint of arenad.
+  It records every tool call (arguments, result, keys read and written), every note and message, and the tokens
+  and cost the CLI reports. It does not see the raw model calls.
 - **API mode** (`open`): arenad runs the agent loop itself and sends each model call through its gateway to
   the agent's **provider**. It records everything CLI mode does, plus every model call. Each agent picks one:
   - `openrouter` (the default, also for agents and runs made before providers): needs `OPENROUTER_API_KEY`;
@@ -114,7 +141,10 @@ restore mode.
   active at step N is a CLI agent (a CLI session can't be cut at a tool call) or the change switches its mode;
   to the start of the earliest changed agent when the change is for an agent that finished before step N; and,
   for an API-mode agent, to the model call that chose the tool call at step N. The response and the UI say
-  where the fork started (`start_seq`), where you asked for (`moved_from`), and why (`reason`).
+  where the fork started (`start_seq`), where you asked for (`moved_from`), and why (`reason`). These rules are
+  the chain runner's. A fork of a `concurrent` run restarts every agent from the run's first agent start (agents
+  that ran at once can't be cut at one step each). A fork of an `external` run starts where asked: how its agents
+  resume is its design's choice ([External designs](#external-designs)).
 - A change is never silently ignored.
 - If there is no restore point for the step, or a part can't be restored in the mode asked for, the fork is
   refused with an error that names the part.
@@ -125,12 +155,56 @@ restore mode.
   always sends a model with a provider. Naming the agent's own provider is no change.
 - Changing `read_only` is treated like a prompt change; setting it to what the agent already has is no change.
 
+## External designs
+
+A design that lives in its own code (or in Sculptured) drives a run itself, and arena records it:
+
+1. `POST /api/runs` with `runner: "external"` starts the world and records `RunStart`; the team may be empty.
+2. `POST /api/branches/{id}/agents` registers an agent, at any time during the run. The answer gives its MCP
+   endpoint (the world's tools and the talk tools, streamable HTTP) and its gateway (an OpenAI-compatible base
+   URL whose calls go to the agent's provider). Its kind is `external` unless it says otherwise.
+3. The design drives its agents however it likes, through those endpoints. Every tool call, model call, note and
+   message is recorded as in arenad's own runners. `POST .../agents/{agent}/end` records that an agent is done,
+   with the tokens and cost the design reports for it.
+4. `POST /api/branches/{id}/finish` freezes, scores and stops the world.
+
+A fork of an external run starts at the step asked for, restores the world as it was just before it, and leaves
+the new branch live. Its answer gives each agent's recorded history before the fork point and its endpoints on the
+new branch, so the design resumes its agents its own way. A branch whose design never calls `finish` stays running
+until arenad restarts (it is then `interrupted`).
+
+## Overhead and estimates
+
+On every step arena times its own work apart from the agents' and the world's. Each recorded event carries
+`overhead_ms`, the time arena spent since the branch's previous event, per kind: `restore` (starting the world from
+a save or by replay), `save`, `record` (writing the record), `gateway` and `mcp` (the endpoints' own handling,
+besides the provider's answer and the tool's run), `gate` (gate checks), `link` (link calls a step set off),
+`wait` (waiting for the branch's step lock, which keeps steps and saves in one order) and `score` (the final saves
+and scoring). The time spent writing an event is counted on the next one; the last write of a branch is not
+counted.
+
+A branch's metrics (`GET /api/branches/{id}`, compare, and the run page) count only its own steps (`seq >=
+start_seq`), as compare does:
+
+- **measured**: wall time from the branch's creation to its end;
+- **estimated in production**: measured minus the overhead, with the breakdown per kind. When agents run at once
+  their overheads may overlap in time, and the sum can then exceed what they added to the wall time, so the
+  estimate is a lower bound. Runs recorded before overhead was timed have no estimate;
+- **tokens** per agent and model (input and output where they are known);
+- **cost** per agent: the cost the provider reported (`reported`; Claude Code's own figure is an API-equivalent
+  estimate); `no API charge` for a local model; otherwise tokens times the list price in `docs/prices.toml`,
+  labelled `list-price estimate` with the price's source and date (base input and output prices only: caching,
+  batch and long-context prices are not modelled); otherwise `unknown`. Arena never makes up a price. The branch's
+  cost is the sum when every agent's is known (labelled `mixed` when their labels differ), else `unknown`.
+
 ## Cost labels
 
 - `openrouter`: the cost OpenRouter reports (API mode on OpenRouter).
 - `local (no API charge)`: API mode on a local server; the cost is 0 and the UI shows `no API charge`.
 - No label and no dollar figure on API mode with OpenAI or Anthropic: they report no price and arenad keeps no
   price table, so only tokens are recorded; the UI shows the cost as `unknown`.
+- These labels are the providers' own. The metrics above also estimate a cost from `docs/prices.toml` where no
+  provider reported one.
 - `api_equivalent_estimate`: Claude Code's own `total_cost_usd`. It is what the same tokens would cost at API
   prices, not what a subscription pays.
 - No label and no dollar figure: Codex reports tokens only.

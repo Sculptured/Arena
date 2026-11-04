@@ -23,11 +23,13 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-**Arena is a rewindable arena for testing multi-agent systems.** A team of AI agents works on a task in a world
-made of real systems: a database, a folder of files, a Docker Compose project, a simulator. arenad, the arena
-service, records every step and saves the world as it was at that step. Go back to any step, change an agent's
-prompt, model or harness, fork with an exact or approximate restore of the world, rerun from there, and compare
-the runs.
+**Arena is a rewindable staging environment for multi-agent systems.** A team of AI agents works on a task in a
+world made of real systems: a database, a folder of files, a Docker Compose project, a simulator. arenad, the
+arena service, records every step and saves the world as it was at that step. It tracks everything and restricts
+nothing: the agents run in whatever shape the design has (one after another, all at once, or driven by the
+design's own code), talk only if they choose to, and arena times its own work so a run's numbers estimate
+production. Go back to any step, change an agent's prompt, model or harness, fork with an exact or approximate
+restore of the world, rerun from there, and compare the runs.
 
 ## Why Arena
 
@@ -208,7 +210,7 @@ factory example. Without those, their tests are skipped.
 
 | Document | What it covers |
 |---|---|
-| [docs/concepts.md](docs/concepts.md) | Glossary, restore modes, teams and agents, CLI isolation, forking, cost labels |
+| [docs/concepts.md](docs/concepts.md) | Glossary, restore modes, teams and runners, external designs, overhead and estimates, CLI isolation, forking, cost labels |
 | [docs/protocol.md](docs/protocol.md) | `arena-part/1`: transport, manifest, every call, errors, clock and determinism contracts |
 | [integrations/README.md](integrations/README.md) | The integrations, a step-by-step counter integration, `arena-part-check` |
 | [docs/packages.md](docs/packages.md) | Writing and installing integrations and benchmarks |
@@ -226,8 +228,12 @@ other integration is checked on its own, and API mode has not been measured.
 - Only `postgres` has been used in an arenad run with agents; every other integration is checked on its own.
 - Two benchmarks are included: the retail example and `benchmarks/factory`, which needs a factory example that is
   not public yet. arenad runs one benchmark at a time.
-- Teams are a fixed sequence of agents with handoff notes: each runs once, in order, and none runs at the same time
-  as another. Any agent may write unless its team marks it `read_only`.
+- arenad's own runners run a team one after another or all at once; any other shape needs the design's own code
+  to drive the run through the external API (`docs/concepts.md`, "External designs"), which is tested with a
+  scripted client and fake model server only. Any agent may write unless its team marks it `read_only`.
+- The production estimate (measured time minus arena's overhead) has been checked by tests only, not against a
+  production deployment. Costs not reported by a provider are estimated only for the models in
+  `docs/prices.toml`; every other cost shows as unknown.
 - API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
   servers) are tested against fake servers only, with no real model call.
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).

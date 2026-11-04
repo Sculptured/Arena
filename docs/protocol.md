@@ -95,11 +95,11 @@ A benchmark program speaks the same transport.
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
   `Instructions` when it is absent.
-- `team` is the team the benchmark suggests, `{id, name, agents: [{id, name, prompt, read_only?}]}`, agents
-  in the order they run (ids match `^[a-z0-9_-]+$`; every agent but the last hands off). Every agent may use
-  every tool unless `read_only` is true, which keeps it to read tools. arenad
-  offers it as the default team, each agent run by Claude Code with model `sonnet`; when it is absent
-  arenad offers one agent with a generic prompt.
+- `team` is the team the benchmark suggests, `{id, name, agents: [{id, name, prompt, read_only?}]}` (ids
+  match `^[a-z0-9_-]+$`; the order is the order arenad's chain runner runs them in). Every agent may use
+  every tool unless `read_only` is true, which keeps it to read tools; no agent has to hand off. arenad
+  offers it as the default team, each agent run by Claude Code with model `sonnet` unless the request names
+  another kind, model or provider; when it is absent arenad offers one agent with a generic prompt.
 - The CLI agents know the world's MCP server by the benchmark's `name` (any character outside
   `[A-Za-z0-9_-]` replaced by `_`), so their tools are `mcp__<name>__<tool>` in Claude Code.
 
