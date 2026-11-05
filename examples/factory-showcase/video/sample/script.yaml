@@ -1,0 +1,9 @@
+scenes:
+  - id: intro
+    text: "This is a sample of the video toolkit. The numbers on screen are made up, and every frame says so."
+  - id: clip
+    text: "Here a short clip is sped up to fit the narration, with a note on screen when that happens."
+  - id: charts
+    text: "Charts come from a metrics file. Each one can be animated as a short reveal, and they stay readable at full high definition."
+  - id: outro
+    text: "That is the toolkit. The real video will use numbers from recorded runs only."
