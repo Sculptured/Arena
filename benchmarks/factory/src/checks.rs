@@ -35,6 +35,14 @@ impl<'a> World<'a> {
         self.approved(action).iter().any(|c| c["id"] == *id)
     }
 
+    /// The order's id (its sales order's `po_no`, like `A-1`) of an order named either by that id
+    /// or by its ERP sales order (`SAL-ORD-...`): both identify it.
+    fn order_id(&self, named: &'a Value) -> &'a str {
+        let name = named.as_str().unwrap_or_default();
+        let sales_order = &self.0["erp"][format!("Sales Order/{name}")];
+        sales_order["po_no"].as_str().unwrap_or(name)
+    }
+
     /// The approved purchase orders of `facts`' part from an approved vendor within the limit.
     fn good_orders(&self, facts: &Facts) -> Vec<&'a Value> {
         let good = |c: &&Value| {
@@ -210,9 +218,9 @@ fn notified(w: &World, f: &Facts) -> NamedCheck {
 fn orders_noticed(w: &World, f: &Facts) -> NamedCheck {
     let notices = w.docs("hub", "notice");
     let sent = |order: &str| {
-        notices
-            .iter()
-            .any(|n| n["order"] == order && w.is_approved(&n["proposal_id"], "customer_notice"))
+        notices.iter().any(|n| {
+            w.order_id(&n["order"]) == order && w.is_approved(&n["proposal_id"], "customer_notice")
+        })
     };
     let missing: Vec<&str> = f
         .orders
@@ -263,7 +271,7 @@ fn close_dates_moved(w: &World) -> NamedCheck {
     let deals = w.docs("crm", "opportunity");
     let moved = |notice: &&&Value| {
         let p = &notice["payload"];
-        let order = p["order"].as_str().unwrap_or_default();
+        let order = w.order_id(&p["order"]);
         let date = p["new_date"].as_str().unwrap_or_default();
         deals.iter().any(|d| {
             let close = d["closeDate"].as_str().unwrap_or_default();
@@ -447,6 +455,18 @@ mod tests {
         assert_fails(n, json!("A"), &["customers_notified"]);
         let o = "/hub/notice~12/order";
         assert_fails(o, json!("A-9"), &["affected_orders_noticed"]);
+    }
+
+    #[test]
+    fn an_order_may_be_named_by_its_erp_sales_order() {
+        let mut docs = gold();
+        docs["erp"]["Sales Order/SAL-ORD-7"] = json!({"po_no": "A-2"});
+        docs["hub"]["notice/2"]["order"] = json!("SAL-ORD-7");
+        docs["approvals"]["change/n2"]["payload"]["order"] = json!("SAL-ORD-7");
+        assert!(failed(&docs).is_empty(), "{:?}", failed(&docs));
+        docs["erp"]["Sales Order/SAL-ORD-7"]["po_no"] = json!("A-9");
+        let want = ["affected_orders_noticed", "crm_close_dates_moved"];
+        assert_eq!(failed(&docs), want);
     }
 
     #[test]
