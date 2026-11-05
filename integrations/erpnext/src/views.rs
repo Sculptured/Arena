@@ -91,6 +91,9 @@ impl Erpnext {
         if p.a == p.b {
             return Ok(Differing { differing: vec![] });
         }
+        if let Some(differing) = self.kept_diff(&p) {
+            return Ok(Differing { differing });
+        }
         let doctypes: Vec<String> = doctypes.into_iter().collect();
         let (keys_tx, keys_rx) = watch::channel(None);
         let ((a_tx, a_rx), (b_tx, b_rx)) = (oneshot::channel(), oneshot::channel());
@@ -107,9 +110,16 @@ impl Erpnext {
         );
         let (da, db) = (da?, db?);
         let d = d.ok_or_else(|| PartError::internal("diff: a side was not read"))?;
-        self.keep(&p.a, da);
-        self.keep(&p.b, db);
+        self.keep(&p, [da, db], &d.differing);
         Ok(d)
+    }
+
+    /// The diff of two saves made before (saves never change); none for an instance.
+    fn kept_diff(&self, p: &DiffParams) -> Option<Vec<String>> {
+        match (&p.a, &p.b) {
+            (Target::Save { save: a }, Target::Save { save: b }) => self.docs.diff(a, b),
+            _ => None,
+        }
     }
 
     /// One side of a diff: its documents go to `dumped`; once the differing keys are known, it
@@ -131,10 +141,16 @@ impl Erpnext {
         .await
     }
 
-    /// Keeps the documents read from a save (an instance changes, so its are not kept).
-    fn keep(&self, t: &Target, docs: Map<String, Value>) {
-        if let Target::Save { save } = t {
-            self.docs.put(save, docs);
+    /// Keeps what a diff read from saves: each side's documents and, for two saves, the diff
+    /// (an instance changes, so nothing of one is kept).
+    fn keep(&self, p: &DiffParams, docs: [Map<String, Value>; 2], differing: &[String]) {
+        for (t, d) in [&p.a, &p.b].into_iter().zip(docs) {
+            if let Target::Save { save } = t {
+                self.docs.put(save, d);
+            }
+        }
+        if let (Target::Save { save: a }, Target::Save { save: b }) = (&p.a, &p.b) {
+            self.docs.put_diff(a, b, differing);
         }
     }
 }

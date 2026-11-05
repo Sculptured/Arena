@@ -1,6 +1,6 @@
-//! Documents read from saves, kept so the `inspect` that follows a `diff` needn't build a scratch
-//! site from the same save again (that takes tens of seconds). A save never changes, so what was
-//! read from it stays true. Bounded, and dropped with its save.
+//! Documents read from saves, and the diffs between saves, kept so a `diff` or `inspect` asked
+//! again needn't build scratch sites from the same saves (that takes tens of seconds). A save never
+//! changes, so what was read from it stays true. Bounded, and dropped with its save.
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -12,6 +12,7 @@ const MAX_SAVES: usize = 16;
 #[derive(Default)]
 pub(crate) struct DocCache {
     by_save: Mutex<HashMap<String, Map<String, Value>>>,
+    diffs: Mutex<HashMap<(String, String), Vec<String>>>,
 }
 
 impl DocCache {
@@ -34,6 +35,22 @@ impl DocCache {
 
     pub(crate) fn drop_save(&self, save: &str) {
         self.by_save.lock().expect("doc cache lock").remove(save);
+        let mut d = self.diffs.lock().expect("doc cache lock");
+        d.retain(|(a, b), _| a != save && b != save);
+    }
+
+    pub(crate) fn put_diff(&self, a: &str, b: &str, differing: &[String]) {
+        let mut d = self.diffs.lock().expect("doc cache lock");
+        if d.len() >= MAX_SAVES * MAX_SAVES {
+            d.clear();
+        }
+        d.insert((a.to_string(), b.to_string()), differing.to_vec());
+    }
+
+    /// The keys that differ between saves `a` and `b`, when that diff was made before.
+    pub(crate) fn diff(&self, a: &str, b: &str) -> Option<Vec<String>> {
+        let d = self.diffs.lock().expect("doc cache lock");
+        d.get(&(a.to_string(), b.to_string())).cloned()
     }
 }
 
@@ -62,6 +79,16 @@ mod tests {
         assert_eq!(c.get("s2", &keys(&["Item/A"])), None);
         c.drop_save("s1");
         assert_eq!(c.get("s1", &keys(&["Item/A"])), None);
+    }
+
+    #[test]
+    fn a_diff_is_kept_per_ordered_pair_and_forgotten_with_either_save() {
+        let c = DocCache::default();
+        c.put_diff("a", "b", &["Item/A".to_string()]);
+        assert_eq!(c.diff("a", "b"), Some(vec!["Item/A".to_string()]));
+        assert_eq!(c.diff("b", "a"), None);
+        c.drop_save("b");
+        assert_eq!(c.diff("a", "b"), None);
     }
 
     #[test]
