@@ -187,7 +187,8 @@ pre.diff { padding: 0; }
 .prov { white-space: nowrap; color: var(--text); }
 .prov-glyph { font-weight: var(--weight-semibold); }
 .prov-ready .prov-glyph, .prov-ready .prov-word { color: var(--green); }
-.prov-unavailable .prov-glyph, .prov-unavailable .prov-word { color: var(--red); }
+/* Not set up (no key, no server) is a choice, not a failure: quiet, with the reason still shown. */
+.prov-unavailable { color: var(--muted); }
 .prov-not-checked .prov-glyph, .prov-not-checked .prov-word { color: var(--amber); }
 .prov-why { color: var(--muted); white-space: normal; }
 .agent-fields > .field.mode-field { width: 200px; flex: none; }
