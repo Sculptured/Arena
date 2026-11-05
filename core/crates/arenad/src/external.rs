@@ -136,6 +136,77 @@ impl AgentDone {
     }
 }
 
+/// One model call a CLI agent's client saw, as its stream reports it (Claude Code's per-message
+/// `usage`), or a compaction of its context. arenad never sees a CLI's model calls itself, so the
+/// design reports them and arenad records each as a `ModelCall` without request or response.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UsageReport {
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: i64,
+    #[serde(default)]
+    pub cache_read_input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// The model's context window, when the client says.
+    #[serde(default)]
+    pub context_window: Option<i64>,
+    /// Set when the client compacted the agent's context instead: `{trigger, pre_tokens}`.
+    #[serde(default)]
+    pub compaction: Option<Value>,
+}
+
+/// Where a reported model call comes from, in its payload's `reported_by`.
+pub const REPORTED_BY_CLIENT: &str = "client";
+
+impl UsageReport {
+    /// The call's usage: its whole input (fresh, cache-written and cache-read tokens) is its
+    /// `prompt_tokens`, the context it was sent with. A compaction has none.
+    fn usage(&self) -> Value {
+        if self.compaction.is_some() {
+            return json!({});
+        }
+        let prompt =
+            self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens;
+        json!({"prompt_tokens": prompt, "completion_tokens": self.output_tokens,
+               "total_tokens": prompt + self.output_tokens,
+               "input_tokens": self.input_tokens,
+               "cache_creation_input_tokens": self.cache_creation_input_tokens,
+               "cache_read_input_tokens": self.cache_read_input_tokens})
+    }
+
+    /// The `ModelCall` payload, with no request or response.
+    pub fn payload(&self) -> Value {
+        let usage = self.usage();
+        let call = ModelCallPayload {
+            request: Value::Null,
+            response: Value::Null,
+            usage,
+            cost_usd: None,
+            cost_source: None,
+            provider: None,
+            provider_response: None,
+        };
+        let mut v = serde_json::to_value(call).expect("a payload serializes");
+        v["reported_by"] = json!(REPORTED_BY_CLIENT);
+        let extra = [
+            ("message_id", json!(self.message_id)),
+            ("model", json!(self.model)),
+            ("context_window", json!(self.context_window)),
+            ("compaction", json!(self.compaction)),
+        ];
+        for (k, x) in extra.into_iter().filter(|(_, x)| !x.is_null()) {
+            v[k] = x;
+        }
+        v
+    }
+}
+
 /// One agent's recorded history before `before_seq` (its steps, the notes and messages it sent
 /// and got), with its endpoints on the branch that resumes it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -225,6 +296,30 @@ mod tests {
         assert_eq!((seqs(0), seqs(1)), (vec![2, 3], vec![3, 4]));
         assert_eq!(r[1].endpoints.mcp_url, "http://h:1/mcp/br/b");
         assert_eq!(r[1].endpoints.gateway_url, "http://h:1/gateway/br/b/v1");
+    }
+
+    #[test]
+    fn a_reported_call_counts_the_cache_in_its_context() {
+        let r: UsageReport = serde_json::from_value(json!({"message_id": "m1", "model": "x",
+            "input_tokens": 2, "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 900, "output_tokens": 7, "context_window": 200000}))
+        .unwrap();
+        let p = r.payload();
+        assert_eq!(p["usage"]["prompt_tokens"], 1002);
+        assert_eq!(p["usage"]["total_tokens"], 1009);
+        assert_eq!(
+            (&p["reported_by"], &p["context_window"]),
+            (&json!("client"), &json!(200000))
+        );
+        assert!(p["request"].is_null() && p.get("compaction").is_none());
+        let c: UsageReport =
+            serde_json::from_value(json!({"compaction": {"trigger": "auto", "pre_tokens": 9}}))
+                .unwrap();
+        let p = c.payload();
+        assert_eq!(
+            (&p["usage"], &p["compaction"]["pre_tokens"]),
+            (&json!({}), &json!(9))
+        );
     }
 
     fn join() -> Join {

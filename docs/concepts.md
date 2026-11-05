@@ -164,8 +164,12 @@ A design that lives in its own code (or in Sculptured) drives a run itself, and 
    endpoint (the world's tools and the talk tools, streamable HTTP) and its gateway (an OpenAI-compatible base
    URL whose calls go to the agent's provider). Its kind is `external` unless it says otherwise.
 3. The design drives its agents however it likes, through those endpoints. Every tool call, model call, note and
-   message is recorded as in arenad's own runners. `POST .../agents/{agent}/end` records that an agent is done,
-   with the tokens and cost the design reports for it.
+   message is recorded as in arenad's own runners. A CLI agent's model calls don't pass through the gateway, so
+   the design reports each one its client saw (`POST .../agents/{agent}/usage`: the call's tokens, cache tokens
+   included, and the model's context window; or a compaction of its context), and arena records it as a
+   `model_call` without request or response. `POST .../agents/{agent}/end` records that an agent is done, with
+   the tokens and cost the design reports for it. `GET /api/tasks` gives the ticket and the instructions to give
+   the agents.
 4. `POST /api/branches/{id}/finish` freezes, scores and stops the world.
 
 A fork of an external run starts at the step asked for, restores the world as it was just before it, and leaves
@@ -190,7 +194,9 @@ start_seq`), as compare does:
 - **estimated in production**: measured minus the overhead, with the breakdown per kind. When agents run at once
   their overheads may overlap in time, and the sum can then exceed what they added to the wall time, so the
   estimate is a lower bound. Runs recorded before overhead was timed have no estimate;
-- **tokens** per agent and model (input and output where they are known);
+- **tokens** per agent and model (input and output where they are known), and per agent its model calls, the most
+  context one was sent with (`peak_prompt_tokens`), the compactions its client reported, and the overhead recorded
+  on its own events (`overhead_s`; when agents run at once, an event's overhead may have held up others too);
 - **cost** per agent: the cost the provider reported (`reported`; Claude Code's own figure is an API-equivalent
   estimate); `no API charge` for a local model; otherwise tokens times the list price in `docs/prices.toml`,
   labelled `list-price estimate` with the price's source and date (base input and output prices only: caching,

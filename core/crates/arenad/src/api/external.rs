@@ -17,7 +17,7 @@ use super::{
 use crate::{
     app::AppState,
     exec::{tool_schemas, BranchCtx},
-    external::{self, endpoints, AgentDone, Join},
+    external::{self, endpoints, AgentDone, Join, UsageReport},
     model::*,
     runner,
 };
@@ -111,6 +111,29 @@ pub(super) async fn end_agent(
     }
     let end = serde_json::to_value(done.payload()).map_err(anyhow::Error::from)?;
     let ev = ctx.append(&state.store, Some(&agent), EventKind::AgentEnd, end);
+    Ok(Json(json!({"seq": ev.await?.seq})))
+}
+
+/// `POST /api/branches/{id}/agents/{agent}/usage`: records one model call (or compaction) the
+/// agent's client reported, as a `ModelCall` event.
+pub(super) async fn report_usage(
+    State(state): State<Arc<AppState>>,
+    Path((id, agent)): Path<(String, String)>,
+    body: Bytes,
+) -> ApiResult<Value> {
+    let report: UsageReport = parse_body(&body)?;
+    let ctx = external_branch(&state, &id)?;
+    if !ctx.has_agent(&agent) {
+        return Err(ApiError::not_found(format!(
+            "no agent \"{agent}\" on this branch"
+        )));
+    }
+    let ev = ctx.append(
+        &state.store,
+        Some(&agent),
+        EventKind::ModelCall,
+        report.payload(),
+    );
     Ok(Json(json!({"seq": ev.await?.seq})))
 }
 

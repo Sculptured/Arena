@@ -58,6 +58,14 @@ pub struct AgentUse {
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
     pub cost: Cost,
+    /// The model calls recorded for it (through the gateway, or reported by its client).
+    pub model_calls: i64,
+    /// The largest `prompt_tokens` of those calls: the most context it was sent with.
+    pub peak_prompt_tokens: Option<i64>,
+    /// How many times its client compacted its context (reported).
+    pub compactions: i64,
+    /// Arena's overhead recorded on this agent's own events, in seconds.
+    pub overhead_s: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -86,6 +94,7 @@ struct Tally {
     reported: Option<f64>,
     source: Option<String>,
     calls: CallTally,
+    overhead_ms: f64,
 }
 
 /// What the agent's model calls (through the gateway) add up to.
@@ -98,6 +107,9 @@ struct CallTally {
     all_costed: bool,
     any: bool,
     source: Option<String>,
+    count: i64,
+    peak: Option<i64>,
+    compactions: i64,
 }
 
 fn opt_add(a: Option<i64>, b: Option<i64>) -> Option<i64> {
@@ -105,8 +117,17 @@ fn opt_add(a: Option<i64>, b: Option<i64>) -> Option<i64> {
 }
 
 impl CallTally {
+    /// A compaction a client reported: no tokens of its own.
+    fn compacted(&mut self) {
+        self.compactions += 1;
+    }
+
     fn add(&mut self, p: &ModelCallPayload) {
         let n = |k: &str| p.usage.get(k).and_then(Value::as_i64).unwrap_or(0);
+        self.count += 1;
+        if let Some(prompt) = p.usage.get("prompt_tokens").and_then(Value::as_i64) {
+            self.peak = Some(self.peak.map_or(prompt, |m| m.max(prompt)));
+        }
         if !self.any {
             self.all_costed = true;
         }
@@ -185,6 +206,10 @@ fn agent_use(e: &Event) -> AgentUse {
         prompt_tokens: None,
         completion_tokens: None,
         cost: Cost::unknown(),
+        model_calls: 0,
+        peak_prompt_tokens: None,
+        compactions: 0,
+        overhead_s: 0.0,
     }
 }
 
@@ -208,8 +233,10 @@ fn agent_uses(events: &[&Event], table: &Prices) -> Vec<AgentUse> {
         let Some((_, t)) = run else {
             continue;
         };
+        t.overhead_ms += event_overhead(e);
         match e.kind {
             EventKind::AgentEnd => parsed(e).iter().for_each(|p| t.end(p)),
+            EventKind::ModelCall if e.payload.get("compaction").is_some() => t.calls.compacted(),
             EventKind::ModelCall => parsed(e).iter().for_each(|p| t.calls.add(p)),
             _ => {}
         }
@@ -221,7 +248,16 @@ fn finish(mut u: AgentUse, mut t: Tally, table: &Prices) -> AgentUse {
     t.settle();
     u.cost = cost_of(&t, &u, table);
     (u.tokens, u.prompt_tokens, u.completion_tokens) = (t.tokens, t.prompt, t.completion);
+    (u.model_calls, u.peak_prompt_tokens) = (t.calls.count, t.calls.peak);
+    (u.compactions, u.overhead_s) = (t.calls.compactions, t.overhead_ms / 1000.0);
     u
+}
+
+/// The overhead recorded on one event, in milliseconds.
+fn event_overhead(e: &Event) -> f64 {
+    let o = e.payload.get("overhead_ms").cloned();
+    let o = o.and_then(|o| serde_json::from_value::<Overhead>(o).ok());
+    o.map_or(0.0, |o| o.total())
 }
 
 /// The branch's cost: the sum when every agent's is known, labelled with their one label (or
@@ -414,6 +450,39 @@ as_of = "2026-11-04""#,
         assert_eq!(m.agents[1].cost.label, NO_CHARGE);
         assert_eq!((m.cost.usd, m.cost.label.as_str()), (None, UNKNOWN));
         assert_eq!(m.tokens, 30);
+    }
+
+    /// A model call `agent`'s client reported: `prompt` tokens of context, or a compaction.
+    fn reported(seq: i64, prompt: Option<i64>) -> Event {
+        let mut p = json!({"request": null, "response": null, "cost_usd": null,
+                           "cost_source": null, "usage": {}, "overhead_ms": {"mcp": 250.0}});
+        match prompt {
+            Some(n) => p["usage"] = json!({"prompt_tokens": n, "completion_tokens": 1}),
+            None => p["compaction"] = json!({"pre_tokens": 190000}),
+        }
+        ev(seq, Some("c"), EventKind::ModelCall, p)
+    }
+
+    #[test]
+    fn reported_calls_give_each_agent_its_peak_context_compactions_and_overhead() {
+        let call = |seq, n| reported(seq, Some(n));
+        let compaction = reported(4, None);
+        let evs = vec![
+            start(1, "c", "external", "m", None),
+            call(2, 1200),
+            call(3, 150_000),
+            compaction,
+            call(5, 40_000),
+            end(6, "c", Some((191_200, 3)), None),
+        ];
+        let m = metrics(&branch(None, 9), &evs, &table(), Utc::now());
+        let a = &m.agents[0];
+        assert_eq!(
+            (a.model_calls, a.peak_prompt_tokens, a.compactions),
+            (3, Some(150_000), 1)
+        );
+        assert!((a.overhead_s - 1.0).abs() < 1e-9, "{}", a.overhead_s);
+        assert_eq!(a.tokens, 191_203);
     }
 
     #[test]

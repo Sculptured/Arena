@@ -168,6 +168,53 @@ fn an_external_system_drives_a_run_and_arena_records_it() {
     })
 }
 
+fn reported_call(cached: i64) -> Value {
+    json!({"message_id": format!("msg{cached}"), "model": "m", "input_tokens": 3,
+           "cache_creation_input_tokens": 10, "cache_read_input_tokens": cached,
+           "output_tokens": 4, "context_window": 200000})
+}
+
+/// The branch's metrics, from `GET /api/branches/{id}`.
+async fn metrics_of(fx: &Fx, branch: &str) -> Value {
+    let url = format!("{}/api/branches/{branch}", fx.base);
+    let (status, b) = send(fx.http.get(url)).await;
+    assert_eq!(status, 200, "{b}");
+    b["metrics"].clone()
+}
+
+/// A CLI agent's client reports each model call (and a compaction); arena records them and its
+/// metrics give the agent's calls and peak context.
+#[test]
+fn a_clients_reported_model_calls_are_recorded_with_their_context() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"role": "assistant", "content": "ok"})]).await;
+        let fx = setup("usage", &up).await;
+        let branch = start(&fx).await;
+        register(&fx, &branch, json!({"id": "cli", "model": "m"})).await;
+        let compaction = json!({"compaction": {"pre_tokens": 5017}});
+        for body in [reported_call(100), reported_call(5000), compaction] {
+            let (status, v) = fx.on(&branch, "agents/cli/usage", body).await;
+            assert_eq!(status, 200, "{v}");
+        }
+        let unknown = fx.on(&branch, "agents/nobody/usage", reported_call(1));
+        assert_eq!(unknown.await.0, 404);
+        let evs = fx.events(&branch).await;
+        let calls: Vec<&Event> = evs
+            .iter()
+            .filter(|e| e.kind == EventKind::ModelCall)
+            .collect();
+        assert_eq!(calls[1].payload["usage"]["prompt_tokens"], 5013);
+        assert_eq!(calls[1].payload["reported_by"], "client");
+        let a = metrics_of(&fx, &branch).await["agents"][0].clone();
+        assert_eq!(
+            (&a["model_calls"], &a["peak_prompt_tokens"]),
+            (&json!(2), &json!(5013))
+        );
+        assert_eq!((&a["compactions"], &a["tokens"]), (&json!(1), &json!(5134)));
+        assert_eq!(fx.finish(&branch).await.0, 200);
+    })
+}
+
 #[test]
 fn a_fork_of_an_external_run_hands_back_each_agents_history() {
     run(async {

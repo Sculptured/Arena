@@ -60,6 +60,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/branches/{id}/agents/{agent}/end",
             post(external::end_agent),
         )
+        .route(
+            "/api/branches/{id}/agents/{agent}/usage",
+            post(external::report_usage),
+        )
         .route("/api/branches/{id}/finish", post(external::finish))
         .route("/api/compare", get(compare_branches))
         .route("/api/world", get(world::world))
@@ -321,16 +325,15 @@ async fn delete_run(
     .await
 }
 
-/// The benchmark's tasks: `[{id, reason}]`.
+/// The benchmark's tasks: `[{id, reason, ticket, instructions}]`; an external design gives its
+/// agents the ticket and the instructions as arenad's own runners do.
 async fn tasks(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
     let bench = state.bench().await?;
-    Ok(Json(
-        bench
-            .tasks
-            .iter()
-            .map(|t| json!({"id": t.id, "reason": t.reason}))
-            .collect(),
-    ))
+    let task = |t: &parts::proto::TaskInfo| {
+        json!({"id": t.id, "reason": t.reason, "ticket": t.ticket,
+               "instructions": bench.instructions})
+    };
+    Ok(Json(bench.tasks.iter().map(task).collect()))
 }
 
 /// The team the benchmark suggests, or arenad's generic one; `kind`, `model` and `provider`
