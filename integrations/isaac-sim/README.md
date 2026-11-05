@@ -66,6 +66,8 @@ changes the fingerprint.
 | `record` | none. An MP4 path, relative to `$ARENA_SAVES/isaac-sim/`. Each instance writes `<stem>-<instance>.mp4` (arenad runs a base, then a branch) |
 | `camera` | `auto`: the factory's camera director, which cuts to events. Or `free`, or a rig in the factory's `layout.CAMERAS` |
 | `record_fps` | 30: frames per second of arena time. The MP4 plays at this rate, so it runs in arena time |
+| `record_height` | 720: the MP4's height; the width follows at 16:9 |
+| `scene` | `ridgeline`: the factory's own scene. `showcase`: a dressed stamping plant (see "The showcase scene"). Visuals only |
 
 - Only the `isaac` backend renders; `record` on `standin` is -32602. An unknown camera is -32602 before Isaac Sim
   starts.
@@ -79,7 +81,55 @@ changes the fingerprint.
 - If physics steps stop reaching the plant (its physics callback is not running), `advance` and `call_tool` fail
   with -32603 instead of leaving the plant standing still.
 
-## Fingerprint
+## The showcase scene: `scene: showcase`
+
+With a recording and `scene: showcase`, the stage the factory built is dressed as a stamping plant before physics
+starts (`isaac_part/showcase_*.py`). It changes only what is seen:
+- The factory's press articulations, iw.hub, people, physics scene and floor stay exactly as built. Its press bodies are
+  made invisible, its old shells and conveyors inactive, and its labels hidden. Factory, PlantIO, the press model and
+  the signals are not touched, and `scene` is not passed to the plant. A test runs the stand-in plant with and without
+  `scene: showcase` and compares events and documents.
+- What is added is referenced at run time from NVIDIA's public asset server (the `Assets` folder of
+  `omniverse-content-production.s3-us-west-2.amazonaws.com`); nothing is copied into this repo:
+  - the ArchVis industrial hall (`ArchVis/Industrial/Buildings/Warehouse/Warehouse01.usd`, authored in cm, scaled 0.01);
+  - two FANUC R-2000iC/165F arms per line, loading and unloading the press (`Isaac/6.2/Isaac/Robots/Fanuc/r2000ic_165f`);
+  - conveyors (`ConveyorBelt_A08`), pallets, a forklift (`Isaac/6.2/Isaac/Props/Forklift`) and stock racks
+    (`ArchVis/Industrial/Racks/RackLong_A1.usd`).
+
+  Their physics is removed (bodies, joints, colliders, articulation roots), and a check at build time fails if
+  anything under `/World/Showcase` would be simulated.
+- The presses, washers, stillages, parts, stack lights, beacon and screens are generated meshes
+  (`showcase_press.py`, `showcase_mesh.py`), merged one per material, with OmniPBR materials.
+- Everything moves kinematically, from the plant's own readings, once per rendered frame (`showcase_visuals.py`):
+  - the slide follows the ram's measured position, scaled to the visual stroke;
+  - the arms follow the crank: joint angles from numeric inverse kinematics of the arm's declared joints, keyed to the
+    press cycle (`showcase_robot.py`, `showcase_layout.py`);
+  - blanks run along the infeed and formed parts along the outfeed into the stillage (`showcase_motion.LineFlow`).
+    When the press stops, the infeed queues to the gate, the outfeed runs empty and the stillage stops growing;
+  - the frame shakes with the measured vibration: nothing below 2.3 mm/s, 3 cm at the 11.2 mm/s trip level. That is
+    exaggerated on purpose; it only follows the reading;
+  - the stack light shows the press status, and a rotating red beacon lights while it is tripped or locked out;
+  - a small andon screen on the press and an operator HMI show the press's spm, vibration and count;
+  - a forklift drives a loop delivering blank pallets.
+- `camera: auto` follows a plan (`showcase_camera.py`): establishing shots while nothing is wrong, then cuts to PR-A1
+  on its zone C and zone D warnings and on the trip (the press, the beacon, the backed-up infeed, the empty outfeed). Any
+  shot name holds that shot.
+- `remote/render_showcase.py` drives the part (start, advance, stop) without arenad, for a video or stills.
+
+**Ran on Isaac Sim (RunPod, 2026-11-05).** An NVIDIA RTX A5000 (24 GB, driver 595.91.07), the image
+`nvcr.io/nvidia/isaac-sim:6.2.0`, `remote/render_showcase.py --seconds 100` (seed 7, 1280x720, 30 fps, RaytracedLighting):
+- The MP4 has 3000 frames, 100.0 s at 30 fps, so it plays in arena time. The plant's own events in that run: zone C at
+  35 s, zone D at 48 s, the trip at 64 s (the stand-in, seed 7: 33.7 s, 46.4 s, 61.9 s).
+- Wall time: 10.9 to 11.1 s per arena second with the recording. Physics alone (no frames rendered) was 5.8 to 6.0 s per
+  arena second with the showcase scene loaded, and 6.4 s with the factory's own scene on the same pod, so the dressing
+  adds no physics cost. A frame cost 22 to 24 ms for the visuals in Python and 129 to 132 ms to render and hand to
+  ffmpeg.
+- Seen on 6.2: changing a material's `emissive_intensity` while running did not show in the render (texture and
+  visibility changes did), so lit lamps are separate meshes that are shown or hidden.
+- The first start, with empty caches, took 265 s; later starts 45 to 48 s.
+- Not run with the showcase scene: arenad, a branch from a save, the dock and the truck (they come later in the
+  scenario than 100 s).
+
 
 `describe` declares:
 - `sha256` of the files at the default paths. These are `factory.py`, `press_model.py`, `signals.py`,

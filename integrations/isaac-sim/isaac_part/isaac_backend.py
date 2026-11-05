@@ -1,8 +1,7 @@
 """The `isaac` backend: sim_io.IsaacIO on a headless Isaac Sim 6.2, set up as the factory's run.py does.
 
-UNVERIFIED: this has not run on Isaac Sim (no Isaac image or 16 GB GPU where it was written). It follows run.py
-and sim_io.py; the calls run.py doesn't make are marked `unverified on 6.2`. Isaac Sim has one stage per process,
-so one live plant per process (Backend.max_live)."""
+It follows run.py and sim_io.py; the calls run.py doesn't make are marked `unverified on 6.2`. Isaac Sim has one
+stage per process, so one live plant per process (Backend.max_live)."""
 import importlib
 import importlib.util
 import math
@@ -37,8 +36,15 @@ def _stop_timeline():
     omni.timeline.get_timeline_interface().stop()  # unverified on 6.2
 
 
+def dressed():
+    """The showcase scene as built for the plant being made (`showcase_scene.Dressed`)."""
+    return _APP["dressed"]
+
+
 def _stage(app, cfg, data):
-    """A new stage with the factory's scene, as run.py builds it. The previous plant's timeline is stopped first."""
+    """A new stage with the factory's scene, as run.py builds it, then the showcase's dressing when a recording asks
+    for it: it adds visuals only and hides the old ones, so nothing is loaded for a plant nobody looks at. The
+    previous plant's timeline is stopped first."""
     import omni.usd
     from isaacsim.storage.native import get_assets_root_path
     scene = sources.import_read_only(cfg.isaac_path, "ridgeline_scene", "isaac_path")
@@ -47,7 +53,10 @@ def _stage(app, cfg, data):
     ctx.new_stage()
     app.update()
     root = get_assets_root_path()
-    scene.build_scene(ctx.get_stage(), root, use_assets=root is not None, data=data)
+    builder = scene.build_scene(ctx.get_stage(), root, use_assets=root is not None, data=data)
+    if cfg.scene == "showcase" and cfg.record is not None:
+        from . import showcase_scene
+        _APP["dressed"] = showcase_scene.dress(builder, root, data, log)
     for _ in range(20):
         app.update()
     return ctx.get_stage()
