@@ -1,15 +1,42 @@
 # factory
 
-A benchmark of a whole incident across four systems. A press's spindle bearing fails. A team has to find out what
-failed from the evidence, source the right part with approval, get it on a truck, schedule the repair and tell the
-customers. Its world has four parts:
+A benchmark of a whole incident across five systems at a fictional stamping plant. A press's spindle bearing fails. A
+team has to find out what failed from the evidence, source the right part with approval, get it on a truck, schedule the
+repair, tell the customers and record that in the CRM. Its world has five parts:
 
 | Part | Integration | What it holds |
 |---|---|---|
-| `erp` | `erpnext` | Items, suppliers, customers, the press's service manual, purchase orders, to-dos |
+| `erp` | `erpnext` | The company below: its items, MES, maintenance, stock and orders; purchase orders, to-dos |
 | `hub` | `ridgeline-hub` | The simulated suppliers, carriers and customers |
 | `plant` | `isaac-sim-standin`, or `isaac-sim` with `--backend isaac` | The plant, on the arena clock |
 | `approvals` | `sculptured` | Changes proposed and decided |
+| `crm` | `twenty-crm` | The same customers as accounts, with contacts and an opportunity per order |
+
+## The company
+
+**Ridgeline Components is fictional.** Every name, order and number is invented (`data/company.json` says so, and so does a
+Note in the ERP); the plant is simulated and the systems are open-source stand-ins. `seed` writes it once into the base world
+that every run starts from, dated from the day it runs:
+
+| Where | What |
+|---|---|
+| ERP | A company with its chart of accounts, as the site's default; warehouses for two plants |
+| ERP, MES | Press lines A, B, C and F as workstations; items, BOMs with a stamping operation; a submitted work order for each order, on its line, with its job cards |
+| ERP, maintenance | Each press as an asset; its plan (`Asset Maintenance`) and its history as logs |
+| ERP, purchasing | Suppliers; list prices, and what each supplier last charged, in `Standard Buying` |
+| ERP, stock | Opening stock. The failing press's part, `SP-SPN-800`, has none, against a shelf minimum of 1 |
+| ERP, sales | The three customers, and a submitted sales order per order, due within the week (`po_no` is the order's id, like `A-1`) |
+| CRM | The customers as accounts, their contacts, and an open opportunity per order, closing on its due date |
+
+**Build it:** `ARENA_BENCHMARK=factory cargo run -p arenad -- base` from `core/`, after building the packages, with the Postgres
+of `deploy/compose.yml` running, a current Sculptured on `PATH`, the images of the five parts present, and arenad stopped. It makes the base world unless it exists, and exits; a run makes it too if
+it is missing. The dates stay as they were when it was made: `factory`'s version names the base, so bump the version to
+build another. On a machine where the build and saves are elsewhere:
+```bash
+export CARGO_TARGET_DIR=/path/target ARENA_BIN_DIR=/path/target/debug ARENA_SAVES=/path/saves
+cargo build -p arena-factory -p arena-erpnext -p arena-twenty-crm -p arena-sculptured
+(cd core && ARENA_BENCHMARK=factory cargo run -p arenad -- base)
+```
 
 **The factory example this benchmark reads is not public yet, and neither is the Sculptured program.** The hub and
 the plant wrap the example, the ERP's starting records and the expected answers come from its data file
@@ -33,7 +60,9 @@ It is `opt_in`, so arenad's default stays the retail example; choose it with `AR
   a change's id is made up as a run goes:
   `alarm_tripped`, `diagnosis_outer_race`, `qualified_technician_dispatched`, `correct_part_ordered_and_approved`,
   `purchase_order_in_erp`, `freight_booked_on_approval`, `shipment_reached_plant`, `repair_scheduled`,
-  `customers_notified`. A branch passes when all pass. They are in the check's `checks`, and the ones that failed in
+  `customers_notified`, `crm_accounts_updated` (a note on the account of every customer with orders on the line) and
+  `crm_close_dates_moved` (for each approved notice, its order's opportunity closes on the notice's new date). A branch passes
+  when all pass. They are in the check's `checks`, and the ones that failed in
   its `differing_rows`.
 
 ## The team
@@ -47,7 +76,7 @@ tools, and a change is decided by another role than the one that proposed it:
 | Procurement | Requests and compares quotes, and freight quotes from the vendor | `purchase_order`, `freight_booking` | |
 | Finance | Awards the approved order and records it in the ERP | | `purchase_order`, `freight_booking` |
 | Production planning | Books the approved freight, schedules the repair, finds the affected orders | `customer_notice` | |
-| Incident lead | Dispatches the technician and notifies the customers on approved changes | | `maintenance_order`, `customer_notice` |
+| Incident lead | Dispatches the technician, notifies the customers on approved changes and records that in the CRM | | `maintenance_order`, `customer_notice` |
 
 Arena runs a team in order, each agent handing off to the next, so a change can only be acted on by the role that
 decided it or a later one. That is where this team differs from the example, where the proposer acts once its change
@@ -75,7 +104,9 @@ With `ARENA_RUN_ISAAC_SIM` the plant can run on a GPU machine over ssh (`integra
   records, the gates' shape, and what it answers without the example.
 - `(cd core && cargo test -p arenad --test factory -- --ignored live_ --nocapture)` runs the whole world with a
   scripted team and no model, each agent doing its own part as in the table above: the right path passes every check, and a wrong one (the wrong diagnosis and part, a
-  booking with no change behind it) fails. It starts an ERPNext stack of its own and removes it after.
+  booking with no change behind it) fails. It starts an ERPNext stack and a Twenty server of its own and removes them after.
+  It needs a current Sculptured (`ARENA_SCULPTURED_BINARY`, a release build next to the checkout, or `PATH`); one too old
+  to have the approvals API fails the base save with "no API route". With `CARGO_TARGET_DIR` set, set `ARENA_BIN_DIR` to match.
 
 **Verified:** that live test passed on Linux, in about 190 s, against `frappe/erpnext:v16.53.0`, a local release build
 of Sculptured and the stand-in plant, with the clock at 20 times real time. It covers one run of each path. That was
@@ -84,6 +115,14 @@ compiles but has not been run yet. **Not
 run:** real agents or models, a rerun or fork of this world, and `arena-part-check` on
 `isaac-sim-standin`. Each new run makes arenad check that the base save exists, which on ERPNext rebuilds a scratch
 site.
+
+**Verified with the company and the CRM (2026-11-04):** `live_factory_right_path_passes_and_wrong_path_fails` passed on
+Linux, in about 290 s, with the seed above, `frappe/erpnext:v16.53.0`, `twentycrm/twenty:v2.51.0`, a debug build of Sculptured,
+the stand-in plant and the scripted team, including its new CRM step: the right path passed all eleven checks. Counted once in
+the ERP after seeding, without a run: 2 companies (`Arena Co`, from the integration's base, stays), 4 workstations, 5 BOMs, 8
+sales orders, 8 work orders, 8 job cards, 4 assets, 15 item prices, and no stock row for `SP-SPN-800`. `arenad base` took
+170 s the first time, including the integrations' own bases, and 23 s when the base existed. **Not run:** this world on
+Isaac Sim or with real agents; the Isaac Sim result below predates the CRM.
 
 **Verified with Isaac Sim (2026-11-04):**
 - What ran: `live_factory_gold_path_report`, which runs only the gold path and prints its checks and metrics. It

@@ -1,0 +1,46 @@
+{
+  "fictional": "Ridgeline Components and everyone and everything in these records are invented for a demonstration: no real company, person or order.",
+  "opening_stock": [
+    {"item": "STL-DP780", "plant": "P2", "qty": 120000},
+    {"item": "STL-DP780", "plant": "P1", "qty": 40000},
+    {"item": "SP-SPN-600", "plant": "P2", "qty": 1},
+    {"item": "SP-SPN-400", "plant": "P2", "qty": 1},
+    {"item": "RC-1041", "plant": "P2", "qty": 2400},
+    {"item": "RC-2210", "plant": "P2", "qty": 300},
+    {"item": "RC-3307", "plant": "P2", "qty": 650},
+    {"item": "RC-4120", "plant": "P2", "qty": 1200},
+    {"item": "RC-5002", "plant": "P2", "qty": 400}
+  ],
+  "press_purchases": {
+    "transfer-press": {"date": "2014-06-02", "amount": 2450000},
+    "progressive-press": {"date": "2017-03-13", "amount": 1380000},
+    "servo-press": {"date": "2021-09-20", "amount": 1150000}
+  },
+  "maintenance_tasks": [
+    {"task": "Annual preventive maintenance", "marks": ["annual pm"], "periodicity": "Yearly"},
+    {"task": "Spindle bearing inspection", "marks": ["bearing inspection"], "periodicity": "Half-yearly"},
+    {"task": "Flywheel brake service", "marks": ["brake"], "periodicity": "Yearly"},
+    {"task": "Quarterly preventive maintenance", "marks": ["quarterly pm", "pm"], "periodicity": "Quarterly"}
+  ],
+  "accounts": {
+    "Northfield Motors": {
+      "domain": "https://northfield-motors.example",
+      "contacts": [
+        {"first": "Avery", "last": "Cole", "email": "avery.cole@northfield-motors.example", "title": "Supply chain manager"},
+        {"first": "Morgan", "last": "Reyes", "email": "morgan.reyes@northfield-motors.example", "title": "Inbound logistics lead"}
+      ]
+    },
+    "Arcadia Trucks": {
+      "domain": "https://arcadia-trucks.example",
+      "contacts": [
+        {"first": "Jamie", "last": "Holt", "email": "jamie.holt@arcadia-trucks.example", "title": "Purchasing manager"}
+      ]
+    },
+    "Velo EV": {
+      "domain": "https://velo-ev.example",
+      "contacts": [
+        {"first": "Riley", "last": "Tan", "email": "riley.tan@velo-ev.example", "title": "Program manager"}
+      ]
+    }
+  }
+}

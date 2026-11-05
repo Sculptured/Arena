@@ -12,10 +12,12 @@ fn factory(data: &str) -> Factory {
 async fn it_describes_itself_without_the_factory_example() {
     let d = factory("/no/such/file").describe().await.unwrap();
     let parts: Vec<&str> = d.world.iter().map(|p| p.part.as_str()).collect();
-    assert_eq!(parts, ["erp", "hub", "plant", "approvals"]);
+    assert_eq!(parts, ["erp", "hub", "plant", "approvals", "crm"]);
     assert!(d.scored && d.tools.is_empty());
     assert_eq!(d.tasks[0].id, TASK);
     assert_eq!(d.links[0].to, "plant");
+    assert_eq!(d.world[4].integration, "twenty-crm");
+    assert_eq!(d.version, "0.2.0");
 }
 
 #[tokio::test]

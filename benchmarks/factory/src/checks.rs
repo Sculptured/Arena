@@ -206,6 +206,66 @@ fn notified(w: &World, f: &Facts) -> NamedCheck {
     )
 }
 
+/// A note in the CRM on the account of every customer with orders on the line.
+fn accounts_updated(w: &World, f: &Facts) -> NamedCheck {
+    let notes = w.docs("crm", "note");
+    let noted = |customer: &str| {
+        notes.iter().any(|n| {
+            let accounts = n["accounts"].as_array().into_iter().flatten();
+            accounts.into_iter().any(|a| a == customer)
+        })
+    };
+    let missing: Vec<&str> = f
+        .customers
+        .iter()
+        .map(String::as_str)
+        .filter(|c| !noted(c))
+        .collect();
+    check(
+        "crm_accounts_updated",
+        missing.is_empty(),
+        format!("no CRM note on {}", missing.join(", ")),
+    )
+}
+
+/// Whether `deal`, an opportunity in the CRM, is the sales order `order` of `customer`. An
+/// opportunity's name starts with its order's id (`crm::opportunity_name`).
+fn is_deal_of(deal: &Value, order: &str, customer: &Value) -> bool {
+    let name = deal["name"].as_str().unwrap_or_default();
+    deal["account"] == *customer && name.split(' ').next() == Some(order)
+}
+
+/// Each approved notice's order has its opportunity closing on the notice's new date, so the CRM
+/// says what the customer was told. A run with no approved notice has told no one and fails.
+fn close_dates_moved(w: &World) -> NamedCheck {
+    let notices = w.approved("customer_notice");
+    let deals = w.docs("crm", "opportunity");
+    let moved = |notice: &&&Value| {
+        let p = &notice["payload"];
+        let order = p["order"].as_str().unwrap_or_default();
+        let date = p["new_date"].as_str().unwrap_or_default();
+        deals.iter().any(|d| {
+            let close = d["closeDate"].as_str().unwrap_or_default();
+            is_deal_of(d, order, &p["customer"]) && !date.is_empty() && close.starts_with(date)
+        })
+    };
+    let stale: Vec<&str> = notices
+        .iter()
+        .filter(|n| !moved(n))
+        .map(|n| n["payload"]["order"].as_str().unwrap_or("?"))
+        .collect();
+    let why = if notices.is_empty() {
+        "no approved customer notice".to_string()
+    } else {
+        format!("CRM close date not moved for {}", stale.join(", "))
+    };
+    check(
+        "crm_close_dates_moved",
+        !notices.is_empty() && stale.is_empty(),
+        why,
+    )
+}
+
 /// Every check, in the order of the incident. `docs` is `{part: {key: doc}}`.
 pub fn evaluate(facts: &Facts, docs: &Value) -> Vec<NamedCheck> {
     let w = World(docs);
@@ -219,6 +279,8 @@ pub fn evaluate(facts: &Facts, docs: &Value) -> Vec<NamedCheck> {
         at_the_plant(&w, facts),
         scheduled(&w, facts),
         notified(&w, facts),
+        accounts_updated(&w, facts),
+        close_dates_moved(&w),
     ]
 }
 
@@ -259,8 +321,18 @@ mod tests {
                 json!({"item": part, "supplier": "Good", "total": 4890}),
             ),
             change("f", "freight_booking", true, json!({"amount": 780})),
-            change("n1", "customer_notice", true, json!({})),
-            change("n2", "customer_notice", true, json!({})),
+            change(
+                "n1",
+                "customer_notice",
+                true,
+                json!({"customer": "A", "order": "A-1", "new_date": "2026-03-14"}),
+            ),
+            change(
+                "n2",
+                "customer_notice",
+                true,
+                json!({"customer": "B", "order": "A-2", "new_date": "2026-03-15"}),
+            ),
         ];
         Value::Object(list.into_iter().collect())
     }
@@ -285,6 +357,14 @@ mod tests {
                 "Purchase Order/PO": {"supplier": "Good", "docstatus": 1},
                 "ToDo/1": {"description": "Repair PR-A1 with P-1", "date": "2026-03-11"},
             },
+            "crm": {
+                "note/1": {"accounts": ["A"]},
+                "note/2": {"accounts": ["B"]},
+                "opportunity/1": {"name": "A-1 RC-1 x 10", "account": "A",
+                                  "closeDate": "2026-03-14T00:00:00.000Z"},
+                "opportunity/2": {"name": "A-2 RC-2 x 20", "account": "B",
+                                  "closeDate": "2026-03-15T00:00:00+00:00"},
+            },
         })
     }
 
@@ -301,12 +381,12 @@ mod tests {
     fn the_gold_end_state_passes_every_check() {
         let checks = evaluate(&facts(), &gold());
         assert!(checks.iter().all(|c| c.passed), "{checks:?}");
-        assert_eq!(checks.len(), 9);
+        assert_eq!(checks.len(), 11);
     }
 
     #[test]
     fn an_empty_world_fails_every_check() {
-        assert_eq!(failed(&json!({})).len(), 9);
+        assert_eq!(failed(&json!({})).len(), 11);
     }
 
     /// `gold` with the value at `pointer` replaced fails exactly `want`.
@@ -342,6 +422,25 @@ mod tests {
         assert_fails(d, json!("2026-03-10"), &["repair_scheduled"]);
         let n = "/hub/notice~12/customer";
         assert_fails(n, json!("A"), &["customers_notified"]);
+    }
+
+    #[test]
+    fn a_customer_without_a_crm_note_fails_the_update() {
+        assert_fails(
+            "/crm/note~12/accounts",
+            json!(["A"]),
+            &["crm_accounts_updated"],
+        );
+    }
+
+    #[test]
+    fn an_opportunity_not_moved_to_the_notices_date_fails() {
+        let date = "/crm/opportunity~12/closeDate";
+        assert_fails(date, json!("2026-03-05"), &["crm_close_dates_moved"]);
+        let other = "/crm/opportunity~12/name";
+        assert_fails(other, json!("A-9 RC-2 x 20"), &["crm_close_dates_moved"]);
+        let account = "/crm/opportunity~12/account";
+        assert_fails(account, json!("A"), &["crm_close_dates_moved"]);
     }
 
     #[test]

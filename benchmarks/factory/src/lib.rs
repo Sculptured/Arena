@@ -1,6 +1,11 @@
-//! The factory benchmark: a press bearing fails, and a team handles the incident across an ERP, the
-//! outside companies, the plant and an approvals system. Scored by named checks over the end state.
+//! The factory benchmark: a press bearing fails, and a team handles the incident across an ERP, a
+//! CRM, the outside companies, the plant and an approvals system. Scored by named checks over the end
+//! state.
 pub mod checks;
+pub mod company;
+pub mod crm;
+pub mod date;
+pub mod erp;
 pub mod facts;
 pub mod seed;
 pub mod team;
@@ -62,7 +67,7 @@ impl Benchmark for Factory {
     async fn describe(&self) -> R<BenchDescribe> {
         Ok(BenchDescribe {
             name: "factory".into(),
-            version: "0.1.0".into(),
+            version: "0.2.0".into(),
             protocol: PROTOCOL,
             world: world::parts(self.backend, self.plant_config.clone()),
             tasks: vec![task()],
@@ -82,9 +87,13 @@ impl Benchmark for Factory {
             .get("erp")
             .ok_or_else(|| PartError::invalid("connections.erp is required"))?;
         let data = self.data()?;
-        seed::seed(erp, &data)
+        let crm = p
+            .connections
+            .get("crm")
+            .ok_or_else(|| PartError::invalid("connections.crm is required"))?;
+        seed::seed(erp, crm, &data)
             .await
-            .map_err(|e| PartError::internal(format!("seeding the ERP: {e:#}")))
+            .map_err(|e| PartError::internal(format!("seeding the company: {e:#}")))
     }
 
     async fn call_tool(&self, p: BenchCallTool) -> R<BenchToolOutput> {

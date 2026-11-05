@@ -9,11 +9,12 @@ pub const INSTRUCTIONS_TITLE: &str = "Incident rules";
 pub const TICKET: &str = "# Press PR-A1\n\nRidgeline Components, Plant 2. Press PR-A1 on Line A is \
 running with rising vibration and is expected to trip. Handle the incident: find what failed from the \
 evidence, get the right replacement part ordered and on a truck, schedule the repair, and tell the \
-customers with orders on the line. The plant's clock runs while you work, so if the press has not \
+customers with orders on the line, and record that in the CRM. The plant's clock runs while you work, so if the press has not \
 tripped yet, keep checking `recent_events`.\n";
 
-pub const INSTRUCTIONS: &str = "Your tools reach four systems: the ERP (`get_doc`, `list_docs`, \
-`insert_doc`, `update_doc`, `submit_doc`), the plant (`plant_state`, `machine_telemetry`, \
+pub const INSTRUCTIONS: &str = "Your tools reach five systems: the ERP (`get_doc`, `list_docs`, \
+`insert_doc`, `update_doc`, `submit_doc`), the CRM (`crm_find_account`, `crm_find_contact`, \
+`crm_find_opportunities`, `crm_log_note`, `crm_update_opportunity`, `crm_create_task`), the plant (`plant_state`, `machine_telemetry`, \
 `vibration_spectrum`, `recent_events`, `wait_for_event`, `dispatch_technician`, `set_line_status`), the \
 outside companies (`request_quotes`, `get_quotes`, `award_order`, `freight_quotes`, \
 `get_freight_quotes`, `book_freight`, `notify_customer`, `customer_replies`, the claim tools) and the \
@@ -37,6 +38,11 @@ as `po`, and a Purchase Order submitted in the ERP;
 freight only up to $800.
 - The ERP's Notes hold the press's service manual and the orders on its line. Its Suppliers say which \
 vendors are approved.
+- The ERP holds the company's sales orders (`po_no` is the order's id, like A-1), work orders, job \
+cards on the press line workstations, stock, price lists and each press's maintenance. An order's CRM \
+opportunity has a name starting with that id.
+- A customer told of a new date is recorded in the CRM: a note on its account, and each order's \
+opportunity moved to close on the order's new date.
 - Schedule the repair as a ToDo in the ERP that names the press and the part, dated no earlier than the \
 day the part arrives (`plant_state` lists the shipment once it is booked).
 - Never invent a number, an id or a reply.";
@@ -79,7 +85,9 @@ for each with its new date. The Incident lead decides them.";
 const LEAD: &str = "You are the Incident lead at Ridgeline Components, and you hold the plant manager's \
 authority in this exercise, within the limits in the rules. Your input has your team's notes. Decide \
 Maintenance's `maintenance_order` and Planning's `customer_notice` changes. Dispatch the technician on \
-the approved maintenance order, and notify each customer on their approved notice. Check that the part \
+the approved maintenance order, and notify each customer on their approved notice. For each customer \
+you notify, log a note on their CRM account and move each noticed order's opportunity to close on its \
+new date. Check that the part \
 was awarded, the freight booked and the repair scheduled, and say plainly what is missing if not. End \
 with a short summary of what the team did.";
 

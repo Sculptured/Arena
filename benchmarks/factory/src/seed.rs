@@ -1,9 +1,16 @@
-//! The ERP's starting records, from the factory example's data: the spare parts, suppliers and
-//! customers, the press's service manual and the orders on its line, written through its REST API.
-//! The hub and the plant start from the example's own data.
-use anyhow::{anyhow, bail, Result};
+//! The world's starting records: a fictional stamping company, from the factory example's data and
+//! `data/company.json`, written into the ERP (`company.rs`) and the CRM (`crm.rs`) through their REST
+//! APIs, with the notes the incident's team reads. The hub and the plant start from the example's own
+//! data.
+use std::collections::HashMap;
+
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
+use crate::company::{list, Company};
+use crate::crm;
+use crate::date::Day;
+use crate::erp::{name_of, Erp};
 use crate::facts::{machine, MACHINE};
 
 /// Shaft speed in Hz and the defect-frequency rows of a press's service manual.
@@ -69,90 +76,153 @@ fn orders_note(data: &Value) -> Result<Value> {
     )
 }
 
-fn spares(data: &Value) -> Vec<Value> {
-    let items = data["items"].as_array().into_iter().flatten();
-    items
-        .filter(|i| i["code"].as_str().is_some_and(|c| c.starts_with("SP-")))
-        .map(|i| {
-            json!({"doctype": "Item", "item_code": i["code"], "item_name": i["name"],
-                        "item_group": "Products", "stock_uom": "Nos", "is_stock_item": 0})
-        })
-        .collect()
+/// The press's service manual, the orders on its line, the spares on the shelf, and the notice that
+/// all of this is made up.
+pub fn notes(c: &Company) -> Result<Vec<Value>> {
+    Ok(vec![
+        manual_note(c.data)?,
+        orders_note(c.data)?,
+        c.stock_note(),
+        c.fictional_note(),
+    ])
 }
 
-fn suppliers(data: &Value) -> Vec<Value> {
-    let list = data["suppliers"].as_array().into_iter().flatten();
-    list.map(|s| {
-        let group = s["group"].as_str().unwrap_or_default();
-        json!({"doctype": "Supplier", "supplier_name": s["name"], "supplier_details": group})
-    })
-    .collect()
+/// Writes each document, in order.
+async fn insert_all(erp: &Erp, docs: &[Value]) -> Result<()> {
+    for doc in docs {
+        erp.insert(doc).await?;
+    }
+    Ok(())
 }
 
-fn customers(data: &Value) -> Vec<Value> {
-    let list = data["customers"].as_array().into_iter().flatten();
-    list.map(|c| {
-        json!({"doctype": "Customer", "customer_name": c["name"],
-                        "customer_details": c["terms"]})
-    })
-    .collect()
+/// The company, the calendar it books in, and the two as the site's default.
+async fn company(erp: &Erp, c: &Company<'_>) -> Result<()> {
+    for year in c.fiscal_years() {
+        let filters = json!({"year": year["year"]});
+        if erp.names("Fiscal Year", &filters).await?.is_empty() {
+            erp.insert(&year).await?;
+        }
+    }
+    erp.insert(&c.company_doc()).await?;
+    let defaults = json!({"default_company": c.name()});
+    erp.update("Global Defaults", "Global Defaults", &defaults)
+        .await?;
+    Ok(())
 }
 
-/// Every starting record, in the order they are written.
-pub fn records(data: &Value) -> Result<Vec<Value>> {
-    let mut out = spares(data);
-    out.extend(suppliers(data));
-    out.extend(customers(data));
-    out.push(manual_note(data)?);
-    out.push(orders_note(data)?);
-    Ok(out)
-}
-
-fn field<'a>(erp: &'a Value, name: &str) -> Result<&'a str> {
-    erp[name]
-        .as_str()
-        .ok_or_else(|| anyhow!("the erp part's connect info has no {name}"))
-}
-
-/// Writes the records through the instance's REST API (`erp` is its `connect` info).
-pub async fn seed(erp: &Value, data: &Value) -> Result<()> {
-    let auth = format!(
-        "token {}:{}",
-        field(erp, "api_key")?,
-        field(erp, "api_secret")?
-    );
-    let (url, site) = (field(erp, "url")?, field(erp, "site")?);
-    let client = reqwest::Client::new();
-    for doc in records(data)? {
-        let doctype = doc["doctype"].as_str().unwrap_or_default();
-        let at = format!("{}/api/resource/{doctype}", url.trim_end_matches('/'));
-        let req = client
-            .post(at)
-            .header("Host", site)
-            .header("Authorization", &auth);
-        let answer = req.json(&doc).send().await?;
-        let status = answer.status();
-        if !status.is_success() {
-            bail!("writing {doc}: {status}: {}", answer.text().await?);
+/// Each press as a submitted asset, with its plan and its past maintenance.
+async fn presses(erp: &Erp, c: &Company<'_>) -> Result<()> {
+    insert_all(erp, &c.team()).await?;
+    insert_all(erp, &c.asset_masters()).await?;
+    for m in list(c.data, "machines") {
+        let asset = erp.submit_new(&c.asset(m)?).await?;
+        let plan = erp.insert(&c.maintenance(m, name_of(&asset)?)?).await?;
+        for log in c.maintenance_logs(m, &plan)? {
+            erp.submit_new(&log).await?;
         }
     }
     Ok(())
+}
+
+/// The BOMs, submitted; each order's sales order and work order, submitted, with its job cards.
+async fn orders(erp: &Erp, c: &Company<'_>) -> Result<()> {
+    let mut boms = HashMap::new();
+    for bom in c.boms()? {
+        let saved = erp.submit_new(&bom).await?;
+        boms.insert(bom["item"].to_string(), name_of(&saved)?.to_string());
+    }
+    for o in list(c.data, "orders") {
+        let so = erp.submit_new(&c.sales_order(o)?).await?;
+        let bom = boms
+            .get(&o["item"].to_string())
+            .ok_or_else(|| anyhow!("no BOM for {}", o["item"]))?;
+        let work = c.work_order(o, name_of(&so)?, bom)?;
+        erp.submit_new(&work).await?;
+    }
+    Ok(())
+}
+
+/// Writes the company into the ERP through its REST API (`erp` is its `connect` info).
+pub async fn seed_erp(erp: &Value, c: &Company<'_>) -> Result<()> {
+    let erp = Erp::connect(erp)?;
+    company(&erp, c).await?;
+    insert_all(&erp, &c.sites()).await?;
+    insert_all(&erp, &c.suppliers()).await?;
+    for group in c.item_groups() {
+        erp.insert_missing(&group).await?;
+    }
+    insert_all(&erp, &c.items()?).await?;
+    insert_all(&erp, &c.prices()).await?;
+    insert_all(&erp, &c.workstations()?).await?;
+    insert_all(&erp, &c.customers()).await?;
+    presses(&erp, c).await?;
+    erp.submit_new(&c.opening_stock()?).await?;
+    orders(&erp, c).await?;
+    insert_all(&erp, &notes(c)?).await
+}
+
+/// What `data/company.json` adds to the factory example's data.
+pub fn company_extra() -> Value {
+    serde_json::from_str(include_str!("../data/company.json"))
+        .expect("data/company.json is JSON (a test reads it)")
+}
+
+/// Loads the fictional company into the ERP and the CRM, dated from today.
+pub async fn seed(erp: &Value, crm: &Value, data: &Value) -> Result<()> {
+    let extra = company_extra();
+    let c = Company {
+        data,
+        extra: &extra,
+        today: Day::today(),
+    };
+    seed_erp(erp, &c).await.context("the ERP")?;
+    crm::seed(crm, &c).await.context("the CRM")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The real file's shape, cut down: one line of the failing press, one line of another.
     fn data() -> Value {
         json!({
-            "machines": [{"id": "PR-A1", "line": "L", "kind": "press", "spindle_part": "P-1"}],
+            "company": "Ridgeline Components", "currency": "USD",
+            "plants": [{"id": "P2", "name": "Plant 2 (Stamping)", "warehouse": "Plant 2 Stores"}],
+            "lines": [{"id": "L", "name": "Press Line A", "plant": "P2", "rate_per_hour": 400},
+                      {"id": "M", "name": "Press Line B", "plant": "P2", "rate_per_hour": 300}],
+            "machines": [{"id": "PR-A1", "name": "Press A1", "line": "L", "kind": "press",
+                          "spindle_part": "P-1",
+                          "history": [{"date": "2026-02-01", "by": "Dana Ruiz",
+                                       "work": "Spindle bearing inspection: fine"},
+                                      {"date": "2026-01-01", "by": "Dana Ruiz",
+                                       "work": "Annual PM: fine"}]}],
+            "technicians": [{"id": "T-1", "name": "Dana Ruiz"}],
             "main_drives": {"press": {"shaft_rpm": 300, "bearing": {"designation": "B"},
                                       "defect_orders": {"ftf": 0.4, "bpfo": 9.596,
                                                         "bpfi": 12.4, "bsf": 3.7}}},
-            "items": [{"code": "SP-1", "name": "Spindle"}, {"code": "RC-1", "name": "Bracket"}],
-            "suppliers": [{"name": "Good", "group": "Approved"}],
+            "items": [{"code": "P-1", "name": "Spindle", "group": "MRO spares", "uom": "Nos",
+                       "price": 4400},
+                      {"code": "RC-1", "name": "Bracket", "group": "Stamped parts", "uom": "Nos",
+                       "price": 6.5, "weight_kg": 2.0},
+                      {"code": "ST", "name": "Coil", "group": "Raw material", "uom": "Kg",
+                       "price": 1.1}],
+            "suppliers": [{"name": "Good", "group": "Approved", "approved": true,
+                           "history": [{"item": "P-1", "rate": 4180, "days_ago": 10}]},
+                          {"name": "Other", "group": "Approved", "approved": true, "history": []}],
             "customers": [{"name": "C", "terms": "Net 30"}],
-            "orders": [{"id": "A-1", "customer": "C", "line": "L"}, {"id": "Z", "line": "M"}],
+            "orders": [{"id": "A-1", "customer": "C", "line": "L", "item": "RC-1", "qty": 1000,
+                        "due_in_days": 2},
+                       {"id": "Z", "customer": "C", "line": "M", "item": "RC-1", "qty": 10,
+                        "due_in_days": 3}],
+        })
+    }
+
+    fn with<T>(f: impl FnOnce(&Company) -> T) -> T {
+        let (data, extra) = (data(), company_extra());
+        f(&Company {
+            data: &data,
+            extra: &extra,
+            today: Day::from_epoch(20_000),
         })
     }
 
@@ -168,14 +238,137 @@ mod tests {
     }
 
     #[test]
-    fn only_spares_and_the_presss_line_are_seeded() {
-        let all = records(&data()).unwrap();
-        let of = |t: &str| all.iter().filter(|d| d["doctype"] == t).count();
-        assert_eq!(
-            (of("Item"), of("Supplier"), of("Customer"), of("Note")),
-            (1, 1, 1, 2)
+    fn the_orders_note_keeps_to_the_presss_line() {
+        let note = orders_note(&data()).unwrap();
+        let text = note["content"].as_str().unwrap();
+        assert!(text.contains("A-1") && !text.contains("\"Z\""), "{text}");
+    }
+
+    #[test]
+    fn every_record_is_marked_with_the_company_and_the_stock_gap_is_said() {
+        with(|c| {
+            assert_eq!(c.company_doc()["abbr"], "RC");
+            let notes = notes(c).unwrap();
+            assert_eq!(notes.len(), 4);
+            let stock = notes[2]["content"].as_str().unwrap();
+            assert!(stock.contains("P-1: 0 on hand, minimum 1"), "{stock}");
+            assert!(notes[3]["content"].as_str().unwrap().contains("invented"));
+        });
+    }
+
+    #[test]
+    fn the_press_lines_are_workstations_on_the_plant_floor() {
+        with(|c| {
+            let docs = c.workstations().unwrap();
+            let names: Vec<_> = docs
+                .iter()
+                .filter_map(|d| d["workstation_name"].as_str())
+                .collect();
+            assert_eq!(names, ["Press Line A", "Press Line B"]);
+            assert_eq!(docs[1]["plant_floor"], "Plant 2 (Stamping)");
+            assert!(docs.iter().any(|d| d["doctype"] == "Operation"));
+        });
+    }
+
+    #[test]
+    fn a_work_order_runs_on_its_own_line_and_a_sales_order_carries_the_plants_id() {
+        with(|c| {
+            let orders: Vec<_> = list(c.data, "orders").collect();
+            let so = c.sales_order(orders[1]).unwrap();
+            assert_eq!(so["po_no"], "Z");
+            assert_eq!(so["delivery_date"], "2024-10-07");
+            assert_eq!(so["transaction_date"], "2024-09-20");
+            let wo = c.work_order(orders[1], "SO", "BOM").unwrap();
+            assert_eq!(wo["operations"][0]["workstation"], "Press Line B");
+            assert_eq!(wo["operations"][0]["time_in_mins"], 0.2);
+            assert_eq!(wo["fg_warehouse"], "Plant 2 Finished Goods - RC");
+        });
+    }
+
+    #[test]
+    fn a_bom_uses_coil_with_scrap_and_the_line_its_first_order_is_on() {
+        with(|c| {
+            let boms = c.boms().unwrap();
+            assert_eq!(boms.len(), 1);
+            assert_eq!(boms[0]["items"][0]["qty"], 2.5);
+            assert_eq!(boms[0]["operations"][0]["workstation"], "Press Line A");
+        });
+    }
+
+    #[test]
+    fn prices_hold_the_lists_and_what_each_supplier_charged() {
+        with(|c| {
+            let prices = c.prices();
+            assert_eq!(prices.len(), 4);
+            let paid = prices.iter().find(|p| p["supplier"] == "Good").unwrap();
+            assert_eq!(paid["price_list"], "Standard Buying");
+            assert_eq!(paid["valid_from"], "2024-09-24");
+            let sold = prices.iter().find(|p| p["item_code"] == "RC-1").unwrap();
+            assert_eq!(sold["price_list"], "Standard Selling");
+        });
+    }
+
+    #[test]
+    fn a_press_has_a_plan_per_kind_of_work_and_a_log_per_line_of_history() {
+        with(|c| {
+            let m = crate::facts::machine(c.data).unwrap();
+            let plan = c.maintenance(m, "ASSET-1").unwrap();
+            let tasks = plan["asset_maintenance_tasks"].as_array().unwrap();
+            assert_eq!(tasks.len(), 2);
+            assert_eq!(
+                tasks[0]["maintenance_task"],
+                "Annual preventive maintenance"
+            );
+            assert_eq!(tasks[0]["assign_to"], "dana.ruiz@ridgeline.example");
+            let saved = json!({"name": "ASSET-1", "asset_maintenance_tasks": [
+                {"name": "r1", "maintenance_task": "Annual preventive maintenance"},
+                {"name": "r2", "maintenance_task": "Spindle bearing inspection"}]});
+            let logs = c.maintenance_logs(m, &saved).unwrap();
+            assert_eq!((logs.len(), &logs[0]["task"]), (2, &json!("r2")));
+        });
+    }
+
+    #[test]
+    fn the_failing_presss_part_has_a_shelf_minimum_and_no_stock() {
+        with(|c| {
+            let items = c.items().unwrap();
+            let part = items.iter().find(|i| i["item_code"] == "P-1").unwrap();
+            let level = &part["reorder_levels"][0];
+            assert_eq!(level["warehouse"], "Plant 2 Stores - RC");
+            let stock = c.opening_stock();
+            // The real file names items this cut-down data doesn't have; the real one is read below.
+            assert!(stock.is_err());
+        });
+    }
+
+    #[test]
+    fn the_company_file_stocks_only_what_the_example_sells_and_not_the_failing_part() {
+        let extra = company_extra();
+        let stocked: Vec<_> = list(&extra, "opening_stock").map(|s| &s["item"]).collect();
+        assert!(
+            !stocked.contains(&&json!("SP-SPN-800")),
+            "the part must be out of stock"
         );
-        let orders = all.last().unwrap()["content"].as_str().unwrap();
-        assert!(orders.contains("A-1") && !orders.contains("Z"), "{orders}");
+        assert!(stocked.contains(&&json!("SP-SPN-600")));
+        let fictional = extra["fictional"].as_str().unwrap();
+        assert!(fictional.contains("invented"), "{fictional}");
+    }
+
+    #[test]
+    fn a_crm_opportunity_is_the_order_and_a_contact_is_at_the_account() {
+        with(|c| {
+            let order = list(c.data, "orders").next().unwrap();
+            let deal = crm::opportunity(c, order, "acc").unwrap();
+            assert_eq!(deal["name"], "A-1 RC-1 x 1000");
+            assert_eq!(deal["closeDate"], "2024-10-06");
+            assert_eq!(deal["amount"]["amountMicros"], 6_500_000_000u64);
+            let p = crm::person(
+                &json!({"first": "A", "last": "C", "email": "a@c.example",
+                                        "title": "Buyer"}),
+                "acc",
+            );
+            assert_eq!(p["companyId"], "acc");
+            assert_eq!(p["emails"]["primaryEmail"], "a@c.example");
+        });
     }
 }

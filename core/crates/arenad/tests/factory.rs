@@ -1,8 +1,8 @@
-//! The factory benchmark's world, whole: ERPNext, the hub, the stand-in plant and Sculptured, walked by a
+//! The factory benchmark's world, whole: ERPNext, Twenty, the hub, the stand-in plant and Sculptured, walked by a
 //! scripted team (no model) in which each agent does its own part and no agent decides a change it
 //! proposed. The right path passes every named check; a wrong one fails the order.
 //!
-//! `live_`: it starts an ERPNext stack of its own, and needs the Sculptured program and the factory
+//! `live_`: it starts an ERPNext stack and a Twenty server of its own, and needs the Sculptured program and the factory
 //! example, which are not public yet, so it says why and passes without them. Everything it makes is
 //! removed when it ends. Run: `cargo test -p arenad --test factory -- --ignored live_ --nocapture`.
 #[path = "support/app.rs"]
@@ -292,7 +292,32 @@ impl Calls<'_> {
 
     async fn lead_gold(&self) -> Result<(), String> {
         self.dispatch().await?;
-        self.notify().await
+        self.notify().await?;
+        self.record_in_crm().await
+    }
+
+    /// A note on each customer's account, and the noticed order's opportunity moved to the new date.
+    async fn record_in_crm(&self) -> Result<(), String> {
+        for (customer, order) in CUSTOMERS {
+            let found = self
+                .call("crm_find_account", json!({"name": customer}))
+                .await?;
+            let account = &found["accounts"][0];
+            let note = json!({"account_id": account["id"], "title": format!("{MACHINE} down"),
+                              "body": NOTICE});
+            self.call("crm_log_note", note).await?;
+            let deals = account["opportunities"]
+                .as_array()
+                .ok_or("no opportunities")?;
+            let of_order = |d: &&Value| {
+                let name = d["name"].as_str().unwrap_or_default();
+                name.starts_with(&format!("{order} "))
+            };
+            let deal = deals.iter().find(of_order).ok_or("no opportunity")?;
+            let moved = json!({"id": deal["id"], "close_date": NEW_DATE});
+            self.call("crm_update_opportunity", moved).await?;
+        }
+        Ok(())
     }
 
     /// The wrong diagnosis and the wrong part; a booking with no change behind it, which the gate
@@ -394,10 +419,34 @@ impl Stack {
                 format!("arena_erpnext_{}", self.id),
             ),
             ("ARENA_ERPNEXT_PORT", port(24000)),
+            ("ARENA_TWENTY_PROJECT", format!("arena_twenty_{}", self.id)),
+            ("ARENA_TWENTY_DB_PORT", port(25000)),
         ] {
             out.push((k.to_string(), v));
         }
         out
+    }
+}
+
+impl Stack {
+    /// The CRM's servers, then its database server, network and volume.
+    fn remove_crm(&self) {
+        let name = format!("arena-twenty-{}", self.id);
+        let docker = |args: &[&str]| {
+            let out = Command::new("docker").args(args).output();
+            out.map_or(String::new(), |o| {
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            })
+        };
+        for c in docker(&["ps", "-aq", "--filter", &format!("name=^{name}")]).split_whitespace() {
+            docker(&["rm", "-f", "-v", c]);
+        }
+        let project = format!("name=arena_twenty_{}", self.id);
+        for n in docker(&["network", "ls", "-q", "--filter", &project]).split_whitespace() {
+            docker(&["network", "rm", n]);
+        }
+        docker(&["network", "rm", &name]);
+        docker(&["volume", "rm", "-f", &format!("{name}-db")]);
     }
 }
 
@@ -416,6 +465,7 @@ impl Drop for Stack {
         let _ = Command::new("docker")
             .args(["volume", "rm", "-f", &db])
             .output();
+        self.remove_crm();
         let _ = std::fs::remove_dir_all(&self.saves);
     }
 }
@@ -458,6 +508,8 @@ fn build() {
             "arena-erpnext",
             "-p",
             "arena-sculptured",
+            "-p",
+            "arena-twenty-crm",
         ])
         .current_dir(arena())
         .status()

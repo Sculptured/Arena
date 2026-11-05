@@ -34,6 +34,9 @@ pub fn parts(backend: Backend, plant: Value) -> Vec<WorldPart> {
         "Supplier",
         "Customer",
         "Purchase Order",
+        "Sales Order",
+        "Work Order",
+        "Job Card",
         "Note",
         "ToDo",
     ];
@@ -42,6 +45,7 @@ pub fn parts(backend: Backend, plant: Value) -> Vec<WorldPart> {
         part("hub", "ridgeline-hub", json!({})),
         part("plant", backend.integration(), plant),
         part("approvals", "sculptured", json!({})),
+        part("crm", "twenty-crm", json!({})),
     ]
 }
 
