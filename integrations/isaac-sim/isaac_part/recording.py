@@ -7,6 +7,7 @@ from pathlib import Path
 from arena_part import errors
 
 CAMERA_MODES = ("auto", "free")
+STILL_SETTLE_FRAMES = 8  # frames a still waits after a cut, for the renderer's history to catch up
 
 
 def path_for(record: str, root: Path, instance: str) -> Path:
@@ -26,6 +27,13 @@ def check_camera(camera: str, cameras) -> None:
 def frame_every(physics_hz: int, fps: int) -> int:
     """Physics steps between frames (at least one)."""
     return max(1, round(physics_hz / fps))
+
+
+def frame_size(height: int) -> tuple:
+    """Width and height at 16:9, both even, as H.264 wants them."""
+    even = height + height % 2
+    width = even * 16 // 9
+    return width + width % 2, even
 
 
 def next_frame(steps: int, every: int) -> int:

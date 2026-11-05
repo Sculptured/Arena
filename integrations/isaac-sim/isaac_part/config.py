@@ -7,6 +7,7 @@ from pathlib import Path
 from arena_part import errors, params
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
+SCENES = ("ridgeline", "showcase")
 DEFAULT_ISAAC = (PACKAGE_DIR / ".." / ".." / ".." / "Sculptured-Examples" / "factory" / "isaac").resolve()
 DEFAULT_PLANT_START = "2026-03-10T06:00:00"
 
@@ -21,6 +22,8 @@ class Config:
     record: str | None = None  # the MP4 to render to (isaac only); relative to the part's save folder
     camera: str = "auto"  # the factory's camera: a rig in layout.CAMERAS, "auto" (cuts to events) or "free"
     record_fps: int = 30  # frames per second of arena time; the MP4 plays at this rate, so in arena time
+    scene: str = "ridgeline"  # what the plant looks like: the factory's own scene, or "showcase" (visuals only)
+    record_height: int = 720  # the MP4's height in pixels; the width follows at 16:9
 
 
 def parse_config(config) -> Config:
@@ -42,11 +45,15 @@ def _positive(n, name):
 
 
 def _recording(config) -> dict:
-    """`record` (a non-empty path), `camera` (a name) and `record_fps`. Whether the camera exists is checked
-    once the factory's layout is loaded (recording.check_camera)."""
+    """`record` (a non-empty path), `camera` (a name), `record_fps`, `scene` and `record_height`. Whether the camera
+    exists is checked once the factory's layout is loaded (recording.check_camera)."""
     record, camera = config.get("record"), config.get("camera", "auto")
     if record is not None and (not isinstance(record, str) or not record.strip()):
         raise errors.invalid(f"record must be a path to an MP4, got {record!r}")
     if not isinstance(camera, str):
         raise errors.invalid(f"camera must be a name, got {camera!r}")
-    return {"record": record, "camera": camera, "record_fps": _positive(config.get("record_fps", 30), "record_fps")}
+    scene = config.get("scene", "ridgeline")
+    if scene not in SCENES:
+        raise errors.invalid(f"scene must be one of {', '.join(SCENES)}, got {scene!r}")
+    return {"record": record, "camera": camera, "record_fps": _positive(config.get("record_fps", 30), "record_fps"),
+            "scene": scene, "record_height": _positive(config.get("record_height", 720), "record_height")}

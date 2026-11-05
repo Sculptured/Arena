@@ -3,7 +3,7 @@ import importlib
 
 from arena_part import errors, saves
 
-from . import recording, source, state, views
+from . import recording, showcase_layout, source, state, views
 from .base import DocsPart
 from .config import parse_config
 from .plant import Plant, physics_hz
@@ -11,6 +11,12 @@ from .tools import TOOLS, run_tool
 
 NAME = "isaac-sim"
 ADAPTER = 1
+
+
+def _camera_names(cfg):
+    """The shots a recording may stay on: the factory's rigs, or the showcase's."""
+    layout = importlib.import_module("layout")
+    return showcase_layout.shots(layout) if cfg.scene == "showcase" else layout.CAMERAS
 
 
 class IsaacSim(DocsPart):
@@ -61,7 +67,7 @@ class IsaacSim(DocsPart):
         self._check_record(cfg)
         mods = source.load(cfg)
         if cfg.record is not None:
-            recording.check_camera(cfg.camera, importlib.import_module("layout").CAMERAS)
+            recording.check_camera(cfg.camera, _camera_names(cfg))
         self.backend.load(cfg)  # the factory's and the backend's modules come before any unpickling
         snap = None
         if from_ is not None:
