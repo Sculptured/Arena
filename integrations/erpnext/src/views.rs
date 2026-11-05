@@ -1,7 +1,12 @@
 //! `inspect` and `diff` through REST: an instance's site is read in place; a save is read
-//! through a scratch site made from it and removed after.
+//! through a scratch site made from it and removed after. Building a scratch site takes tens of
+//! seconds, so `diff` reads both sides at once and keeps the differing documents of saves for the
+//! `inspect` of them that follows (Arena's compare asks for exactly those).
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use tokio::sync::{oneshot, watch};
 
 use arena_part::proto::{DiffParams, Differing, Docs, InspectParams, Target};
 use arena_part::PartError;
@@ -62,6 +67,11 @@ impl Erpnext {
     }
 
     pub(crate) async fn inspect_target(&self, p: InspectParams) -> Result<Docs, PartError> {
+        if let (Target::Save { save }, false) = (&p.target, p.keys.is_empty()) {
+            if let Some(docs) = self.docs.get(save, &p.keys) {
+                return Ok(Docs { docs });
+            }
+        }
         let all = match p.keys.is_empty() {
             true => self.doctypes_of(&p.target)?,
             false => vec![],
@@ -82,13 +92,50 @@ impl Erpnext {
             return Ok(Differing { differing: vec![] });
         }
         let doctypes: Vec<String> = doctypes.into_iter().collect();
-        let a = self
-            .read(&p.a, async |r, s| dump_docs(r, s, &doctypes).await)
-            .await?;
-        let b = self
-            .read(&p.b, async |r, s| dump_docs(r, s, &doctypes).await)
-            .await?;
-        Ok(Differing::between(&a, &b))
+        let (keys_tx, keys_rx) = watch::channel(None);
+        let ((a_tx, a_rx), (b_tx, b_rx)) = (oneshot::channel(), oneshot::channel());
+        let decide = async move {
+            let (a, b): (DocMap, DocMap) = (a_rx.await.ok()?, b_rx.await.ok()?);
+            let d = Differing::between(&a, &b);
+            let _ = keys_tx.send(Some(Arc::new(d.differing.clone())));
+            Some(d)
+        };
+        let (da, db, d) = tokio::join!(
+            self.read_side(&p.a, &doctypes, a_tx, keys_rx.clone()),
+            self.read_side(&p.b, &doctypes, b_tx, keys_rx),
+            decide
+        );
+        let (da, db) = (da?, db?);
+        let d = d.ok_or_else(|| PartError::internal("diff: a side was not read"))?;
+        self.keep(&p.a, da);
+        self.keep(&p.b, db);
+        Ok(d)
+    }
+
+    /// One side of a diff: its documents go to `dumped`; once the differing keys are known, it
+    /// reads their documents before its scratch site goes (none, if that fails: the diff stands).
+    async fn read_side(
+        &self,
+        t: &Target,
+        doctypes: &[String],
+        dumped: oneshot::Sender<DocMap>,
+        mut keys: watch::Receiver<Option<Arc<Vec<String>>>>,
+    ) -> Result<Map<String, Value>, PartError> {
+        self.read(t, async move |rest, site| {
+            let _ = dumped.send(dump_docs(rest, site, doctypes).await?);
+            let known = keys.wait_for(Option::is_some).await.map(|k| k.clone());
+            let known = known.map_err(|_| PartError::internal("diff: the other side failed"))?;
+            let keys: Arc<Vec<String>> = known.unwrap_or_default();
+            Ok(some_docs(rest, site, &keys).await.unwrap_or_default())
+        })
+        .await
+    }
+
+    /// Keeps the documents read from a save (an instance changes, so its are not kept).
+    fn keep(&self, t: &Target, docs: Map<String, Value>) {
+        if let Target::Save { save } = t {
+            self.docs.put(save, docs);
+        }
     }
 }
 

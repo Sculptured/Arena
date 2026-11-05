@@ -34,6 +34,7 @@ impl Erpnext {
     /// save itself is gone either way.
     pub(crate) async fn drop_save_files(&self, save: &str) -> Result<(), PartError> {
         self.dirs.remove(save).map_err(PartError::internal_from)?;
+        self.docs.drop_save(save);
         if let Err(e) = self.settle_on(self.server()).await {
             eprintln!("arena-erpnext: dropped save {save}, but tidying up failed: {e}");
         }

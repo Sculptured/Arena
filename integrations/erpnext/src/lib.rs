@@ -4,6 +4,7 @@
 //! `arena_part::helpers::mariadb`) plus a copy of the site's files. Saves restore exactly.
 mod base;
 mod disk;
+mod doc_cache;
 mod frappe;
 mod instances;
 mod jobs;
@@ -48,6 +49,8 @@ pub struct Erpnext {
     live: Mutex<HashMap<String, Instance>>,
     /// Scratch sites being read for `inspect` and `diff`, by database name.
     busy: BusySet,
+    /// Documents read from saves by `diff`, for the `inspect` that follows it.
+    docs: doc_cache::DocCache,
     /// Dumps, and the gate held while a dump is made until a manifest names it and while
     /// unused dumps are removed.
     dumps: Dumps,
@@ -89,6 +92,7 @@ impl Erpnext {
             ready: OnceCell::new(),
             live: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
+            docs: doc_cache::DocCache::default(),
             starts: RwLock::new(()),
             reroot_after: DEFAULT_REROOT_AFTER,
             versions: OnceCell::new(),
