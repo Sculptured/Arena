@@ -6,19 +6,19 @@ use serde_json::{json, Value};
 const TOOLS: [(&str, &str, Effect, &[&str]); 6] = [
     (
         "crm_find_account",
-        "Find CRM accounts (companies) by name, with their contacts and opportunities.",
+        "Find CRM accounts (companies) by name, with their contacts and opportunities, a page at a time.",
         Effect::Read,
         &[],
     ),
     (
         "crm_find_contact",
-        "Find CRM contacts by name, email or account.",
+        "Find CRM contacts by name, email or account, a page at a time.",
         Effect::Read,
         &[],
     ),
     (
         "crm_find_opportunities",
-        "Find CRM opportunities by account or name.",
+        "Find CRM opportunities by account or name, a page at a time.",
         Effect::Read,
         &[],
     ),
@@ -50,11 +50,17 @@ fn text(description: &str) -> Value {
 fn properties(name: &str) -> Value {
     let account = text("the account's id, from crm_find_account");
     let part = "any part of it, ignoring case";
+    let limit = json!({"type": "integer", "description": "at most this many (default 60)"});
+    let cursor = text("next_cursor of the previous page, for the next one");
+    let paged = |mut v: Value| {
+        (v["limit"], v["cursor"]) = (limit.clone(), cursor.clone());
+        v
+    };
     match name {
-        "crm_find_account" => json!({"name": text(part)}),
-        "crm_find_contact" => json!({"name": text(part), "email": text(part),
-                                     "account_id": account}),
-        "crm_find_opportunities" => json!({"name": text(part), "account_id": account}),
+        "crm_find_account" => paged(json!({"name": text(part)})),
+        "crm_find_contact" => paged(json!({"name": text(part), "email": text(part),
+                                           "account_id": account})),
+        "crm_find_opportunities" => paged(json!({"name": text(part), "account_id": account})),
         "crm_log_note" => json!({"account_id": account, "title": text("a short title"),
                                  "body": text("the note, in Markdown")}),
         "crm_update_opportunity" => json!({

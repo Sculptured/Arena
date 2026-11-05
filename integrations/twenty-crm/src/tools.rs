@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use crate::rest::{Reply, Rest};
 
-/// As many records as one answer lists; more than a test world holds.
-const PAGE: &str = "60";
+/// As many records as one answer lists unless the call asks for fewer: Twenty's own page.
+const PAGE: u64 = 60;
 
 enum Failure {
     Refused(String),
@@ -56,12 +56,23 @@ fn person_name(name: &str) -> String {
     }
 }
 
-fn filter(parts: Vec<String>) -> Vec<(&'static str, String)> {
-    let mut query = vec![("limit", PAGE.to_string()), ("depth", "1".to_string())];
+/// A list's query: the filter `parts`, and the page the call asks for (`limit`, `cursor`).
+fn filter(args: &Value, parts: Vec<String>) -> Result<Vec<(&'static str, String)>, Failure> {
+    let limit = match &args["limit"] {
+        Value::Null => PAGE,
+        v => v
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Failure::Refused("limit must be a whole number above 0".into()))?,
+    };
+    let mut query = vec![("limit", limit.to_string()), ("depth", "1".to_string())];
     if !parts.is_empty() {
         query.push(("filter", parts.join(",")));
     }
-    query
+    if let Some(cursor) = given(args, "cursor") {
+        query.push(("starting_after", cursor.to_string()));
+    }
+    Ok(query)
 }
 
 /// The records of list `name` in an answer (absent means none).
@@ -81,11 +92,23 @@ fn day(v: &Value) -> Value {
         .map_or(Value::Null, |d| json!(&d[..d.len().min(10)]))
 }
 
+/// `raw`, the record as Twenty's REST API gives it, with `fields` set over it: the names an agent
+/// is told to use.
+fn with_fields(raw: &Value, fields: Value) -> Value {
+    let mut v = raw.clone();
+    if let (Some(v), Value::Object(fields)) = (v.as_object_mut(), fields) {
+        v.extend(fields);
+    }
+    v
+}
+
 fn opportunity_view(o: &Value) -> Value {
     let micros = o["amount"]["amountMicros"].as_f64();
-    json!({"id": o["id"], "name": o["name"], "stage": o["stage"], "close_date": day(&o["closeDate"]),
-           "amount": micros.map(|m| m / 1e6), "currency": o["amount"]["currencyCode"],
-           "account_id": o["companyId"]})
+    with_fields(
+        o,
+        json!({"close_date": day(&o["closeDate"]), "amount": micros.map(|m| m / 1e6),
+               "currency": o["amount"]["currencyCode"], "account_id": o["companyId"]}),
+    )
 }
 
 fn contact_view(p: &Value) -> Value {
@@ -94,8 +117,9 @@ fn contact_view(p: &Value) -> Value {
         p["name"]["firstName"].as_str().unwrap_or_default(),
         p["name"]["lastName"].as_str().unwrap_or_default()
     );
-    json!({"id": p["id"], "name": name.trim(), "email": p["emails"]["primaryEmail"],
-           "title": p["jobTitle"], "account_id": p["companyId"]})
+    let fields = json!({"name": name.trim(), "email": p["emails"]["primaryEmail"],
+                        "title": p["jobTitle"], "account_id": p["companyId"]});
+    with_fields(p, fields)
 }
 
 fn account_view(c: &Value) -> Value {
@@ -104,8 +128,13 @@ fn account_view(c: &Value) -> Value {
         .iter()
         .map(opportunity_view)
         .collect();
-    json!({"id": c["id"], "name": c["name"], "domain": c["domainName"]["primaryLinkUrl"],
-           "contacts": contacts, "opportunities": deals})
+    let fields = json!({"domain": c["domainName"]["primaryLinkUrl"], "contacts": contacts,
+                        "opportunities": deals});
+    let mut v = with_fields(c, fields);
+    if let Some(v) = v.as_object_mut() {
+        v.remove("people");
+    }
+    v
 }
 
 fn keys(kind: &str, list: &[Value]) -> Vec<String> {
@@ -113,24 +142,29 @@ fn keys(kind: &str, list: &[Value]) -> Vec<String> {
     ids.map(|id| format!("{kind}/{id}")).collect()
 }
 
-/// A search's answer: `views` under `name`, having read `kind/<id>` for each.
-fn found(name: &str, kind: &str, views: Vec<Value>) -> ToolOutput {
+/// A search's answer: `views` under `name`, having read `kind/<id>` for each, with how many match
+/// (`total`) and, when there are more, the `next_cursor` that asks for the next page.
+fn found(name: &str, kind: &str, views: Vec<Value>, data: &Value) -> ToolOutput {
+    let page = &data["pageInfo"];
+    let next = page["endCursor"].clone();
+    let more = page["hasNextPage"] == true && !next.is_null();
     ToolOutput {
         reads: keys(kind, &views),
-        result: Some(json!({name: views})),
+        result: Some(json!({name: views, "total": data["totalCount"],
+                            "next_cursor": if more { next } else { Value::Null }})),
         ..ToolOutput::default()
     }
 }
 
 async fn find_account(rest: &Rest, args: &Value) -> Out {
     let parts = given(args, "name").map(|n| contains("name", n));
-    let query = filter(parts.into_iter().collect());
+    let query = filter(args, parts.into_iter().collect())?;
     let data = accepted(rest.get("companies", &query).await?)?;
     let views = records(&data, "companies")
         .iter()
         .map(account_view)
         .collect();
-    Ok(found("accounts", "company", views))
+    Ok(found("accounts", "company", views, &data))
 }
 
 fn equals(field: &str, value: &str) -> String {
@@ -142,21 +176,21 @@ async fn find_contact(rest: &Rest, args: &Value) -> Out {
     parts.extend(given(args, "name").map(person_name));
     parts.extend(given(args, "email").map(|e| contains("emails.primaryEmail", e)));
     parts.extend(given(args, "account_id").map(|a| equals("companyId", a)));
-    let data = accepted(rest.get("people", &filter(parts)).await?)?;
+    let data = accepted(rest.get("people", &filter(args, parts)?).await?)?;
     let views = records(&data, "people").iter().map(contact_view).collect();
-    Ok(found("contacts", "person", views))
+    Ok(found("contacts", "person", views, &data))
 }
 
 async fn find_opportunities(rest: &Rest, args: &Value) -> Out {
     let mut parts = vec![];
     parts.extend(given(args, "name").map(|n| contains("name", n)));
     parts.extend(given(args, "account_id").map(|a| equals("companyId", a)));
-    let data = accepted(rest.get("opportunities", &filter(parts)).await?)?;
+    let data = accepted(rest.get("opportunities", &filter(args, parts)?).await?)?;
     let views = records(&data, "opportunities")
         .iter()
         .map(opportunity_view)
         .collect();
-    Ok(found("opportunities", "opportunity", views))
+    Ok(found("opportunities", "opportunity", views, &data))
 }
 
 fn markdown(text: &str) -> Value {
@@ -285,6 +319,26 @@ mod tests {
         assert_eq!(v["opportunities"][0]["close_date"], "2026-11-05");
         assert_eq!(v["opportunities"][0]["amount"], 57600.0);
         assert_eq!(v["contacts"][0]["name"], "A C");
+        assert!(v.get("people").is_none() && v["opportunities"][0]["stage"] == "PROPOSAL");
+    }
+
+    #[test]
+    fn a_page_is_asked_for_by_limit_and_cursor_and_says_whats_next() {
+        let q = filter(&json!({"limit": 5, "cursor": "abc"}), vec![])
+            .ok()
+            .unwrap();
+        assert!(
+            q.contains(&("limit", "5".into())) && q.contains(&("starting_after", "abc".into()))
+        );
+        assert!(filter(&json!({"limit": 0}), vec![]).is_err());
+        let data = json!({"totalCount": 9, "pageInfo": {"hasNextPage": true, "endCursor": "e"}});
+        let out = found("accounts", "company", vec![json!({"id": "x"})], &data);
+        let r = out.result.unwrap();
+        assert_eq!((&r["total"], &r["next_cursor"]), (&json!(9), &json!("e")));
+        let last = json!({"pageInfo": {"hasNextPage": false, "endCursor": "e"}});
+        assert!(
+            found("accounts", "company", vec![], &last).result.unwrap()["next_cursor"].is_null()
+        );
     }
 
     #[tokio::test]

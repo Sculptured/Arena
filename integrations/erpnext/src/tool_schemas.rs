@@ -12,7 +12,7 @@ const TOOLS: [(&str, &str, Effect, &[&str]); 5] = [
     ),
     (
         "list_docs",
-        "List ERPNext documents of a doctype.",
+        "List ERPNext documents of a doctype, a page at a time.",
         Effect::Read,
         &["doctype"],
     ),
@@ -48,6 +48,8 @@ fn properties(name: &str) -> Value {
             "fields": {"type": "array", "items": {"type": "string"},
                        "description": "fields to return (name is always included)"},
             "limit": {"type": "integer", "description": "at most this many (default 20, 0 for all)"},
+            "start": {"type": "integer", "description": "skip this many first (for the next page)"},
+            "order_by": {"type": "string", "description": "SQL order, like \"modified desc\""},
         }),
         "insert_doc" => {
             json!({"doc": {"type": "object", "description": "the document, with its doctype"}})

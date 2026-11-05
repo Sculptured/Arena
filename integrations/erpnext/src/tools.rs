@@ -95,10 +95,14 @@ fn list_fields(args: &Value) -> Result<String, String> {
     Ok(json!(fields).to_string())
 }
 
+fn whole(v: &Value, name: &str) -> Result<u64, String> {
+    v.as_u64().ok_or(format!("{name} must be a whole number"))
+}
+
 fn list_query(args: &Value) -> Result<Vec<(&'static str, String)>, String> {
     let limit = match args.get("limit") {
         None | Some(Value::Null) => DEFAULT_LIMIT,
-        Some(v) => v.as_u64().ok_or("limit must be a whole number")?,
+        Some(v) => whole(v, "limit")?,
     };
     let mut q = vec![
         ("fields", list_fields(args)?),
@@ -106,6 +110,13 @@ fn list_query(args: &Value) -> Result<Vec<(&'static str, String)>, String> {
     ];
     if let Some(f) = args.get("filters").filter(|f| !f.is_null()) {
         q.push(("filters", f.to_string()));
+    }
+    match args.get("start") {
+        None | Some(Value::Null) => {}
+        Some(v) => q.push(("limit_start", whole(v, "start")?.to_string())),
+    }
+    if let Some(order) = args.get("order_by").and_then(Value::as_str) {
+        q.push(("order_by", order.to_string()));
     }
     Ok(q)
 }
@@ -233,6 +244,11 @@ mod tests {
         assert_eq!(q[2], ("filters", "{\"a\":1}".to_string()));
         assert!(list_query(&json!({"fields": "x"})).is_err());
         assert!(list_query(&json!({"limit": -1})).is_err());
+        let q = list_query(&json!({"limit": 50, "start": 100, "order_by": "modified desc"}));
+        let q = q.unwrap();
+        assert_eq!(q[2], ("limit_start", "100".to_string()));
+        assert_eq!(q[3], ("order_by", "modified desc".to_string()));
+        assert!(list_query(&json!({"start": "x"})).is_err());
     }
 
     #[test]

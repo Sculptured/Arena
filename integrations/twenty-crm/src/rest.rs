@@ -77,7 +77,21 @@ async fn reply(r: RequestBuilder) -> Result<Reply> {
     if !(200..300).contains(&status) {
         return Ok(Reply::Refused(refusal(status, &body)));
     }
-    Ok(Reply::Ok(body["data"].clone()))
+    Ok(Reply::Ok(data_of(&body)))
+}
+
+/// A 2xx answer's `data`, with a list's `pageInfo` and `totalCount` (which Twenty sends beside
+/// `data`) put into it.
+fn data_of(body: &Value) -> Value {
+    let mut data = body["data"].clone();
+    if let Some(d) = data.as_object_mut() {
+        for k in ["pageInfo", "totalCount"] {
+            if let Some(v) = body.get(k).filter(|v| !v.is_null()) {
+                d.entry(k).or_insert(v.clone());
+            }
+        }
+    }
+    data
 }
 
 #[cfg(test)]
@@ -90,5 +104,20 @@ mod tests {
         let body = json!({"messages": ["no such field", "and another"]});
         assert_eq!(refusal(400, &body), "no such field; and another");
         assert_eq!(refusal(401, &json!({})), "Twenty answered HTTP 401");
+    }
+
+    #[test]
+    fn a_lists_page_info_is_kept_with_its_data() {
+        let body = json!({"data": {"companies": []}, "totalCount": 41,
+                          "pageInfo": {"hasNextPage": true, "endCursor": "c"}});
+        let d = data_of(&body);
+        assert_eq!(
+            (&d["totalCount"], &d["pageInfo"]["endCursor"]),
+            (&json!(41), &json!("c"))
+        );
+        assert_eq!(
+            data_of(&json!({"data": {"createNote": {"id": "n"}}}))["createNote"]["id"],
+            "n"
+        );
     }
 }

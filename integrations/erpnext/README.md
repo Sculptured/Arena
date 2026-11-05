@@ -74,8 +74,9 @@ helper this integration uses: `arena_part::helpers::mariadb`).
 - **Restore** (`from`, either mode; exact only, `approximate: false`): a new instance from the save's
   manifest and files, as above. A save made on another server (or a replaced one) is -32001.
 - **Tools** (REST on `127.0.0.1:8180` with the Administrator's key and `Host: <site>`):
-  `get_doc {doctype, name}` (read), `list_docs {doctype, filters?, fields?, limit?}` (read; `name` is
-  always among the fields; `limit` default 20, 0 for all), `insert_doc {doc}` (write; `doc` has its
+  `get_doc {doctype, name}` (read), `list_docs {doctype, filters?, fields?, limit?, start?, order_by?}` (read; `name` is
+  always among the fields; `limit` default 20, 0 for all; `start` skips that many, for the next page;
+  `order_by` is Frappe's), `insert_doc {doc}` (write; `doc` has its
   `doctype`), `update_doc {doctype, name, fields}` (write), `submit_doc {doctype, name}` (write; sets
   `docstatus` 1, which Frappe runs as a submit). Keys are `<Doctype>/<name>`. Frappe refusing a call (a
   missing document, a failed validation) is the tool's error, with Frappe's message; bad arguments are

@@ -28,7 +28,9 @@ about 0.1 s and 20 MB of database, on the database server's Docker volume. A ser
   are kept by Postgres, as in the `postgres` integration. The server's Redis holds only caches and is not saved.
 - **Tools** (REST on the instance's port with the API key; a refusal or bad argument is the tool's error, Twenty not answering
   fails the call): `crm_find_account {name?}` (with its contacts and opportunities), `crm_find_contact {name?, email?,
-  account_id?}`, `crm_find_opportunities {name?, account_id?}`, `crm_log_note {account_id, title, body}`,
+  account_id?}`, `crm_find_opportunities {name?, account_id?}`, each also taking `limit` (default 60) and `cursor` and
+  answering a page: the records as Twenty's REST API gives them (depth 1), with `id`, `name`, `account_id`, `close_date`,
+  `amount` and the like set over them, plus `total` and, when there are more, `next_cursor`; `crm_log_note {account_id, title, body}`,
   `crm_update_opportunity {id, stage?, close_date?}`, `crm_create_task {title, body?, due?, account_id?}`. Reads are
   `<table>/<id>` keys. An account is Twenty's `company`.
 - **inspect / diff** read the database directly, so a save needs no server. Keys are `<table>/<id>` for `company`, `person`,
