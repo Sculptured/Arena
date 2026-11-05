@@ -3,6 +3,8 @@
 //! and model. Only the branch's own events count (`seq >= start_seq`), as in compare: the
 //! inherited prefix belongs to its parent.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -110,6 +112,9 @@ struct CallTally {
     count: i64,
     peak: Option<i64>,
     compactions: i64,
+    /// What each client-reported call (by its message id) added, so a call reported again
+    /// replaces its earlier report instead of counting twice.
+    by_id: HashMap<String, [i64; 3]>,
 }
 
 fn opt_add(a: Option<i64>, b: Option<i64>) -> Option<i64> {
@@ -122,19 +127,33 @@ impl CallTally {
         self.compactions += 1;
     }
 
-    fn add(&mut self, p: &ModelCallPayload) {
+    /// One model call. A call whose message id was reported before replaces that report: a
+    /// client may report a call more than once (Claude Code repeats a message per content block).
+    fn add(&mut self, p: &ModelCallPayload, id: Option<&str>) {
         let n = |k: &str| p.usage.get(k).and_then(Value::as_i64).unwrap_or(0);
-        self.count += 1;
-        if let Some(prompt) = p.usage.get("prompt_tokens").and_then(Value::as_i64) {
+        let (prompt, completion) = (n("prompt_tokens"), n("completion_tokens"));
+        let mine = [
+            prompt,
+            completion,
+            n("total_tokens").max(prompt + completion),
+        ];
+        let earlier = id.and_then(|i| self.by_id.insert(i.to_string(), mine));
+        let [p0, c0, t0] = earlier.unwrap_or_default();
+        self.count += i64::from(earlier.is_none());
+        if p.usage
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .is_some()
+        {
             self.peak = Some(self.peak.map_or(prompt, |m| m.max(prompt)));
         }
         if !self.any {
             self.all_costed = true;
         }
         self.any = true;
-        self.prompt += n("prompt_tokens");
-        self.completion += n("completion_tokens");
-        self.total += n("total_tokens").max(n("prompt_tokens") + n("completion_tokens"));
+        (self.prompt, self.completion) =
+            (self.prompt + prompt - p0, self.completion + completion - c0);
+        self.total += mine[2] - t0;
         self.all_costed &= p.cost_usd.is_some();
         self.cost = add_cost(Some(self.cost.unwrap_or(0.0)), p.cost_usd);
         self.source = self.source.take().or_else(|| p.cost_source.clone());
@@ -154,16 +173,19 @@ impl Tally {
     }
 
     /// Tokens of the run: its ends', or its model calls' when it never ended (or kept no split).
+    /// Calls its client reported one by one, by message id, are arena's own record of them, so
+    /// their sums win over the totals the client added up itself at the end.
     fn settle(&mut self) {
         let calls = &self.calls;
-        if !self.ended && calls.any {
+        let by_calls = !calls.by_id.is_empty();
+        if (!self.ended || by_calls) && calls.any {
             self.tokens = calls.total;
-            if calls.all_costed {
-                self.reported = calls.cost;
-                self.source = calls.source.clone();
-            }
         }
-        if self.prompt.is_none() && calls.any {
+        if !self.ended && calls.any && calls.all_costed {
+            self.reported = calls.cost;
+            self.source = calls.source.clone();
+        }
+        if (self.prompt.is_none() || by_calls) && calls.any {
             (self.prompt, self.completion) = (Some(calls.prompt), Some(calls.completion));
         }
     }
@@ -237,7 +259,10 @@ fn agent_uses(events: &[&Event], table: &Prices) -> Vec<AgentUse> {
         match e.kind {
             EventKind::AgentEnd => parsed(e).iter().for_each(|p| t.end(p)),
             EventKind::ModelCall if e.payload.get("compaction").is_some() => t.calls.compacted(),
-            EventKind::ModelCall => parsed(e).iter().for_each(|p| t.calls.add(p)),
+            EventKind::ModelCall => {
+                let id = e.payload.get("message_id").and_then(Value::as_str);
+                parsed(e).iter().for_each(|p| t.calls.add(p, id));
+            }
             _ => {}
         }
     }
@@ -483,6 +508,34 @@ as_of = "2026-11-04""#,
         );
         assert!((a.overhead_s - 1.0).abs() < 1e-9, "{}", a.overhead_s);
         assert_eq!(a.tokens, 191_203);
+    }
+
+    /// A call `c`'s client reported under message id `id`, with `prompt` and `out` tokens.
+    fn reported_as(seq: i64, id: &str, prompt: i64, out: i64) -> Event {
+        let p = json!({"request": null, "response": null, "cost_usd": null, "cost_source": null,
+                       "usage": {"prompt_tokens": prompt, "completion_tokens": out},
+                       "message_id": id, "reported_by": "client"});
+        ev(seq, Some("c"), EventKind::ModelCall, p)
+    }
+
+    #[test]
+    fn a_call_reported_again_replaces_its_report_and_the_calls_sums_win() {
+        let evs = vec![
+            start(1, "c", "external", "m", None),
+            reported_as(2, "m1", 1000, 1),
+            reported_as(3, "m1", 1000, 1),
+            reported_as(4, "m2", 3000, 1),
+            reported_as(5, "m2", 3000, 40),
+            end(6, "c", Some((9_999, 2)), None),
+        ];
+        let m = metrics(&branch(None, 9), &evs, &table(), Utc::now());
+        let a = &m.agents[0];
+        assert_eq!((a.model_calls, a.peak_prompt_tokens), (2, Some(3000)));
+        assert_eq!(
+            (a.prompt_tokens, a.completion_tokens),
+            (Some(4000), Some(41))
+        );
+        assert_eq!(a.tokens, 4041);
     }
 
     #[test]

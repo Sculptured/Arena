@@ -3,3 +3,4 @@ ui/node_modules/
 ui/dist/
 .superpowers/
 core/saves/
+__pycache__/

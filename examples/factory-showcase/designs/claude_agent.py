@@ -1,8 +1,8 @@
 """One agent as a long-lived Claude Code process: headless (`claude -p`), with the same isolation
 flags as arena's own driver (core/crates/arenad/src/agents/claude.rs), but taking its input as a
 stream of user messages, so a design can give it more work without losing its context. Each model
-call its stream reports (per-message usage, cache tokens included) and each compaction is reported
-to Arena, which records them as `model_call` events."""
+call its stream reports (cache tokens included; see usage.py) and each compaction is reported to
+Arena, which records them as `model_call` events."""
 import json
 import os
 import subprocess
@@ -11,6 +11,7 @@ import threading
 import time
 
 import arena_api
+from usage import UsageMeter
 
 # The variables arena's driver removes from a CLI's environment (agents/mod.rs, scrub_env).
 SCRUBBED = ("ARENA_PG_URL", "DATABASE_URL", "OPENROUTER_API_KEY", "ARENA_LOCAL_MODELS", "OPENAI_API_KEY")
@@ -30,15 +31,6 @@ def command(model: str, server: str, mcp_url: str) -> list:
             "--tools", "", "--allowedTools", f"mcp__{server}__*", "--no-session-persistence"]
 
 
-def usage_report(message: dict, context_window: int | None) -> dict:
-    u = message.get("usage") or {}
-    keys = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
-    report = {k: int(u.get(k) or 0) for k in keys}
-    report.update(message_id=message.get("id"), model=message.get("model"),
-                  context_window=context_window)
-    return report
-
-
 class Agent:
     """`busy` while it works on a turn; `last_text` is what it said at the end of its last turn."""
 
@@ -52,10 +44,9 @@ class Agent:
         self.completed = 0  # turns ended so far
         self.mcp_url = mcp_url
         self.cost_usd = None
-        self.prompt_tokens = self.completion_tokens = 0
         self.error = None
         self.started = time.monotonic()
-        self._pending = None  # the assistant message whose usage is not reported yet
+        self.usage = UsageMeter(lambda r: arena_api.report_usage(branch, agent_id, r), context_window)
         self._closing = False
         self._lock = threading.Lock()
         self._log = open(os.path.join(out_dir, f"{agent_id}.jsonl"), "w")
@@ -84,7 +75,6 @@ class Agent:
                 self._on(json.loads(line))
             except (ValueError, arena_api.ArenaError) as e:
                 self._err.write(f"showcase: {e}\n")
-        self._flush()
         code = self.proc.wait()
         with self._lock:
             self.busy = False
@@ -94,28 +84,12 @@ class Agent:
     def _on(self, d: dict) -> None:
         kind = d.get("type")
         if kind == "assistant":
-            m = d["message"]
-            if self._pending and self._pending.get("id") != m.get("id"):
-                self._flush()
-            self._pending = m
-        elif kind == "user":
-            self._flush()
+            self.usage.assistant(d["message"])
         elif kind == "system" and d.get("subtype") == "compact_boundary":
-            self._flush()
             arena_api.report_usage(self.branch, self.id, {"compaction": d.get("compact_metadata", {})})
         elif kind == "result":
-            self._flush()
+            self.usage.turn_ended(d)
             self._ended_turn(d)
-
-    def _flush(self) -> None:
-        """Reports the pending assistant message's usage: one model call."""
-        m, self._pending = self._pending, None
-        if not m:
-            return
-        r = usage_report(m, self.context_window)
-        self.prompt_tokens += r["input_tokens"] + r["cache_creation_input_tokens"] + r["cache_read_input_tokens"]
-        self.completion_tokens += r["output_tokens"]
-        arena_api.report_usage(self.branch, self.id, r)
 
     def _ended_turn(self, d: dict) -> None:
         with self._lock:
@@ -143,7 +117,7 @@ class Agent:
             self.proc.kill()
         self._reader.join(timeout=10)
         done = {"ok": self.error is None, "error": self.error,
-                "prompt_tokens": self.prompt_tokens, "completion_tokens": self.completion_tokens,
+                "prompt_tokens": self.usage.prompt_tokens, "completion_tokens": self.usage.completion_tokens,
                 "cost_usd": self.cost_usd, "cost_source": "api_equivalent_estimate",
                 "seconds": round(time.monotonic() - self.started, 1)}
         arena_api.end_agent(self.branch, self.id, done)
