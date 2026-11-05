@@ -54,9 +54,9 @@ def stagger(p, i, n, overlap=0.5):
     return ease((p - start) / span)
 
 
-def label_bar(ax, x, y, text, p, **kw):
+def label_bar(ax, x, y, text, p, fontsize=20, color=FG, **kw):
     if p > 0.85:
-        ax.text(x, y, text, color=FG, va="center", fontsize=20,
+        ax.text(x, y, text, color=color, va="center", fontsize=fontsize,
                 alpha=min((p - 0.85) / 0.15, 1.0), **kw)
 
 

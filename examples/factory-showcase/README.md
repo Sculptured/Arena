@@ -92,6 +92,10 @@ python export_metrics.py --design A=<branch>,<branch> --design B=... --design C=
     --out $W/runs/metrics.json
 ```
 
+Runs recorded before the usage meter (commit 541d8dc) counted Claude Code's placeholder output
+counts: their input tokens, call counts and context are right once read by a current arenad, and
+their cost is Claude Code's own, but their output tokens are too low. The video charts input tokens.
+
 ## Tests
 
 ```bash

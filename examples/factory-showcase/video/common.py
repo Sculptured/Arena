@@ -7,9 +7,8 @@ from pathlib import Path
 
 import yaml
 
-# Work folder: the external SSD by default; SHOWCASE_VIDEO_WORK overrides it (for example when
-# the SSD is not writing reliably, see README).
-WORK = Path(os.environ.get("SHOWCASE_VIDEO_WORK", "/media/alexsky2/SSD1/sculptured-work/video"))
+# Work folder: ~/.cache/arena-showcase/video by default; SHOWCASE_VIDEO_WORK overrides it.
+WORK = Path(os.environ.get("SHOWCASE_VIDEO_WORK", str(Path.home() / ".cache/arena-showcase/video")))
 MODEL = Path(os.environ.get("SHOWCASE_VIDEO_MODEL", WORK / "models" / "en_GB-cori-high.onnx"))
 W, H, FPS = 1920, 1080, 30
 FONT = "Inter"

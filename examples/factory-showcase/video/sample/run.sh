@@ -3,7 +3,7 @@
 # usage: sample/run.sh   (set SHOWCASE_VIDEO_WORK to choose the work folder)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-W="${SHOWCASE_VIDEO_WORK:-/media/alexsky2/SSD1/sculptured-work/video}"
+W="${SHOWCASE_VIDEO_WORK:-$HOME/.cache/arena-showcase/video}"
 S="$W/sample"; mkdir -p "$S"
 PY=.venv/bin/python
 $PY narrate.py sample/script.yaml --out "$S/narration"

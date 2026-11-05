@@ -11,7 +11,7 @@ cd examples/factory-showcase/video
 UV_PROJECT_ENVIRONMENT=$PWD/.venv uv sync        # the venv stays on the root disk
 ```
 
-Work folder: `SHOWCASE_VIDEO_WORK` (default `/media/alexsky2/SSD1/sculptured-work/video`) holds the
+Work folder: `SHOWCASE_VIDEO_WORK` (default `~/.cache/arena-showcase/video`) holds the
 voice model in `models/`, temporary segments, and outputs you point there. Voice: Piper
 `en_GB-cori-high` (public domain, from LibriVox recordings; model card in `models/MODEL_CARD`):
 
@@ -70,7 +70,8 @@ track, and credit it in the video description.
 .venv/bin/python charts.py metrics.json out/ [--animate] [--only milestones,tokens,cost,context,messages,tool_calls,checks] [--seconds 3]
 ```
 
-PNG per chart; with `--animate` also an MP4 reveal (bars grow, lines draw, matrices fade in; then
+The tokens chart draws each agent's `prompt_tokens` (input: the context sent, summed over its
+calls), falling back to `tokens`. PNG per chart; with `--animate` also an MP4 reveal (bars grow, lines draw, matrices fade in; then
 a 1.5 s hold). A chart is skipped when the JSON lacks its data.
 
 ### metrics.json
@@ -107,10 +108,3 @@ event; `t_s` is seconds since the branch started.
 `sample/run.sh` runs narration, charts and the editor on made-up data (`sample/script.yaml`,
 `sample/metrics.json`, `sample/edit.yaml`, generated placeholder footage) and writes
 `$SHOWCASE_VIDEO_WORK/sample/sample.mp4`.
-
-## Known issue: the external SSD
-
-On 2026-11-04 the exFAT SSD acknowledged writes but read them back as zeros after a short time
-(model, WAVs, PNGs, MP4s written there became all-zero; `sync` did not finish). Outputs were
-built with `SHOWCASE_VIDEO_WORK` on the root disk instead. Verify the SSD before relying on it:
-write a file, wait a minute, and `dd iflag=direct` the first block back.

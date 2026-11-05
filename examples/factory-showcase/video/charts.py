@@ -41,16 +41,21 @@ def legend(ax, keys, cols, names):
 def milestones(m, p, sample):
     keys, cols, names = design_info(m)
     fig, ax = figure("Time to each milestone", "seconds from the start of the incident", sample)
+    ax.set_position([0.25, 0.1, 0.68, 0.66])  # room for the milestone names
     ms = [x["name"] for x in m["designs"][keys[0]]["milestones"]]
     h = 0.8 / len(keys)
     for j, k in enumerate(keys):
         for i, mm in enumerate(m["designs"][k]["milestones"]):
             y, q = i + (j - (len(keys) - 1) / 2) * h, stagger(p, i, len(ms))
+            if mm["t_s"] is None:  # never reached in this run
+                label_bar(ax, 2, y, "not reached", q, fontsize=15, color=cols[k])
+                continue
             ax.barh(y, mm["t_s"] * q, height=h * 0.9, color=cols[k])
-            label_bar(ax, mm["t_s"] * q + 2, y, f"{mm['t_s']:.0f} s", q)
+            label_bar(ax, mm["t_s"] * q + 2, y, f"{mm['t_s']:.0f} s", q, fontsize=15)
     ax.set_yticks(range(len(ms)), ms)
     ax.invert_yaxis()
-    ax.set_xlim(0, max(x["t_s"] for k in keys for x in m["designs"][k]["milestones"]) * 1.12)
+    reached = [x["t_s"] for k in keys for x in m["designs"][k]["milestones"] if x["t_s"] is not None]
+    ax.set_xlim(0, max(reached, default=1) * 1.12)
     ax.xaxis.grid(True)
     ax.set_axisbelow(True)
     legend(ax, keys, cols, names)
@@ -82,8 +87,9 @@ def bars_per_agent(m, p, sample, title, sub, value, fmt):
 
 
 def tokens(m, p, sample):
-    return bars_per_agent(m, p, sample, "Tokens per agent", "prompt + completion, as recorded",
-                          lambda a: a.get("tokens", 0), fmt_tokens)
+    return bars_per_agent(m, p, sample, "Input tokens per agent",
+                          "context sent to the model, summed over its calls, as Arena recorded",
+                          lambda a: a.get("prompt_tokens") or a.get("tokens", 0), fmt_tokens)
 
 
 def cost(m, p, sample):
@@ -109,7 +115,8 @@ def context(m, p, sample):
     ax.set_xlabel("seconds into the run")
     ax.yaxis.grid(True)
     ax.yaxis.set_major_formatter(lambda v, _: fmt_tokens(v))
-    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.02), fontsize=18, ncol=3)
+    ax.set_position([0.08, 0.14, 0.66, 0.66])  # the legend goes on the right
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=17, ncol=1, frameon=False)
     return fig
 
 
