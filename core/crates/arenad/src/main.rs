@@ -110,6 +110,17 @@ async fn startup_bench(state: &AppState) -> anyhow::Result<BenchDescribe> {
         })
 }
 
+/// `arenad base`: makes the benchmark's base world, the saves every run starts from, unless it
+/// exists, and exits.
+async fn build_base(state: &AppState, bench: &BenchDescribe) -> anyhow::Result<()> {
+    let saves = arenad::world::ensure_base(&state.hub, bench).await?;
+    println!(
+        "arenad: base of {} {}: {saves:?}",
+        bench.name, bench.version
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let url = std::env::var("ARENA_PG_URL")
@@ -122,6 +133,9 @@ async fn main() -> anyhow::Result<()> {
 
     let state = app_state(&url, port).await?;
     let bench = startup_bench(&state).await?;
+    if std::env::args().nth(1).as_deref() == Some("base") {
+        return build_base(&state, &bench).await;
+    }
     // Before any run can save: drop the saves no event names (left by crashes and aborted tests).
     arenad::gc::run_startup_gc(&state.store, &state.hub, &state.benchmark).await?;
     app::install_default_drivers(&state);

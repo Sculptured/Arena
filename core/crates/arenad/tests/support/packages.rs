@@ -25,9 +25,12 @@ pub fn arena() -> PathBuf {
         .unwrap()
 }
 
-/// `core/target/debug`, where `build()` puts the package binaries.
+/// Where `build()` puts the package binaries: `ARENA_BIN_DIR`, set when `CARGO_TARGET_DIR` moves
+/// the build, else `core/target/debug`.
 pub fn bin_dir() -> PathBuf {
-    arena().join("core/target/debug")
+    std::env::var_os("ARENA_BIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| arena().join("core/target/debug"))
 }
 
 /// The roots `ARENA_PACKAGES` would name: `<arena>/integrations` and `<arena>/benchmarks`.
