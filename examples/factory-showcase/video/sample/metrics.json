@@ -1,0 +1,559 @@
+{
+ "title": "SAMPLE",
+ "sample": true,
+ "context_limit": 200000,
+ "designs": {
+  "A": {
+   "label": "A, hierarchical",
+   "checks": {
+    "passed": 9,
+    "total": 12
+   },
+   "milestones": [
+    {
+     "name": "first response",
+     "t_s": 14
+    },
+    {
+     "name": "diagnosis",
+     "t_s": 62
+    },
+    {
+     "name": "purchase order",
+     "t_s": 118
+    },
+    {
+     "name": "customers told",
+     "t_s": 171
+    }
+   ],
+   "agents": [
+    {
+     "agent": "commander",
+     "model": "sample-model",
+     "tokens": 120000,
+     "prompt_tokens": 108000,
+     "completion_tokens": 12000,
+     "cost": {
+      "usd": 0.36,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "maintenance",
+     "model": "sample-model",
+     "tokens": 80000,
+     "prompt_tokens": 72000,
+     "completion_tokens": 8000,
+     "cost": {
+      "usd": 0.24,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "procurement",
+     "model": "sample-model",
+     "tokens": 96000,
+     "prompt_tokens": 86400,
+     "completion_tokens": 9600,
+     "cost": {
+      "usd": 0.29,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "planning",
+     "model": "sample-model",
+     "tokens": 68000,
+     "prompt_tokens": 61200,
+     "completion_tokens": 6800,
+     "cost": {
+      "usd": 0.2,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "comms",
+     "model": "sample-model",
+     "tokens": 48000,
+     "prompt_tokens": 43200,
+     "completion_tokens": 4800,
+     "cost": {
+      "usd": 0.14,
+      "label": "sample"
+     }
+    }
+   ],
+   "context": {
+    "commander": [
+     {
+      "t_s": 6.4,
+      "prompt_tokens": 14212
+     },
+     {
+      "t_s": 14.1,
+      "prompt_tokens": 20711
+     },
+     {
+      "t_s": 24.3,
+      "prompt_tokens": 24625
+     },
+     {
+      "t_s": 28.5,
+      "prompt_tokens": 32245
+     },
+     {
+      "t_s": 35.1,
+      "prompt_tokens": 36970
+     },
+     {
+      "t_s": 49.0,
+      "prompt_tokens": 42827
+     },
+     {
+      "t_s": 61.4,
+      "prompt_tokens": 48714
+     },
+     {
+      "t_s": 71.8,
+      "prompt_tokens": 53037
+     },
+     {
+      "t_s": 82.1,
+      "prompt_tokens": 60803
+     },
+     {
+      "t_s": 91.4,
+      "prompt_tokens": 67961
+     },
+     {
+      "t_s": 102.1,
+      "prompt_tokens": 71868
+     },
+     {
+      "t_s": 113.7,
+      "prompt_tokens": 78306
+     },
+     {
+      "t_s": 120.7,
+      "prompt_tokens": 82055
+     },
+     {
+      "t_s": 133.3,
+      "prompt_tokens": 87924
+     }
+    ],
+    "maintenance": [
+     {
+      "t_s": 11.2,
+      "prompt_tokens": 10212
+     },
+     {
+      "t_s": 22.3,
+      "prompt_tokens": 15559
+     },
+     {
+      "t_s": 30.3,
+      "prompt_tokens": 20522
+     },
+     {
+      "t_s": 38.7,
+      "prompt_tokens": 25916
+     },
+     {
+      "t_s": 51.5,
+      "prompt_tokens": 28628
+     },
+     {
+      "t_s": 56.9,
+      "prompt_tokens": 31722
+     },
+     {
+      "t_s": 70.5,
+      "prompt_tokens": 35518
+     },
+     {
+      "t_s": 80.8,
+      "prompt_tokens": 38881
+     }
+    ]
+   },
+   "messages": [
+    {
+     "from": "commander",
+     "to": "maintenance",
+     "count": 4
+    },
+    {
+     "from": "commander",
+     "to": "procurement",
+     "count": 3
+    },
+    {
+     "from": "commander",
+     "to": "planning",
+     "count": 3
+    },
+    {
+     "from": "commander",
+     "to": "comms",
+     "count": 2
+    },
+    {
+     "from": "maintenance",
+     "to": "commander",
+     "count": 4
+    },
+    {
+     "from": "procurement",
+     "to": "commander",
+     "count": 3
+    },
+    {
+     "from": "planning",
+     "to": "commander",
+     "count": 2
+    },
+    {
+     "from": "comms",
+     "to": "commander",
+     "count": 2
+    }
+   ],
+   "tool_calls": {
+    "ERP": 41,
+    "MES": 18,
+    "CRM": 12
+   }
+  },
+  "B": {
+   "label": "B, event-driven",
+   "checks": {
+    "passed": 11,
+    "total": 12
+   },
+   "milestones": [
+    {
+     "name": "first response",
+     "t_s": 9
+    },
+    {
+     "name": "diagnosis",
+     "t_s": 48
+    },
+    {
+     "name": "purchase order",
+     "t_s": 84
+    },
+    {
+     "name": "customers told",
+     "t_s": 132
+    }
+   ],
+   "agents": [
+    {
+     "agent": "maintenance",
+     "model": "sample-model",
+     "tokens": 83600,
+     "prompt_tokens": 75240,
+     "completion_tokens": 8360,
+     "cost": {
+      "usd": 0.25,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "procurement",
+     "model": "sample-model",
+     "tokens": 98800,
+     "prompt_tokens": 88920,
+     "completion_tokens": 9880,
+     "cost": {
+      "usd": 0.3,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "planning",
+     "model": "sample-model",
+     "tokens": 76000,
+     "prompt_tokens": 68400,
+     "completion_tokens": 7600,
+     "cost": {
+      "usd": 0.23,
+      "label": "sample"
+     }
+    },
+    {
+     "agent": "comms",
+     "model": "sample-model",
+     "tokens": 53200,
+     "prompt_tokens": 47880,
+     "completion_tokens": 5320,
+     "cost": {
+      "usd": 0.16,
+      "label": "sample"
+     }
+    }
+   ],
+   "context": {
+    "maintenance": [
+     {
+      "t_s": 9.1,
+      "prompt_tokens": 6726
+     },
+     {
+      "t_s": 16.6,
+      "prompt_tokens": 9930
+     },
+     {
+      "t_s": 26.4,
+      "prompt_tokens": 13900
+     },
+     {
+      "t_s": 37.2,
+      "prompt_tokens": 17929
+     },
+     {
+      "t_s": 49.8,
+      "prompt_tokens": 22108
+     },
+     {
+      "t_s": 60.5,
+      "prompt_tokens": 24299
+     },
+     {
+      "t_s": 73.1,
+      "prompt_tokens": 28414
+     },
+     {
+      "t_s": 86.2,
+      "prompt_tokens": 31580
+     },
+     {
+      "t_s": 97.3,
+      "prompt_tokens": 33887
+     },
+     {
+      "t_s": 109.6,
+      "prompt_tokens": 37063
+     }
+    ],
+    "comms": [
+     {
+      "t_s": 6.8,
+      "prompt_tokens": 4626
+     },
+     {
+      "t_s": 19.4,
+      "prompt_tokens": 8106
+     },
+     {
+      "t_s": 24.3,
+      "prompt_tokens": 11207
+     },
+     {
+      "t_s": 32.4,
+      "prompt_tokens": 13009
+     },
+     {
+      "t_s": 39.3,
+      "prompt_tokens": 16046
+     },
+     {
+      "t_s": 52.0,
+      "prompt_tokens": 17635
+     },
+     {
+      "t_s": 62.2,
+      "prompt_tokens": 19225
+     },
+     {
+      "t_s": 73.4,
+      "prompt_tokens": 21387
+     },
+     {
+      "t_s": 86.2,
+      "prompt_tokens": 24848
+     }
+    ]
+   },
+   "messages": [
+    {
+     "from": "maintenance",
+     "to": "procurement",
+     "count": 3
+    },
+    {
+     "from": "maintenance",
+     "to": "planning",
+     "count": 3
+    },
+    {
+     "from": "procurement",
+     "to": "comms",
+     "count": 2
+    },
+    {
+     "from": "planning",
+     "to": "comms",
+     "count": 3
+    },
+    {
+     "from": "procurement",
+     "to": "planning",
+     "count": 2
+    }
+   ],
+   "tool_calls": {
+    "ERP": 36,
+    "MES": 22,
+    "CRM": 15
+   }
+  },
+  "C": {
+   "label": "C, single agent",
+   "checks": {
+    "passed": 6,
+    "total": 12
+   },
+   "milestones": [
+    {
+     "name": "first response",
+     "t_s": 11
+    },
+    {
+     "name": "diagnosis",
+     "t_s": 95
+    },
+    {
+     "name": "purchase order",
+     "t_s": 210
+    },
+    {
+     "name": "customers told",
+     "t_s": 330
+    }
+   ],
+   "agents": [
+    {
+     "agent": "solo",
+     "model": "sample-model",
+     "tokens": 160000,
+     "prompt_tokens": 144000,
+     "completion_tokens": 16000,
+     "cost": {
+      "usd": 0.48,
+      "label": "sample"
+     }
+    }
+   ],
+   "context": {
+    "solo": [
+     {
+      "t_s": 9.1,
+      "prompt_tokens": 22589
+     },
+     {
+      "t_s": 16.2,
+      "prompt_tokens": 28543
+     },
+     {
+      "t_s": 26.1,
+      "prompt_tokens": 34169
+     },
+     {
+      "t_s": 32.1,
+      "prompt_tokens": 42506
+     },
+     {
+      "t_s": 42.2,
+      "prompt_tokens": 49031
+     },
+     {
+      "t_s": 46.7,
+      "prompt_tokens": 60679
+     },
+     {
+      "t_s": 53.8,
+      "prompt_tokens": 72981
+     },
+     {
+      "t_s": 66.8,
+      "prompt_tokens": 81101
+     },
+     {
+      "t_s": 75.4,
+      "prompt_tokens": 90246
+     },
+     {
+      "t_s": 85.8,
+      "prompt_tokens": 99934
+     },
+     {
+      "t_s": 95.4,
+      "prompt_tokens": 109799
+     },
+     {
+      "t_s": 108.8,
+      "prompt_tokens": 118850
+     },
+     {
+      "t_s": 117.1,
+      "prompt_tokens": 129436
+     },
+     {
+      "t_s": 123.5,
+      "prompt_tokens": 137004
+     },
+     {
+      "t_s": 137.3,
+      "prompt_tokens": 146156
+     },
+     {
+      "t_s": 146.7,
+      "prompt_tokens": 151638
+     },
+     {
+      "t_s": 154.9,
+      "prompt_tokens": 161214
+     },
+     {
+      "t_s": 159.1,
+      "prompt_tokens": 171048
+     },
+     {
+      "t_s": 169.4,
+      "prompt_tokens": 176881
+     },
+     {
+      "t_s": 179.7,
+      "prompt_tokens": 185638
+     },
+     {
+      "t_s": 190.5,
+      "prompt_tokens": 193576
+     },
+     {
+      "t_s": 201.6,
+      "prompt_tokens": 204290
+     },
+     {
+      "t_s": 205.8,
+      "prompt_tokens": 210126
+     },
+     {
+      "t_s": 216.5,
+      "prompt_tokens": 222462
+     }
+    ]
+   },
+   "messages": [],
+   "tool_calls": {
+    "ERP": 88,
+    "MES": 40,
+    "CRM": 30
+   }
+  }
+ }
+}
