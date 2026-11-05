@@ -1,6 +1,6 @@
 kind = "benchmark"
 name = "factory"
-version = "0.2.0"
+version = "0.3.0"
 protocol = 1
 run = { command = ["${ARENA_BIN_DIR}/arena-factory"] }
 needs = { gpu_vram_gb = 0, services = [] }

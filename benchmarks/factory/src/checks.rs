@@ -206,6 +206,27 @@ fn notified(w: &World, f: &Facts) -> NamedCheck {
     )
 }
 
+/// Every order the outage affects has an approved notice its customer was sent.
+fn orders_noticed(w: &World, f: &Facts) -> NamedCheck {
+    let notices = w.docs("hub", "notice");
+    let sent = |order: &str| {
+        notices
+            .iter()
+            .any(|n| n["order"] == order && w.is_approved(&n["proposal_id"], "customer_notice"))
+    };
+    let missing: Vec<&str> = f
+        .orders
+        .iter()
+        .map(String::as_str)
+        .filter(|o| !sent(o))
+        .collect();
+    check(
+        "affected_orders_noticed",
+        missing.is_empty(),
+        format!("no approved notice sent for {}", missing.join(", ")),
+    )
+}
+
 /// A note in the CRM on the account of every customer with orders on the line.
 fn accounts_updated(w: &World, f: &Facts) -> NamedCheck {
     let notes = w.docs("crm", "note");
@@ -279,6 +300,7 @@ pub fn evaluate(facts: &Facts, docs: &Value) -> Vec<NamedCheck> {
         at_the_plant(&w, facts),
         scheduled(&w, facts),
         notified(&w, facts),
+        orders_noticed(&w, facts),
         accounts_updated(&w, facts),
         close_dates_moved(&w),
     ]
@@ -296,6 +318,7 @@ mod tests {
             approved_vendors: vec!["Good".into()],
             technicians: vec!["T-1".into()],
             customers: vec!["A".into(), "B".into()],
+            orders: vec!["A-1".into(), "A-2".into()],
         }
     }
 
@@ -350,8 +373,8 @@ mod tests {
                 "rfq/R": {"part": "P-1", "awarded": {"po": "p", "supplier": "Good"}},
                 "shipment/S": {"part": "P-1", "ref": "Q"},
                 "freight/F": {"booked": "Q", "proposal_id": "f"},
-                "notice/1": {"customer": "A", "proposal_id": "n1"},
-                "notice/2": {"customer": "B", "proposal_id": "n2"},
+                "notice/1": {"customer": "A", "order": "A-1", "proposal_id": "n1"},
+                "notice/2": {"customer": "B", "order": "A-2", "proposal_id": "n2"},
             },
             "erp": {
                 "Purchase Order/PO": {"supplier": "Good", "docstatus": 1},
@@ -381,12 +404,12 @@ mod tests {
     fn the_gold_end_state_passes_every_check() {
         let checks = evaluate(&facts(), &gold());
         assert!(checks.iter().all(|c| c.passed), "{checks:?}");
-        assert_eq!(checks.len(), 11);
+        assert_eq!(checks.len(), 12);
     }
 
     #[test]
     fn an_empty_world_fails_every_check() {
-        assert_eq!(failed(&json!({})).len(), 11);
+        assert_eq!(failed(&json!({})).len(), 12);
     }
 
     /// `gold` with the value at `pointer` replaced fails exactly `want`.
@@ -422,6 +445,8 @@ mod tests {
         assert_fails(d, json!("2026-03-10"), &["repair_scheduled"]);
         let n = "/hub/notice~12/customer";
         assert_fails(n, json!("A"), &["customers_notified"]);
+        let o = "/hub/notice~12/order";
+        assert_fails(o, json!("A-9"), &["affected_orders_noticed"]);
     }
 
     #[test]

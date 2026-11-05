@@ -7,6 +7,7 @@ pub mod crm;
 pub mod date;
 pub mod erp;
 pub mod facts;
+pub mod scale;
 pub mod seed;
 pub mod team;
 pub mod world;
@@ -56,7 +57,8 @@ impl Factory {
 fn task() -> TaskInfo {
     TaskInfo {
         id: TASK.into(),
-        reason: "A press bearing fails: diagnose, source, approve, ship, schedule and notify"
+        reason: "A press bearing fails: diagnose, source, approve, ship, schedule and notify \
+                 every customer whose order the outage affects"
             .into(),
         ticket: team::TICKET.into(),
     }
@@ -67,7 +69,7 @@ impl Benchmark for Factory {
     async fn describe(&self) -> R<BenchDescribe> {
         Ok(BenchDescribe {
             name: "factory".into(),
-            version: "0.2.0".into(),
+            version: "0.3.0".into(),
             protocol: PROTOCOL,
             world: world::parts(self.backend, self.plant_config.clone()),
             tasks: vec![task()],
@@ -114,7 +116,8 @@ impl Benchmark for Factory {
         if p.task != TASK {
             return Err(PartError::invalid(format!("unknown task {}", p.task)));
         }
-        let facts = Facts::of(&self.data()?).map_err(|e| PartError::invalid(format!("{e:#}")))?;
+        let (data, _) = scale::enlarge(&self.data()?, &seed::company_extra());
+        let facts = Facts::of(&data).map_err(|e| PartError::invalid(format!("{e:#}")))?;
         let docs = json!(p.docs);
         Ok(Score {
             checks: checks::evaluate(&facts, &docs),

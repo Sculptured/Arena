@@ -8,9 +8,10 @@ pub const INSTRUCTIONS_TITLE: &str = "Incident rules";
 
 pub const TICKET: &str = "# Press PR-A1\n\nRidgeline Components, Plant 2. Press PR-A1 on Line A is \
 running with rising vibration and is expected to trip. Handle the incident: find what failed from the \
-evidence, get the right replacement part ordered and on a truck, schedule the repair, and tell the \
-customers with orders on the line, and record that in the CRM. The plant's clock runs while you work, so if the press has not \
-tripped yet, keep checking `recent_events`.\n";
+evidence, get the right replacement part ordered and on a truck, and schedule the repair. Line A stays \
+down until then: tell the customer of every open order on Line A due within the next three days (plant \
+time) its new date, and record that in the CRM. The plant's clock runs while you work, so if the press \
+has not tripped yet, keep checking `recent_events`.\n";
 
 pub const INSTRUCTIONS: &str = "Your tools reach five systems: the ERP (`get_doc`, `list_docs`, \
 `insert_doc`, `update_doc`, `submit_doc`), the CRM (`crm_find_account`, `crm_find_contact`, \
@@ -36,11 +37,10 @@ as `po`, and a Purchase Order submitted in the ERP;
 `proposal_id`.
 - Limits: approve a purchase order only up to $5,000 and from a vendor marked approved in the ERP, and \
 freight only up to $800.
-- The ERP's Notes hold the press's service manual and the orders on its line. Its Suppliers say which \
-vendors are approved.
-- The ERP holds the company's sales orders (`po_no` is the order's id, like A-1), work orders, job \
-cards on the press line workstations, stock, price lists and each press's maintenance. An order's CRM \
-opportunity has a name starting with that id.
+- The ERP's Notes hold the press's service manual. Its Suppliers say which vendors are approved.
+- The ERP holds the company's sales orders (`po_no` is the order's id, like A-1 or PO-41006), work \
+orders, job cards on the press line workstations, stock, price lists and each press's maintenance. An \
+order's CRM opportunity has a name starting with that id. Lists come a page at a time.
 - A customer told of a new date is recorded in the CRM: a note on its account, and each order's \
 opportunity moved to close on the order's new date.
 - Schedule the repair as a ToDo in the ERP that names the press and the part, dated no earlier than the \
@@ -78,9 +78,9 @@ submitted Purchase Order. Say what the order and the downtime will cost.";
 
 const PLANNING: &str = "Book the freight Finance approved (`book_freight`, its id as `proposal_id`). \
 Wait until `plant_state` lists the shipment, then schedule the repair as a ToDo in the ERP that names the \
-press and the part, dated no earlier than the day the part arrives. From the ERP's Notes and \
-`plant_state`, find every order on the stopped line and its customer, and propose a `customer_notice` \
-for each with its new date. The Incident lead decides them.";
+press and the part, dated no earlier than the day the part arrives. From the ERP and \
+`plant_state`, find every open order on the stopped line due within three days and its customer, and \
+propose a `customer_notice` for each with its new date. The Incident lead decides them.";
 
 const LEAD: &str = "You are the Incident lead at Ridgeline Components, and you hold the plant manager's \
 authority in this exercise, within the limits in the rules. Your input has your team's notes. Decide \

@@ -17,7 +17,7 @@ async fn it_describes_itself_without_the_factory_example() {
     assert_eq!(d.tasks[0].id, TASK);
     assert_eq!(d.links[0].to, "plant");
     assert_eq!(d.world[4].integration, "twenty-crm");
-    assert_eq!(d.version, "0.2.0");
+    assert_eq!(d.version, "0.3.0");
 }
 
 #[tokio::test]

@@ -1,7 +1,4 @@
-//! Calendar dates as `YYYY-MM-DD`, for dates in the seed relative to the day it runs.
-use std::time::{SystemTime, UNIX_EPOCH};
-
-const DAY_SECONDS: u64 = 86_400;
+//! Calendar dates as `YYYY-MM-DD`, for dates in the seed relative to the plant's first day.
 /// Days in a 400-year cycle, and in the part of it before a March-based year's offset.
 const ERA_DAYS: i64 = 146_097;
 const EPOCH_SHIFT: i64 = 719_468;
@@ -11,10 +8,10 @@ const EPOCH_SHIFT: i64 = 719_468;
 pub struct Day(i64);
 
 impl Day {
-    /// Today, in UTC.
-    pub fn today() -> Day {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH);
-        Day(now.map_or(0, |d| (d.as_secs() / DAY_SECONDS) as i64))
+    /// The plant's first day, 2026-03-10: the `plant_start` of the hub and the plant, so the ERP,
+    /// the CRM and the plant keep one calendar.
+    pub fn plant() -> Day {
+        Day(20_522)
     }
 
     /// `n` days later (earlier when negative).
@@ -67,5 +64,6 @@ mod tests {
         assert_eq!(Day::from_epoch(19_782).plus(1).iso(), "2024-03-01");
         assert_eq!(Day::from_epoch(-1).iso(), "1969-12-31");
         assert_eq!(Day::from_epoch(19_782).year(), 2024);
+        assert_eq!(Day::plant().iso(), "2026-03-10");
     }
 }

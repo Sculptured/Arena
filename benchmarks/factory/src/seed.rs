@@ -3,6 +3,7 @@
 //! APIs, with the notes the incident's team reads. The hub and the plant start from the example's own
 //! data.
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
@@ -12,6 +13,7 @@ use crate::crm;
 use crate::date::Day;
 use crate::erp::{name_of, Erp};
 use crate::facts::{machine, MACHINE};
+use crate::scale;
 
 /// Shaft speed in Hz and the defect-frequency rows of a press's service manual.
 fn defect_table(drive: &Value) -> String {
@@ -57,31 +59,11 @@ fn manual_note(data: &Value) -> Result<Value> {
     )
 }
 
-/// The orders on the press's line, for the team to see who a stopped line affects.
-fn orders_note(data: &Value) -> Result<Value> {
-    let line = &machine(data)?["line"];
-    let orders = data["orders"].as_array().into_iter().flatten();
-    let rows: Vec<String> = orders
-        .filter(|o| &o["line"] == line)
-        .map(|o| {
-            format!(
-                "<li>{} {} {} x {}, due in {} days</li>",
-                o["id"], o["customer"], o["qty"], o["item"], o["due_in_days"]
-            )
-        })
-        .collect();
-    Ok(
-        json!({"doctype": "Note", "title": format!("Orders on {MACHINE}'s line"), "public": 1,
-              "content": format!("<ul>{}</ul>", rows.join(""))}),
-    )
-}
-
-/// The press's service manual, the orders on its line, the spares on the shelf, and the notice that
-/// all of this is made up.
+/// The press's service manual, the spares on the shelf, and the notice that all of this is made
+/// up. Which orders a stopped line affects is for the team to find in the ERP's records.
 pub fn notes(c: &Company) -> Result<Vec<Value>> {
     Ok(vec![
         manual_note(c.data)?,
-        orders_note(c.data)?,
         c.stock_note(),
         c.fictional_note(),
     ])
@@ -124,27 +106,74 @@ async fn presses(erp: &Erp, c: &Company<'_>) -> Result<()> {
     Ok(())
 }
 
+/// How many orders the seed writes at once.
+const PARALLEL: usize = 5;
+
+/// Runs `job` on each of `items`, [`PARALLEL`] at a time; the first error, once all have ended.
+pub async fn each_at_once<T, F, Fut>(items: Vec<T>, job: F) -> Result<()>
+where
+    T: Send + 'static,
+    F: Fn(T) -> Fut,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let mut running = tokio::task::JoinSet::new();
+    let mut first_error = None;
+    for item in items {
+        if running.len() >= PARALLEL {
+            first_error = first_error.or(running.join_next().await.and_then(failed));
+        }
+        running.spawn(job(item));
+    }
+    while let Some(ended) = running.join_next().await {
+        first_error = first_error.or(failed(ended));
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn failed(ended: Result<Result<()>, tokio::task::JoinError>) -> Option<anyhow::Error> {
+    match ended {
+        Ok(r) => r.err(),
+        Err(e) => Some(anyhow!("a seed task ended: {e}")),
+    }
+}
+
+/// Each order's sales order and its work order (whose `sales_order` the seed fills in).
+fn order_docs(c: &Company<'_>, boms: &HashMap<String, String>) -> Result<Vec<(Value, Value)>> {
+    let mut out = vec![];
+    for o in list(c.data, "orders") {
+        let bom = boms
+            .get(&o["item"].to_string())
+            .ok_or_else(|| anyhow!("no BOM for {}", o["item"]))?;
+        out.push((c.sales_order(o)?, c.work_order(o, "", bom)?));
+    }
+    Ok(out)
+}
+
 /// The BOMs, submitted; each order's sales order and work order, submitted, with its job cards.
-async fn orders(erp: &Erp, c: &Company<'_>) -> Result<()> {
+async fn orders(erp: &Arc<Erp>, c: &Company<'_>) -> Result<()> {
     let mut boms = HashMap::new();
     for bom in c.boms()? {
         let saved = erp.submit_new(&bom).await?;
         boms.insert(bom["item"].to_string(), name_of(&saved)?.to_string());
     }
-    for o in list(c.data, "orders") {
-        let so = erp.submit_new(&c.sales_order(o)?).await?;
-        let bom = boms
-            .get(&o["item"].to_string())
-            .ok_or_else(|| anyhow!("no BOM for {}", o["item"]))?;
-        let work = c.work_order(o, name_of(&so)?, bom)?;
-        erp.submit_new(&work).await?;
-    }
-    Ok(())
+    // Every work order draws the same coil from the same store, so their submits update one stock
+    // row (`tabBin`): they go one at a time, while the sales orders go several at once.
+    let one_at_a_time = Arc::new(tokio::sync::Mutex::new(()));
+    each_at_once(order_docs(c, &boms)?, |(so, mut work)| {
+        let (erp, turn) = (erp.clone(), one_at_a_time.clone());
+        async move {
+            let so = erp.submit_new(&so).await?;
+            work["sales_order"] = json!(name_of(&so)?);
+            let _turn = turn.lock().await;
+            erp.submit_new(&work).await.map(drop)
+        }
+    })
+    .await
 }
 
 /// Writes the company into the ERP through its REST API (`erp` is its `connect` info).
 pub async fn seed_erp(erp: &Value, c: &Company<'_>) -> Result<()> {
-    let erp = Erp::connect(erp)?;
+    let erp = Arc::new(Erp::connect(erp)?);
     company(&erp, c).await?;
     insert_all(&erp, &c.sites()).await?;
     insert_all(&erp, &c.suppliers()).await?;
@@ -167,13 +196,14 @@ pub fn company_extra() -> Value {
         .expect("data/company.json is JSON (a test reads it)")
 }
 
-/// Loads the fictional company into the ERP and the CRM, dated from today.
+/// Loads the fictional company, at its scale (`scale.rs`), into the ERP and the CRM, dated from
+/// the plant's first day.
 pub async fn seed(erp: &Value, crm: &Value, data: &Value) -> Result<()> {
-    let extra = company_extra();
+    let (data, extra) = scale::enlarge(data, &company_extra());
     let c = Company {
-        data,
+        data: &data,
         extra: &extra,
-        today: Day::today(),
+        today: Day::plant(),
     };
     seed_erp(erp, &c).await.context("the ERP")?;
     crm::seed(crm, &c).await.context("the CRM")
@@ -238,21 +268,14 @@ mod tests {
     }
 
     #[test]
-    fn the_orders_note_keeps_to_the_presss_line() {
-        let note = orders_note(&data()).unwrap();
-        let text = note["content"].as_str().unwrap();
-        assert!(text.contains("A-1") && !text.contains("\"Z\""), "{text}");
-    }
-
-    #[test]
     fn every_record_is_marked_with_the_company_and_the_stock_gap_is_said() {
         with(|c| {
             assert_eq!(c.company_doc()["abbr"], "RC");
             let notes = notes(c).unwrap();
-            assert_eq!(notes.len(), 4);
-            let stock = notes[2]["content"].as_str().unwrap();
+            assert_eq!(notes.len(), 3);
+            let stock = notes[1]["content"].as_str().unwrap();
             assert!(stock.contains("P-1: 0 on hand, minimum 1"), "{stock}");
-            assert!(notes[3]["content"].as_str().unwrap().contains("invented"));
+            assert!(notes[2]["content"].as_str().unwrap().contains("invented"));
         });
     }
 
@@ -352,6 +375,22 @@ mod tests {
         assert!(stocked.contains(&&json!("SP-SPN-600")));
         let fictional = extra["fictional"].as_str().unwrap();
         assert!(fictional.contains("invented"), "{fictional}");
+    }
+
+    #[test]
+    fn many_writes_at_once_all_run_and_the_first_error_is_kept() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = rt.block_on(each_at_once((0..20).collect(), |n: usize| {
+            let done = done.clone();
+            async move {
+                done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::ensure!(n != 7, "seven");
+                Ok(())
+            }
+        }));
+        assert_eq!(r.unwrap_err().to_string(), "seven");
+        assert_eq!(done.load(std::sync::atomic::Ordering::SeqCst), 20);
     }
 
     #[test]

@@ -2,7 +2,8 @@
 
 A benchmark of a whole incident across five systems at a fictional stamping plant. A press's spindle bearing fails. A
 team has to find out what failed from the evidence, source the right part with approval, get it on a truck, schedule the
-repair, tell the customers and record that in the CRM. Its world has five parts:
+repair, tell the customer of every open order on the press's line due within three days and record that in the CRM. Its
+world has five parts:
 
 | Part | Integration | What it holds |
 |---|---|---|
@@ -16,7 +17,15 @@ repair, tell the customers and record that in the CRM. Its world has five parts:
 
 **Ridgeline Components is fictional.** Every name, order and number is invented (`data/company.json` says so, and so does a
 Note in the ERP); the plant is simulated and the systems are open-source stand-ins. `seed` writes it once into the base world
-that every run starts from, dated from the day it runs:
+that every run starts from, dated from the plant's first day, 2026-03-10 (the `plant_start` of the hub and the plant, so the
+ERP, the CRM and the plant keep one calendar).
+
+**At the plant's scale** (`src/scale.rs`, version 0.3.0): besides the factory example's three customers and eight orders,
+the company has 37 more customers (2 or 3 contacts each in the CRM), 50 more stamped parts with their BOMs and stock, and two
+months of open orders on every line: 1,083 orders in all, each a sales order and a work order with its job card in the ERP
+and an opportunity in the CRM. They are generated from a fixed seed, so every base is the same and the score knows which
+orders the outage affects: the 16 orders on Line A due within three days (`AFFECTED_DAYS`), from 14 customers. No note
+lists them; the team finds them in the ERP. Generated orders' ids look like customers' PO numbers (`PO-41006`).
 
 | Where | What |
 |---|---|
@@ -25,8 +34,8 @@ that every run starts from, dated from the day it runs:
 | ERP, maintenance | Each press as an asset; its plan (`Asset Maintenance`) and its history as logs |
 | ERP, purchasing | Suppliers; list prices, and what each supplier last charged, in `Standard Buying` |
 | ERP, stock | Opening stock. The failing press's part, `SP-SPN-800`, has none, against a shelf minimum of 1 |
-| ERP, sales | The three customers, and a submitted sales order per order, due within the week (`po_no` is the order's id, like `A-1`) |
-| CRM | The customers as accounts, their contacts, and an open opportunity per order, closing on its due date |
+| ERP, sales | The customers, and a submitted sales order per order (`po_no` is the order's id, like `A-1` or `PO-41006`) |
+| CRM | The customers as accounts (with domain, LinkedIn, revenue and address), their contacts, and an open opportunity per order, closing on its due date |
 
 **Build it:** `ARENA_BENCHMARK=factory cargo run -p arenad -- base` from `core/`, after building the packages, with the Postgres
 of `deploy/compose.yml` running, a current Sculptured on `PATH`, the images of the five parts present, and arenad stopped. It makes the base world unless it exists, and exits; a run makes it too if
@@ -60,7 +69,8 @@ It is `opt_in`, so arenad's default stays the retail example; choose it with `AR
   a change's id is made up as a run goes:
   `alarm_tripped`, `diagnosis_outer_race`, `qualified_technician_dispatched`, `correct_part_ordered_and_approved`,
   `purchase_order_in_erp`, `freight_booked_on_approval`, `shipment_reached_plant`, `repair_scheduled`,
-  `customers_notified`, `crm_accounts_updated` (a note on the account of every customer with orders on the line) and
+  `customers_notified` (every customer with an affected order), `affected_orders_noticed` (an approved notice sent for
+  every affected order), `crm_accounts_updated` (a note on the account of every customer with affected orders) and
   `crm_close_dates_moved` (for each approved notice, its order's opportunity closes on the notice's new date). A branch passes
   when all pass. They are in the check's `checks`, and the ones that failed in
   its `differing_rows`.
@@ -115,6 +125,14 @@ compiles but has not been run yet. **Not
 run:** real agents or models, a rerun or fork of this world, and `arena-part-check` on
 `isaac-sim-standin`. Each new run makes arenad check that the base save exists, which on ERPNext rebuilds a scratch
 site.
+
+**Verified at the plant's scale (version 0.3.0, 2026-11-05):** `arenad base` built the base world on Linux in about 9
+minutes (`frappe/erpnext:v16.53.0`, `twentycrm/twenty:v2.51.0`, a debug build of Sculptured); while it ran, the ERP held
+1,083 sales orders, work orders and job cards. Sales orders are written five at a time and work orders one at a time
+(they all update the coil's stock row); the CRM is written through Twenty's batch endpoint, since Twenty limits an API key
+to 100 requests a minute (agents' CRM calls meet the same limit). `cargo test -p arena-factory` passes. **Not run at this
+scale:** the live scripted test, which now finds the affected orders in the ERP and notifies all of them. The
+verifications below are of version 0.2.0 (three customers, eight orders).
 
 **Verified with the company and the CRM (2026-11-04):** `live_factory_right_path_passes_and_wrong_path_fails` passed on
 Linux, in about 290 s, with the seed above, `frappe/erpnext:v16.53.0`, `twentycrm/twenty:v2.51.0`, a debug build of Sculptured,

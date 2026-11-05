@@ -3,6 +3,29 @@ use anyhow::{anyhow, bail, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
 
+/// How many times a request that hit a lock is sent.
+const TRIES: u64 = 12;
+
+/// How long to wait before try `n + 1`: longer each time, with jitter so that writers that
+/// collided don't collide again.
+fn backoff(n: u64) -> std::time::Duration {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let jitter = nanos.map_or(0, |d| u64::from(d.subsec_nanos()) % 500);
+    std::time::Duration::from_millis(250 * n + jitter)
+}
+
+/// Whether Frappe's error says MariaDB gave up on a lock (the write was rolled back).
+fn is_lock_failure(text: &str) -> bool {
+    [
+        "Deadlock",
+        "Lock wait timeout",
+        "QueryDeadlockError",
+        "QueryTimeoutError",
+    ]
+    .iter()
+    .any(|m| text.contains(m))
+}
+
 pub struct Erp {
     client: reqwest::Client,
     base: String,
@@ -39,19 +62,37 @@ impl Erp {
             .header("Authorization", &self.auth)
     }
 
-    async fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
-        let mut r = self.authed(method, format!("{}/api/{path}", self.base));
+    /// One request: the answer's status and text.
+    async fn once(
+        &self,
+        method: &Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<(u16, String)> {
+        let mut r = self.authed(method.clone(), format!("{}/api/{path}", self.base));
         if let Some(body) = body {
             r = r.json(body);
         }
         let answer = r.send().await?;
-        let status = answer.status();
-        let text = answer.text().await?;
-        if !status.is_success() {
-            bail!("{path}: {status}: {}", refusal(&text));
+        Ok((answer.status().as_u16(), answer.text().await?))
+    }
+
+    /// Sends a request, again (up to [`TRIES`] times) when MariaDB gave up on a lock: the seed
+    /// writes several documents at once, and Frappe rolls a deadlocked one back whole.
+    async fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let (status, text) = self.once(&method, path, body).await?;
+            if (200..300).contains(&status) {
+                let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                return Ok(v["data"].clone());
+            }
+            if tries >= TRIES || !is_lock_failure(&text) {
+                bail!("{path}: {status}: {}", refusal(&text));
+            }
+            tokio::time::sleep(backoff(tries)).await;
         }
-        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok(v["data"].clone())
     }
 
     /// Writes `doc`; the document as saved.
@@ -130,6 +171,12 @@ mod tests {
         let info = json!({"url": "u/", "site": "s", "api_key": "k", "api_secret": "x"});
         let erp = Erp::connect(&info).unwrap();
         assert_eq!((erp.base.as_str(), erp.auth.as_str()), ("u", "token k:x"));
+    }
+
+    #[test]
+    fn only_a_lock_failure_is_sent_again() {
+        assert!(is_lock_failure(r#"{"exc_type": "QueryDeadlockError"}"#));
+        assert!(!is_lock_failure(r#"{"exception": "no such item"}"#));
     }
 
     #[test]

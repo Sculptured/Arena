@@ -36,11 +36,10 @@ use serde_json::{json, Map, Value};
 const MACHINE: &str = "PR-A1";
 const PART: &str = "SP-SPN-800";
 const VENDOR: &str = "Midstate Bearing & Spindle";
-const CUSTOMERS: [(&str, &str); 3] = [
-    ("Northfield Motors", "A-1"),
-    ("Arcadia Trucks", "A-2"),
-    ("Velo EV", "A-3"),
-];
+/// The press's line, as the ERP's workstation, and the last due date the outage affects (the
+/// plant's first day, 2026-03-10, plus three days).
+const LINE_WORKSTATION: &str = "Press Line A";
+const AFFECTED_UNTIL: &str = "2026-03-13";
 const FAILURE: &str = "Spindle bearing outer race: peak at BPFO 47.98 Hz";
 const CARRIER: &str = "Interstate Hotshot";
 const NEW_DATE: &str = "2026-03-14";
@@ -238,13 +237,62 @@ impl Calls<'_> {
         Ok(())
     }
 
+    /// `field` of the documents of `doctype` matching `filters`, all of them.
+    async fn listed(
+        &self,
+        doctype: &str,
+        filters: Value,
+        field: &str,
+    ) -> Result<Vec<Value>, String> {
+        let args = json!({"doctype": doctype, "filters": filters, "fields": [field], "limit": 0});
+        let rows = self.call("list_docs", args).await?;
+        Ok(rows.as_array().ok_or("no rows")?.clone())
+    }
+
+    /// The orders the outage affects, `[order id, customer]`: job cards on the line's workstation,
+    /// their work orders due by the end of the window, and those orders' sales orders.
+    async fn affected_orders(&self) -> Result<Vec<(String, String)>, String> {
+        let cards = self.listed(
+            "Job Card",
+            json!({"workstation": LINE_WORKSTATION}),
+            "work_order",
+        );
+        let works: Vec<Value> = cards
+            .await?
+            .iter()
+            .map(|c| c["work_order"].clone())
+            .collect();
+        let due = json!([
+            ["name", "in", works],
+            ["expected_delivery_date", "<=", AFFECTED_UNTIL]
+        ]);
+        let sales = self.listed("Work Order", due, "sales_order").await?;
+        let sales: Vec<Value> = sales.iter().map(|w| w["sales_order"].clone()).collect();
+        let args = json!({"doctype": "Sales Order", "filters": [["name", "in", sales]],
+                          "fields": ["po_no", "customer"], "limit": 0});
+        let rows = self.call("list_docs", args).await?;
+        let text = |r: &Value, k: &str| r[k].as_str().unwrap_or_default().to_string();
+        let rows = rows.as_array().ok_or("no sales orders")?;
+        Ok(rows
+            .iter()
+            .map(|r| (text(r, "po_no"), text(r, "customer")))
+            .collect())
+    }
+
     async fn propose_notices(&self) -> Result<(), String> {
-        for (customer, order) in CUSTOMERS {
+        let orders = self.affected_orders().await?;
+        self.put("orders", json!(orders));
+        for (order, customer) in &orders {
             let notice = json!({"customer": customer, "order": order, "new_date": NEW_DATE,
                                 "message": NOTICE});
             self.propose(order, "customer_notice", notice).await?;
         }
         Ok(())
+    }
+
+    /// The affected orders Planning found, from the notebook.
+    fn orders(&self) -> Result<Vec<(String, String)>, String> {
+        serde_json::from_value(self.got("orders")?).map_err(|e| e.to_string())
     }
 }
 
@@ -259,8 +307,8 @@ impl Calls<'_> {
     }
 
     async fn notify(&self) -> Result<(), String> {
-        for (customer, order) in CUSTOMERS {
-            let id = self.approve(order).await?;
+        for (order, customer) in self.orders()? {
+            let id = self.approve(&order).await?;
             let send = json!({"proposal_id": id, "customer": customer, "order": order,
                               "new_date": NEW_DATE, "message": NOTICE});
             self.call("notify_customer", send).await?;
@@ -296,25 +344,26 @@ impl Calls<'_> {
         self.record_in_crm().await
     }
 
-    /// A note on each customer's account, and the noticed order's opportunity moved to the new date.
+    /// A note on each customer's account, and each noticed order's opportunity moved to the new
+    /// date.
     async fn record_in_crm(&self) -> Result<(), String> {
-        for (customer, order) in CUSTOMERS {
-            let found = self
-                .call("crm_find_account", json!({"name": customer}))
-                .await?;
-            let account = &found["accounts"][0];
-            let note = json!({"account_id": account["id"], "title": format!("{MACHINE} down"),
-                              "body": NOTICE});
+        let orders = self.orders()?;
+        let mut customers: Vec<&String> = orders.iter().map(|(_, c)| c).collect();
+        customers.sort();
+        customers.dedup();
+        for customer in customers {
+            let found = self.call("crm_find_account", json!({"name": customer, "limit": 1}));
+            let note = json!({"account_id": found.await?["accounts"][0]["id"],
+                              "title": format!("{MACHINE} down"), "body": NOTICE});
             self.call("crm_log_note", note).await?;
-            let deals = account["opportunities"]
-                .as_array()
-                .ok_or("no opportunities")?;
-            let of_order = |d: &&Value| {
-                let name = d["name"].as_str().unwrap_or_default();
-                name.starts_with(&format!("{order} "))
-            };
-            let deal = deals.iter().find(of_order).ok_or("no opportunity")?;
-            let moved = json!({"id": deal["id"], "close_date": NEW_DATE});
+        }
+        for (order, _) in &orders {
+            let found = self.call(
+                "crm_find_opportunities",
+                json!({"name": format!("{order} ")}),
+            );
+            let deal = found.await?["opportunities"][0]["id"].clone();
+            let moved = json!({"id": deal, "close_date": NEW_DATE});
             self.call("crm_update_opportunity", moved).await?;
         }
         Ok(())
