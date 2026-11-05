@@ -1,0 +1,24 @@
+[package]
+name = "arena-twenty-crm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arena_twenty_crm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arena-twenty-crm"
+path = "src/main.rs"
+
+[dependencies]
+arena-part = { path = "../../kits/rust", features = ["postgres", "compose"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true

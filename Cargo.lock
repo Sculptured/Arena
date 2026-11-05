@@ -149,6 +149,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-twenty-crm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arena-part",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"

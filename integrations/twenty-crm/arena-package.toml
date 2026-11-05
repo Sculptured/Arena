@@ -1,0 +1,7 @@
+kind = "integration"
+name = "twenty-crm"
+version = "0.1.0"
+protocol = 1
+run = { command = ["${ARENA_BIN_DIR}/arena-twenty-crm"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { project = { type = "string", description = "the compose project of the database server, and the prefix of the instances' (default arena_twenty); read by the first start only" }, db_port = { type = "integer", description = "the database server's port on 127.0.0.1 (default 5546); read by the first start only" } } }

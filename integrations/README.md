@@ -21,6 +21,7 @@ The table is in the main `README.md`, with what was verified. Each folder has a 
 | `service` | any Docker Compose project per instance |
 | `mariadb` | a MariaDB database per instance |
 | `erpnext` | an ERPNext site per instance |
+| `twenty-crm` | a Twenty CRM server per instance, on its own database |
 | `sculptured` | a Sculptured server (approvals) per instance |
 | `ridgeline-hub` | the factory's outside companies, on the arena clock |
 | `isaac-sim` | the factory plant on Isaac Sim, or a stand-in |

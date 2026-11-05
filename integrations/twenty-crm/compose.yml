@@ -1,0 +1,29 @@
+# The twenty-crm integration's database server: one Postgres holding every instance and save as a
+# database. Images are never pulled; it listens on 127.0.0.1 only. Instances join its network.
+services:
+  db:
+    image: ${ARENA_TWENTY_PG_IMAGE:-postgres:17-alpine}
+    pull_policy: never
+    container_name: ${ARENA_TWENTY_NAME:?set ARENA_TWENTY_NAME}-db
+    restart: on-failure
+    environment:
+      POSTGRES_USER: arena
+      POSTGRES_PASSWORD: arena
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "arena", "-d", "postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    ports:
+      - "127.0.0.1:${ARENA_TWENTY_DB_PORT:?set ARENA_TWENTY_DB_PORT}:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+
+volumes:
+  db:
+    name: ${ARENA_TWENTY_NAME}-db
+
+networks:
+  default:
+    name: ${ARENA_TWENTY_NAME}

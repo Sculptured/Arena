@@ -1,0 +1,36 @@
+# One Twenty server with a Redis of its own, on one database of the integration's server. There is
+# no worker service and no cron registration: a CRM instance changes only through tool calls. The
+# image is pinned and never pulled; the server listens on 127.0.0.1 only.
+services:
+  server:
+    image: ${ARENA_TWENTY_IMAGE:-twentycrm/twenty:v2.51.0}
+    pull_policy: never
+    container_name: ${ARENA_TWENTY_NAME:?set ARENA_TWENTY_NAME}-${ARENA_TWENTY_INSTANCE:?set ARENA_TWENTY_INSTANCE}-server
+    restart: on-failure
+    depends_on: [redis]
+    environment:
+      PG_DATABASE_URL: postgres://arena:arena@db:5432/${ARENA_TWENTY_DB:?set ARENA_TWENTY_DB}
+      REDIS_URL: redis://redis:6379
+      SERVER_URL: http://127.0.0.1:${ARENA_TWENTY_PORT:?set ARENA_TWENTY_PORT}
+      # Only signs local sessions; every key that matters is in the database.
+      APP_SECRET: arena-twenty-local-only
+      DISABLE_DB_MIGRATIONS: ${ARENA_TWENTY_NO_MIGRATIONS:-true}
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+      TELEMETRY_ENABLED: "false"
+      ANALYTICS_ENABLED: "false"
+      STORAGE_TYPE: local
+    ports:
+      - "127.0.0.1:${ARENA_TWENTY_PORT}:3000"
+    networks: [default, server]
+
+  redis:
+    image: redis:6.2-alpine
+    pull_policy: never
+    container_name: ${ARENA_TWENTY_NAME}-${ARENA_TWENTY_INSTANCE}-redis
+    restart: on-failure
+    command: ["redis-server", "--save", "", "--maxmemory-policy", "noeviction"]
+
+networks:
+  server:
+    external: true
+    name: ${ARENA_TWENTY_NAME}
