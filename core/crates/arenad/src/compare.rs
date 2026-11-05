@@ -26,15 +26,17 @@ pub fn summary(branch: &Branch, events: &[Event]) -> Value {
     let seconds = branch
         .ended_at
         .map(|t| (t - branch.created_at).num_milliseconds() as f64 / 1000.0);
+    // Tokens as arena's metrics count them (a client's calls once each), not the ends' own sums.
+    let m = metrics(branch, events, prices::table(), chrono::Utc::now());
     json!({
         "status": branch.status,
         "restore_mode": branch.restore_mode,
         "restored": branch.restored,
         "seconds": seconds,
-        "tokens": ends.iter().map(|e| e.tokens.unwrap_or(0)).sum::<i64>(),
+        "tokens": m.tokens,
         "cost_usd": ends.iter().try_fold(0.0f64, |c, e| add_cost(Some(c), e.cost_usd)),
         "cost_source": combined_source(&ends),
-        "metrics": metrics(branch, events, prices::table(), chrono::Utc::now()),
+        "metrics": m,
     })
 }
 
@@ -229,10 +231,17 @@ mod tests {
         )
     }
 
+    fn start(seq: i64, agent: &str) -> Event {
+        let p = json!({"name": agent, "kind": "claude_code", "model": "m"});
+        ev(seq, agent, EventKind::AgentStart, p)
+    }
+
     #[test]
     fn summary_shows_dollars_only_when_every_agent_has_them() {
         // One agent with a dollar figure, one without (Codex): tokens summed, no dollars.
         let mixed = [
+            start(0, "a"),
+            start(0, "b"),
             end(1, "a", 100, Some(0.5), Some("api_equivalent_estimate")),
             end(2, "b", 50, None, None),
         ];

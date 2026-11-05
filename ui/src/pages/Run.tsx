@@ -108,7 +108,7 @@ export default function Run() {
         <span className="spacer" />
         {sm.scope && <span className="muted small">{sm.scope}</span>}
         <span className="stat"><span className="label">Seconds{sm.live ? ' so far' : ''}</span>{sm.seconds != null ? sm.seconds.toFixed(1) : '–'}</span>
-        <span className="stat"><span className="label">Tokens</span>{sm.tokens}</span>
+        <span className="stat"><span className="label">Tokens</span>{detail.metrics?.tokens ?? sm.tokens}</span>
         <span className="stat"><span className="label">Cost</span>{formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown))}</span>
       </header>
       <div className="run-body">
