@@ -33,6 +33,11 @@ def say_minutes(s: float) -> str:
     return f"{m:.0f} minutes" if m >= 2 else f"{s:.0f} seconds"
 
 
+def cap(text: str) -> str:
+    """The first letter upper case, the rest as is (str.capitalize lowers "design A")."""
+    return text[:1].upper() + text[1:]
+
+
 def mean(xs: list) -> float:
     return sum(xs) / len(xs) if xs else 0.0
 
@@ -126,10 +131,10 @@ class Story:
         tot = self.total(best)
         if len(top) == 1:
             others = ", ".join(f"{self.checks(k):g} for {self.name(k)}" for k in self.keys if k != best)
-            text = f"Arena scores every run with the same checks. {self.name(best).capitalize()} passed the most: " \
+            text = f"Arena scores every run with the same checks. {cap(self.name(best))} passed the most: " \
                    f"{self.checks(best):g} of {tot}, against {others}."
         else:
-            names = " and ".join(self.name(k) for k in top).capitalize()
+            names = cap(" and ".join(self.name(k) for k in top))
             fast = min(top, key=self.est)
             text = f"Arena scores every run with the same checks. {names} tied, with " \
                    f"{self.checks(best):g} of {tot}; {self.name(fast)} got there faster."
@@ -189,7 +194,7 @@ class Story:
         r = self.runs(k)[0]
         costs = ", ".join(f"{self.name(k)} {say_money(self.cost(k))}" for k in self.keys)
         return (f"Arena times its own work, such as saving and restoring the world, and takes it out: "
-                f"{self.name(k).capitalize()}'s first run took {r['measured_s']:.0f} seconds, {r['overhead_s']:.0f} "
+                f"{cap(self.name(k))}'s first run took {r['measured_s']:.0f} seconds, {r['overhead_s']:.0f} "
                 f"of them Arena's, so about {r['estimated_s']:.0f} in production. Per run, at the A P I "
                 f"prices Claude Code reports: {costs}.")
 

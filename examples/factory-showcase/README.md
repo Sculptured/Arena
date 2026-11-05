@@ -28,6 +28,8 @@ RESULTS_PLACEHOLDER
 | `designs/engine.py` | Routes Arena's recorded messages to the agents, wakes waiting agents, ends the run |
 | `designs/run.py` | Runs a design (or a fork of a recorded run) through Arena's external-run API |
 | `designs/test_engine.py` | Offline tests of the engine (no model, no Arena) |
+| `make_video.sh` | The video from recorded runs: metrics, UI captures, charts, narration, edit |
+| `capture/` | Playwright captures of Arena's UI on the runs (`shots.py` lists them from `metrics.json`) |
 | `export_metrics.py` | `metrics.json` for the video (`arena-video`'s `video/README.md`), from Arena's API only |
 
 The designs live here, outside Arena's core: Arena only records. What Arena itself gained for this showcase is in
@@ -85,21 +87,27 @@ python run.py --design C --out $W/runs/C-fork --fork-of <branch> --at-seq <seq> 
 curl -s "http://127.0.0.1:4510/api/compare?a=<branch>&b=<branch>"
 ```
 
-## Metrics for the video
+## The video
+
+`make_video.sh` builds the narrated video from recorded runs; it runs no agent. It exports
+`metrics.json` from Arena, captures Arena's UI on those runs (`capture/`), draws the charts, writes
+the narration from the metrics (`video/story.py`: every number and every comparison, including
+which design did best, comes from the file) and edits it all with the plant render:
 
 ```bash
-python export_metrics.py --design A=<branch>,<branch> --design B=... --design C=... --fork <branch> \
-    --out $W/runs/metrics.json
+./make_video.sh $W/video $W/plant.mp4 --design A=<branch>,<branch> --design B=... --design C=...
 ```
 
-Runs recorded before the usage meter (commit 541d8dc) counted Claude Code's placeholder output
-counts: their input tokens, call counts and context are right once read by a current arenad, and
-their cost is Claude Code's own, but their output tokens are too low. The video charts input tokens.
+Each step also runs alone: `python export_metrics.py --design ... --out metrics.json`,
+`python capture/shots.py metrics.json > shots.json && node capture/capture.mjs shots.json ui/`,
+and the toolkit's `charts.py`, `showcase.py`, `narrate.py` and `build.py` (`video/README.md`).
+`--draft "why"` stamps every frame, for a cut made before every repeat is in.
 
 ## Tests
 
 ```bash
 (cd designs && python -m unittest test_engine test_usage)      # the engine and the usage meter, offline
+(cd video && python -m unittest test_story)                    # the narration's sentences, offline
 cargo test -p arena-factory -p arena-erpnext -p arena-twenty-crm # the benchmark and the integrations
 (cd core && cargo test -p arenad --test external)               # the usage endpoint (needs Arena's Postgres)
 ```
