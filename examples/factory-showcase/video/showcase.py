@@ -31,6 +31,17 @@ DESIGN_TEXT = {
          "the whole incident, and every tool result, flows through one context.",
 }
 
+RECREATE = [
+    "# examples/factory-showcase/README.md has the details",
+    "docker compose -f deploy/compose.yml up -d",
+    "cargo build -p arena-factory -p arena-erpnext -p arena-twenty-crm",
+    "(cd core && ARENA_BENCHMARK=factory cargo run -p arenad -- base)",
+    "(cd core && ARENA_UI_DIST=../ui/dist cargo run -p arenad)",
+    "# each design, then the video",
+    "python designs/run.py --design A --out runs/A-1",
+    "./make_video.sh out plant.mp4 --design A=<branch> ...",
+]
+
 
 def scene(sid, text, **edit):
     return {"id": sid, "text": text}, dict(edit, id=sid)
@@ -95,8 +106,8 @@ def closing(s: Story, f: Path) -> list:
               chapter="Fork and retry"),
         scene("recreate", "To recreate all of this, the commands are in the showcase's read me: build "
               "Arena, seed the base world, start arenad, run each design, then export the metrics "
-              "and build this video.", type="title", title="Recreate it",
-              subtitle="examples/factory-showcase/README.md", chapter="Recreate it"),
+              "and build this video.", type="title", title="Recreate it", code=RECREATE,
+              chapter="Recreate it"),
         scene("outro", s.outro(), type="title", title="Arena", subtitle="Stage agent systems before "
               "they meet the real world", chapter="Outro"),
     ]

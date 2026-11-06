@@ -40,7 +40,9 @@ def motion_filter(kind, frames):
 
 def image_chain(sc, total, tmp):
     src = tmp / f"{sc['id']}.png"
-    if sc["type"] == "title":
+    if sc["type"] == "title" and sc.get("code"):
+        cards.code_card(sc.get("title", ""), sc["code"], src)
+    elif sc["type"] == "title":
         cards.title_card(sc.get("title", ""), sc.get("subtitle", ""), src)
     else:
         cards.image_canvas(sc["src"], src, sc.get("margin", 60))

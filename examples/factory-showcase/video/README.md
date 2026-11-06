@@ -52,6 +52,7 @@ watermark: "SAMPLE — NOT RESULTS"   # optional, on every frame (leave out for 
 music: null                   # a file path adds quiet music (music_volume, default 0.07)
 scenes:
   - {id: a, type: title, title: "…", subtitle: "…", duration: 3, chapter: "Chapter name"}
+  - {id: k, type: title, title: "…", code: ["# a comment", "a command"]}   # commands on a card
   - {id: b, type: image, src: shot.png, motion: zoom_in|zoom_out|pan_left|pan_right|none, margin: 60}
   - {id: c, type: clip,  src: run.mp4, max_speed: 8, lower_third: {title: "…", subtitle: "…", at: 1, for: 4.5}}
 ```

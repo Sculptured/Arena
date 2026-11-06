@@ -57,10 +57,11 @@ async function openContext(browser, cfg, shot, out) {
   // enough to read in a video.
   const size = { width: cfg.width ?? 1920, height: cfg.height ?? 1080 };
   const scale = cfg.scale ?? 1;
-  const pixels = { width: Math.round(size.width * scale), height: Math.round(size.height * scale) };
   const ctx = await browser.newContext({
     viewport: size, deviceScaleFactor: scale, colorScheme: shot.scheme ?? cfg.scheme ?? 'dark',
-    recordVideo: shot.record ? { dir: out, size: pixels } : undefined,
+    // Playwright records at the viewport's size whatever the scale (a larger frame leaves the page
+    // in a corner), so recordings are viewport-sized and the editor scales them up.
+    recordVideo: shot.record ? { dir: out, size } : undefined,
   });
   return ctx;
 }
