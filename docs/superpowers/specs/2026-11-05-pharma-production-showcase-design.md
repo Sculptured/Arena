@@ -160,3 +160,55 @@ check thresholds, the board layouts, and the scene's dressing.
 - SENAITE and Paperless-ngx are time-boxed; simulated stand-ins if they don't fit.
 - The factory showcase video stays paused; its tools are reused.
 - Deadline assumed to be the summit.
+
+## The control plane (user, 2026-11-05)
+
+User: "Do it so it looks like a control plane for monitoring agent deployments in production in
+Sculptured and integrate that form into Arena as well. So a live timeline and stuff like that to see
+what actions its taking to interact with databases, ERP systems, retrieve data from APIs, MCPs, etc.
+Make it modeled off of like a control system for industrial applications but for your agent
+deployments and org. Then integrate the ideas above." This settles the board question: the board team
+is what runs (Sculptured drives it), and Sculptured Control is where it is watched.
+
+**One form, two places.** Sculptured Control is the control plane for agent deployments in production.
+An Arena run (staging) is shown in the same form, both inside Sculptured Control (it already reads Arena
+runs through `control/source.ts`) and in Arena's own UI, so staging and production read the same.
+
+**Modelled on industrial control systems** (high-performance HMI, ISA-101; alarm management, ISA-18.2):
+
+- **Display hierarchy.** Level 1 *organisation overview*: every deployment as a unit with its state,
+  alarms and key figures. Level 2 *deployment* (the process view): the team's agents as units and the
+  systems they act on (ERP, database, API, MCP server, messaging, approvals, plant) as equipment, with
+  live action flows between them. Level 3 *agent*: its actions, context, tokens, permissions. Level 4
+  *trace*: one action's full request and result.
+- **Live action timeline** (a sequence-of-events recorder): every action an agent takes, in time order,
+  in lanes per agent, each marked with the system it touched (ERP read, ERP write, DB query, API call,
+  MCP tool, message to an agent, approval request), its duration and outcome. Writes stand out from
+  reads; refusals and errors stand out from both.
+- **Trends**: actions per minute per system, context size per call, tokens and cost, latency.
+- **Look**: neutral grey screens; colour only for abnormal states; status always as glyph + word, never
+  colour alone; dense, calm, no decoration.
+- **Alarms** with priority, acknowledge and shelve, from conditions (an agent failed, a refused write, a
+  safety check tripped, a budget crossed). **Interlocks and permissives**: the approvals gate and each
+  agent's decision rights shown as interlocks on the process view (a write that needs a permit shows
+  it, and who granted it). **Trip**: Emergency stop exists already.
+- **Which system an action touched** comes from the world, not guesses: each integration declares the
+  kind of system it is and, for open-source stand-ins, what it stands in for (for example
+  `{kind: "erp", product: "ERPNext", stands_in_for: "SAP S/4HANA"}`), an additive field in the part's
+  describe; each tool says whether it reads or writes. Production deployments map their own tools the
+  same way (MCP server, HTTP API, database).
+
+**Test suites shown in the same form**: a suite result is a Level 1-style overview of scenarios ×
+repeats, each cell a run that opens in the process view.
+
+## Build order (all without agent runs; scripted stand-in agents in tests)
+
+1. Arena core: system metadata in describe; test suites (run, aggregate, compare); the control form in
+   Arena's UI (process view, live action timeline, trends, suite overview).
+2. The pharma world: `benchmarks/pharma`, Larchmont's seeded data in ERPNext and Twenty, a simulated
+   LIMS and carriers part, the scenario variants, named checks and safety checks, a scripted gold path.
+3. Sculptured: Control as the control plane (the hierarchy, process view, live action timeline, trends,
+   alarms and interlocks) for deployments and Arena runs; "Run in Arena" from a board (Sculptured
+   drives its own agents through Arena's external-run API).
+4. When credits allow: the runs (suite × deployments × repeats, a tuning re-run), the Isaac render of
+   the filling line, and the video.
