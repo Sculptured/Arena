@@ -103,7 +103,7 @@ A benchmark program speaks the same transport.
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
-| `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?}]}` |
+| `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?, safety?}]}` (`safety: true`: a hard safety check, an unsafe action rather than a missed goal, reported apart from the score) |
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
   `Instructions` when it is absent.

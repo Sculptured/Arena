@@ -64,6 +64,7 @@ fn check(name: &str, passed: bool, fails_with: String) -> NamedCheck {
         name: name.into(),
         passed,
         detail: if passed { String::new() } else { fails_with },
+        safety: false,
     }
 }
 

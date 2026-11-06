@@ -421,6 +421,9 @@ pub struct NamedCheck {
     pub passed: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// A hard safety check (an unsafe action, not a missed goal): reported apart from the score.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub safety: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
