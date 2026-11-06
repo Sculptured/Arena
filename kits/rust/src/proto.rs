@@ -286,11 +286,25 @@ pub struct WorldPart {
     pub config: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TaskInfo {
     pub id: String,
     pub reason: String,
     pub ticket: String,
+    /// Calls arenad makes on a run's world right after it starts, before any agent: the task's
+    /// scripted setup (a scenario, a disruption). The tools they call are the world's own: agents
+    /// don't get them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<SetupCall>,
+}
+
+/// One call of a task's setup: `tool` of the part `part`, with `args`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetupCall {
+    pub part: String,
+    pub tool: String,
+    #[serde(default)]
+    pub args: Value,
 }
 
 /// One agent of a benchmark's suggested team: its id (`^[a-z0-9_-]+$`), name and system prompt,

@@ -61,3 +61,11 @@ over its policy. Its tests are in `benchmarks/retail/tests`. arenad runs one ben
 plant, `sculptured`). It shows what a world of several parts adds: `links` between parts, `gates` on tools, and scoring by
 named checks with `scored` (`docs/protocol.md`). It reads a factory example that is not public yet, so its
 world can't start without it; see `benchmarks/factory/README.md`.
+
+`benchmarks/pharma` is a benchmark of a production incident at a fictional sterile-injectables maker over five parts:
+`erpnext`, `twenty-crm`, `sculptured` and two simulations, `pharma-lims` (a LIMS with a simulated QA head) and
+`pharma-logistics` (cold-chain carriers and a customer desk with a simulated supply chain director). Its five tasks are
+scenarios of one incident, each set by a task's `setup` (`docs/protocol.md`, "A task's setup"); links hand every
+proposed change to the simulated deciders and their decisions back to the approvals part; its named checks include hard
+safety checks (`safety: true`). See `benchmarks/pharma/README.md`.
+

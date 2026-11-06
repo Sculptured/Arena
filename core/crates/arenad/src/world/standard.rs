@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use parts::{
-    proto::{Action, BenchDescribe, GoldActions},
+    proto::{Action, BenchDescribe, GoldActions, SetupCall},
     Hub,
 };
 use serde_json::{json, Value};
@@ -128,15 +128,30 @@ pub async fn ensure_base(hub: &Arc<Hub>, bench: &BenchDescribe) -> Result<Saves>
         .with_context(|| format!("making the base save of {}", bench.name))
 }
 
-/// The gold save of each part for `task`: the base plus the task's gold actions, made once.
+/// The gold save of each part for `task`: the base plus the task's setup and its gold actions,
+/// made once.
 pub async fn ensure_gold(hub: &Arc<Hub>, bench: &BenchDescribe, task: &str) -> Result<Saves> {
     let names = gold_names(bench, task);
     let from = ensure_base(hub, bench).await?;
+    let of_task = bench.tasks.iter().find(|t| t.id == task);
+    let setup = of_task.map_or(&[][..], |t| &t.setup[..]);
     ensure_saves(hub, bench, names, Some(from), async |w: &World| {
+        set_up(w, setup).await?;
         apply_gold(w, task).await
     })
     .await
     .with_context(|| format!("making the gold save of task {task}"))
+}
+
+/// Makes a task's setup calls, as a run's start does; the first that fails is the error.
+async fn set_up(world: &World, calls: &[SetupCall]) -> Result<()> {
+    for c in calls {
+        let out = world.call_part_tool(&c.part, &c.tool, c.args.clone(), 0);
+        if let Some(e) = out.await?.error {
+            bail!("the task's setup call {} failed: {e}", c.tool);
+        }
+    }
+    Ok(())
 }
 
 /// Runs the task's gold actions. At least one gold write must succeed (a failing gold action

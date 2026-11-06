@@ -99,6 +99,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena-pharma"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arena-part",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "arena-postgres"
 version = "0.1.0"
 dependencies = [

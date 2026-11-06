@@ -1,0 +1,17 @@
+[project]
+name = "pharma-lims"
+version = "0.1.0"
+description = "arena-part/1 integration: a simulated LIMS (environmental monitoring and batch tests) with a simulated QA head"
+requires-python = ">=3.10"
+dependencies = ["arena-part"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+arena-part = { path = "../../kits/python", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: needs services or hardware not always present"]

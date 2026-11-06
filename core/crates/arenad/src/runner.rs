@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::{
     agents::{AgentResult, AgentRun, Driver, FailureKind},
     app::AppState,
-    exec::{mail_for, BranchCtx},
+    exec::{mail_for, BranchCtx, ToolExec},
     model::*,
     overhead::{self, Cat},
     prompts,
@@ -92,7 +92,22 @@ pub async fn begin_run(
     let started = start_world(state, &bench, planned, start).await;
     let world = setup_or_infra_error(state, &branch_id, started).await?;
     let ctx = BranchCtx::new(branch_id, Arc::new(world), team, task_id.to_string());
-    Ok((run_id, ctx.with_rules(rules)))
+    let ctx = ctx.with_rules(rules);
+    set_up_task(state, &bench, &ctx).await?;
+    Ok((run_id, ctx))
+}
+
+/// Makes the task's setup calls on a new run's world; when one fails, stops the world and ends
+/// the branch `infra_error` with why.
+async fn set_up_task(state: &AppState, bench: &BenchDescribe, ctx: &BranchCtx) -> Result<()> {
+    let task = bench.tasks.iter().find(|t| t.id == ctx.task_id);
+    let calls = task.map_or(&[][..], |t| &t.setup[..]);
+    let Err(e) = ToolExec::new(state.store.clone()).setup(ctx, calls).await else {
+        return Ok(());
+    };
+    ctx.world.stop().await;
+    setup_failed(state, &ctx.branch_id, e.clone()).await;
+    Err(anyhow!(e))
 }
 
 /// What a run's `RunStart` records besides its world.

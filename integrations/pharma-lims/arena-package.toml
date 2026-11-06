@@ -1,0 +1,23 @@
+kind = "integration"
+name = "pharma-lims"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "pharma_lims_part"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", required = ["lims", "lots", "today"], properties = { lims = { type = "object" }, lots = { type = "array" }, today = { type = "string" }, decides = { type = "array" } } }
+
+[[example]]
+tool = "lims_em_results"
+args = { batch = "CVX-2611" }
+
+[[example]]
+tool = "lims_batch_results"
+args = { batch = "CVX-2608" }
+
+[[example]]
+tool = "lims_documents"
+args = {}
+
+[[example]]
+tool = "qa_review"
+args = { id = "chg-1", action = "batch_release", payload = { batch = "CVX-2608" } }

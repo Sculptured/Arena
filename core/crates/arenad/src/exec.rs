@@ -1,4 +1,5 @@
 mod links;
+mod setup;
 mod talk;
 
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
@@ -17,6 +18,7 @@ use crate::{
 };
 
 pub use links::LINK_ACTOR;
+pub use setup::SETUP_ACTOR;
 pub use talk::{handoff_schema, mail_for, HANDOFF, INBOX, MESSAGE};
 
 /// One running branch: its world, team, arena clock and per-agent handoff notes.

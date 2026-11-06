@@ -7,6 +7,8 @@
 //! removed when it ends. Run: `cargo test -p arenad --test factory -- --ignored live_ --nocapture`.
 #[path = "support/app.rs"]
 mod app_support;
+#[path = "support/live_world.rs"]
+mod live_world;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -14,7 +16,6 @@ mod pg;
 
 use std::{
     future::Future,
-    path::PathBuf,
     pin::Pin,
     process::Command,
     sync::{Arc, Mutex},
@@ -26,13 +27,14 @@ use arenad::{
     app::{AppState, Config},
     exec::{BranchCtx, ToolExec},
     model::*,
-    runner,
 };
+use live_world::{path_with_sculptured, scripted_team, walk_for, Stack};
 use packages::{arena, bin_dir, package_roots};
 use parts::{Hub, Registry};
-use pg::{pg_url, Cleanup};
+use pg::Cleanup;
 use serde_json::{json, Map, Value};
 
+const TASK: &str = "press-a1-bearing";
 const MACHINE: &str = "PR-A1";
 const PART: &str = "SP-SPN-800";
 const VENDOR: &str = "Midstate Bearing & Spindle";
@@ -433,105 +435,6 @@ impl Driver for Scripted {
     }
 }
 
-/// The ERPNext stack and server, the saves and the sites of this test; removed on drop.
-struct Stack {
-    id: String,
-    saves: PathBuf,
-}
-
-impl Stack {
-    fn new() -> Stack {
-        let id = format!("t13{}", std::process::id());
-        let saves = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("factory-{id}"));
-        std::fs::create_dir_all(&saves).unwrap();
-        Stack { id, saves }
-    }
-
-    fn env(&self) -> Vec<(String, String)> {
-        let mut out = vec![
-            ("ARENA_PG_URL".to_string(), pg_url()),
-            ("PATH".to_string(), path_with_sculptured()),
-        ];
-        let port = |n: u16| (n + (std::process::id() % 1000) as u16).to_string();
-        for (k, v) in [
-            (
-                "ARENA_ERPNEXT_DB_CONTAINER",
-                format!("arena-erpnext-db-{}", self.id),
-            ),
-            (
-                "ARENA_ERPNEXT_DB_VOLUME",
-                format!("arena-erpnext-db-{}", self.id),
-            ),
-            ("ARENA_ERPNEXT_DB_PORT", port(23000)),
-            (
-                "ARENA_ERPNEXT_PROJECT",
-                format!("arena_erpnext_{}", self.id),
-            ),
-            ("ARENA_ERPNEXT_PORT", port(24000)),
-            ("ARENA_TWENTY_PROJECT", format!("arena_twenty_{}", self.id)),
-            ("ARENA_TWENTY_DB_PORT", port(25000)),
-        ] {
-            out.push((k.to_string(), v));
-        }
-        out
-    }
-}
-
-impl Stack {
-    /// The CRM's servers, then its database server, network and volume.
-    fn remove_crm(&self) {
-        let name = format!("arena-twenty-{}", self.id);
-        let docker = |args: &[&str]| {
-            let out = Command::new("docker").args(args).output();
-            out.map_or(String::new(), |o| {
-                String::from_utf8_lossy(&o.stdout).into_owned()
-            })
-        };
-        for c in docker(&["ps", "-aq", "--filter", &format!("name=^{name}")]).split_whitespace() {
-            docker(&["rm", "-f", "-v", c]);
-        }
-        let project = format!("name=arena_twenty_{}", self.id);
-        for n in docker(&["network", "ls", "-q", "--filter", &project]).split_whitespace() {
-            docker(&["network", "rm", n]);
-        }
-        docker(&["network", "rm", &name]);
-        docker(&["volume", "rm", "-f", &format!("{name}-db")]);
-    }
-}
-
-impl Drop for Stack {
-    fn drop(&mut self) {
-        let db = format!("arena-erpnext-db-{}", self.id);
-        let _ = Command::new("docker")
-            .args(["rm", "-f", "-v", &db])
-            .output();
-        let compose = arena().join("integrations/erpnext/compose.yml");
-        let project = format!("arena_erpnext_{}", self.id);
-        let mut down = Command::new("docker");
-        down.args(["compose", "-p", &project, "-f"]).arg(&compose);
-        down.env("ARENA_ERPNEXT_SITES", self.saves.join("erpnext/.sites"));
-        let _ = down.args(["down", "-v"]).output();
-        let _ = Command::new("docker")
-            .args(["volume", "rm", "-f", &db])
-            .output();
-        self.remove_crm();
-        let _ = std::fs::remove_dir_all(&self.saves);
-    }
-}
-
-/// `PATH` with the Sculptured program to use first: `ARENA_SCULPTURED_BINARY`, else a release build
-/// next to the arena checkout, else the one already on it.
-fn path_with_sculptured() -> String {
-    let path = std::env::var("PATH").unwrap_or_default();
-    let local = arena().join("../sculptured/target/release/sculptured");
-    let set = std::env::var_os("ARENA_SCULPTURED_BINARY").map(PathBuf::from);
-    let binary = set.or_else(|| local.exists().then_some(local));
-    match binary.as_deref().and_then(|b| b.parent()) {
-        Some(dir) => format!("{}:{path}", dir.display()),
-        None => path,
-    }
-}
-
 /// Why this machine can't run the world, if it can't.
 fn missing() -> Option<String> {
     let example = arena().join("../Sculptured-Examples/factory/data/ridgeline.json");
@@ -566,52 +469,9 @@ fn build() {
     assert!(st.success(), "building the package binaries failed");
 }
 
-fn scripted_team(hubteam: parts::proto::BenchTeam) -> Team {
-    let agent = |a: parts::proto::TeamRole| AgentSpec {
-        id: a.id,
-        name: a.name,
-        kind: AgentKind::Open,
-        model: Some("scripted".into()),
-        prompt: a.prompt,
-        provider: None,
-        read_only: a.read_only,
-    };
-    Team {
-        id: hubteam.id,
-        name: hubteam.name,
-        agents: hubteam.agents.into_iter().map(agent).collect(),
-    }
-}
-
-/// Runs the team on one path to its end, polling every 200 ms up to `polls` times; the branch,
-/// the checks that failed, and the branch's events.
-async fn walk_for(
-    state: &Arc<AppState>,
-    team: Team,
-    polls: usize,
-) -> (Branch, CheckPayload, Vec<Event>) {
-    let (_run, id) = runner::start_run(state, "press-a1-bearing", team)
-        .await
-        .unwrap();
-    for _ in 0..polls {
-        let b = state.store.branch(&id).await.unwrap();
-        if b.status != BranchStatus::Running {
-            let evs = state.store.events(&id).await.unwrap();
-            let check = evs.iter().find(|e| e.kind == EventKind::Check);
-            let payload = check
-                .unwrap_or_else(|| panic!("no check: {b:?}"))
-                .payload
-                .clone();
-            return (b, serde_json::from_value(payload).unwrap(), evs);
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    panic!("the branch did not finish");
-}
-
 /// Runs the team on one path to its end (10 minutes at most); the status and the checks.
 async fn walk(state: &Arc<AppState>, team: Team) -> (Branch, CheckPayload) {
-    let (b, check, _) = walk_for(state, team, 3000).await;
+    let (b, check, _) = walk_for(state, TASK, team, 3000).await;
     (b, check)
 }
 
@@ -661,7 +521,7 @@ fn live_factory_right_path_passes_and_wrong_path_fails() {
     build();
     // SAFETY: set before the runtime or any thread that reads the environment starts.
     unsafe { std::env::set_var("ARENA_CLOCK_SPEED", "20") };
-    let stack = Stack::new();
+    let stack = Stack::new("t13");
     let hub = Hub::new(
         Registry::scan(&package_roots()).unwrap(),
         bin_dir(),
@@ -689,7 +549,7 @@ fn live_factory_gold_path_report() {
         // SAFETY: set before the runtime or any thread that reads the environment starts.
         unsafe { std::env::set_var("ARENA_CLOCK_SPEED", "20") };
     }
-    let stack = Stack::new();
+    let stack = Stack::new("t13");
     let hub = Hub::new(
         Registry::scan(&package_roots()).unwrap(),
         bin_dir(),
@@ -704,7 +564,7 @@ async fn report_gold(hub: &Arc<Hub>) {
     let bench = hub.bench_describe("factory").await.unwrap();
     let (state, _clean) = app(hub, "report", true).await;
     let team = scripted_team(bench.team.unwrap());
-    let (b, check, events) = walk_for(&state, team, 18_000).await;
+    let (b, check, events) = walk_for(&state, TASK, team, 18_000).await;
     let m = arenad::metrics::metrics(&b, &events, arenad::prices::table(), chrono::Utc::now());
     let report = json!({"status": b.status, "error": b.error, "check": check, "metrics": m});
     println!("REPORT {}", serde_json::to_string_pretty(&report).unwrap());

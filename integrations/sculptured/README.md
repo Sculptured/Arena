@@ -40,7 +40,9 @@ API.
     open, sends it `propose_change:<args>` (`POST /api/seats/{seat}/send`, intent `instruct`), and reads its
     events (`GET /api/seats/{seat}/events?after=<seq>`) until Sculptured asks about the change (the
     `question-raised` event gives the change's id) or refuses the arguments (the reply of the turn that
-    took the message). It gives the change and writes `change/<id>`. While 8 changes wait, it refuses.
+    took the message). It gives the change and writes `change/<id>`, and gives a world event
+    `change_proposed` whose `data` is the change, so a benchmark's link can hand it to whoever decides it (a
+    simulated person, say). While 8 changes wait, it refuses.
   - `list_changes {}` (read): `GET /api/teams/{team}/changes` (`crates/controld/src/changes.rs`), newest
     first. It reads every change's key.
   - `decide_change {id, approved, note?}` (write): finds the change's open question (`GET
