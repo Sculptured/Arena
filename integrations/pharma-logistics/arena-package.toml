@@ -1,0 +1,23 @@
+kind = "integration"
+name = "pharma-logistics"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "pharma_logistics_part"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", required = ["logistics", "customers", "today"], properties = { logistics = { type = "object" }, customers = { type = "array" }, today = { type = "string" }, defer = { type = "array" } } }
+
+[[example]]
+tool = "qualified_lanes"
+args = {}
+
+[[example]]
+tool = "cold_chain_quotes"
+args = { origin = "US", customer = "St. Brennan Medical Center", qty = 400 }
+
+[[example]]
+tool = "send_customer_notice"
+args = { customer = "St. Brennan Medical Center", order = "PO-SBMC-4471", new_date = "2026-11-10", message = "Your order arrives on 2026-11-10." }
+
+[[example]]
+tool = "supply_review"
+args = { id = "chg-1", action = "stock_reallocation", payload = { batch = "CVX-2598", qty = 1800 } }
