@@ -211,9 +211,9 @@ fn validate_agent_id(id: &str) -> Result<(), ApiError> {
             "agent id {id:?} must match ^[a-z0-9_-]+$"
         )));
     }
-    if id == crate::exec::LINK_ACTOR {
+    if id == crate::exec::LINK_ACTOR || id == crate::exec::SETUP_ACTOR {
         return Err(ApiError::bad(format!(
-            "agent id {id:?} is kept for steps made by a world's links"
+            "agent id {id:?} is kept for steps the world makes (its links, a task's setup)"
         )));
     }
     Ok(())

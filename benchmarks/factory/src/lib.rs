@@ -61,6 +61,7 @@ fn task() -> TaskInfo {
                  every customer whose order the outage affects"
             .into(),
         ticket: team::TICKET.into(),
+        setup: vec![],
     }
 }
 

@@ -442,3 +442,101 @@ fn a_scored_benchmark_checks_the_end_state() {
         assert_scored("scorefail", vec![done()], BranchStatus::Failed, failed).await;
     })
 }
+
+/// Two toy parts, `a` (its program run with `a_args`) and `b`, and a task whose setup makes
+/// `setup`'s calls.
+fn setup_world(tag: &str, a_args: &[&str], setup: &[Value], links: &[Value]) -> ToyRoot {
+    let setup: Vec<String> = setup.iter().map(Value::to_string).collect();
+    let links: Vec<String> = links.iter().map(Value::to_string).collect();
+    let mut args = vec![
+        "bench", "--scored", "--part", "a=toy-a", "--part", "b=toy-b",
+    ];
+    for s in &setup {
+        args.extend(["--setup", s.as_str()]);
+    }
+    for l in &links {
+        args.extend(["--link", l.as_str()]);
+    }
+    package_root(
+        tag,
+        &[
+            toy("toy-a", "integration", a_args),
+            toy("toy-b", "integration", &["part", "--prefix", "b_"]),
+            toy("toybench", "benchmark", &args),
+        ],
+    )
+}
+
+/// The tools agents get in `fx`'s world.
+async fn agent_tools(fx: &Fx) -> Vec<String> {
+    let bench = fx._hub.hub.bench_describe("toybench").await.unwrap();
+    let planned = plan(&fx._hub.hub, &bench).await.unwrap();
+    planned.tools.into_iter().map(|(t, _)| t.name).collect()
+}
+
+/// A task's setup is made before any agent, as steps of the actor `setup` that save what they
+/// changed; its tool is the world's own, and the events it gives set off links.
+#[test]
+fn a_tasks_setup_runs_before_the_agents() {
+    run(async {
+        let poke = json!({"part": "a", "tool": "a_poke"});
+        let link = json!({"from": "a", "event": "rung", "to": "b", "tool": "b_poke"});
+        let a_args = ["part", "--prefix", "a_", "--tool-event", "rung"];
+        let root = setup_world("setup", &a_args, &[poke], &[link]);
+        let up = FakeUpstream::start(vec![call("a_peek"), done()]).await;
+        let fx = setup("setup", root, &up).await;
+        assert_eq!(agent_tools(&fx).await, ["a_peek", "b_peek"]);
+        let (_, evs) = fx.run_to_end().await;
+        let is_call = |e: &&Event| e.kind == EventKind::ToolCall;
+        let calls: Vec<&Event> = evs.iter().filter(is_call).collect();
+        let actors: Vec<Option<&str>> = calls.iter().map(|e| e.agent.as_deref()).collect();
+        assert_eq!(actors, [Some("setup"), Some("link"), Some("solo")]);
+        let (first, linked, peek) = (&calls[0].payload, &calls[1].payload, &calls[2].payload);
+        let named = |p: &Value| (p["name"].clone(), p["part"].clone());
+        assert_eq!(named(first), (json!("a_poke"), json!("a")));
+        assert!(first["saves"]["a"].is_string(), "{first}");
+        assert_eq!(named(linked), (json!("b_poke"), json!("b")));
+        assert_eq!(peek["result"]["n"], 1, "{peek}");
+    })
+}
+
+/// A setup call that fails ends the run's branch before any agent runs.
+#[test]
+fn a_failed_setup_ends_the_run() {
+    run(async {
+        let poke = json!({"part": "a", "tool": "a_poke"});
+        let a_args = ["part", "--prefix", "a_", "--crash-on-call", "1"];
+        let root = setup_world("setupfails", &a_args, &[poke], &[]);
+        let up = FakeUpstream::start(vec![done()]).await;
+        let fx = setup("setupfails", root, &up).await;
+        let e = runner::start_run(&fx.state, "t1", solo())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("setup call a_poke failed"),
+            "{e:#}"
+        );
+    })
+}
+
+/// A world whose task's setup names a part or tool it doesn't have is refused.
+#[test]
+fn a_setup_of_nothing_is_refused() {
+    run(async {
+        let calls = [
+            json!({"part": "nope", "tool": "a_poke"}),
+            json!({"part": "b", "tool": "a_poke"}),
+        ];
+        for (i, call) in calls.into_iter().enumerate() {
+            let root = setup_world(
+                &format!("badsetup{i}"),
+                &["part", "--prefix", "a_"],
+                &[call],
+                &[],
+            );
+            let hub = TestHub::new(std::slice::from_ref(&root.0));
+            let bench = hub.hub.bench_describe("toybench").await.unwrap();
+            assert!(plan(&hub.hub, &bench).await.is_err());
+        }
+    })
+}

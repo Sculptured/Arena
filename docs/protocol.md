@@ -99,7 +99,7 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket, setup?: [{part, tool, args}]}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
@@ -138,6 +138,27 @@ Parts never call each other. A benchmark's `describe` may declare `links`, and a
 - A world is refused when a link names a part it doesn't have or a tool `to` doesn't list. A tool that a link
   calls is not offered to agents.
 - Links don't run while the base and gold saves are made, because nothing advances the clock then.
+
+### A task's setup
+
+A task may name `setup`, calls arenad makes on a run's world right after it starts from the base save, before any
+agent: the task's scenario or its scripted disruptions, so tasks of one benchmark can meet different worlds that
+start from the same base.
+
+```json
+{"id": "carrier-full", "reason": "...", "ticket": "...",
+ "setup": [{"part": "logistics", "tool": "logistics_scenario", "args": {"name": "carrier-full"}}]}
+```
+
+- The calls are made in order at the run's start, each recorded as a tool call step of the actor `setup` (no agent
+  may have that id), and the parts they changed are saved with the last one. Their events are reported after them
+  and may set off links. A replay repeats them from the record like any other input of their part; a fork starts
+  after them.
+- A call that fails (a tool error or a part that can't be reached) ends the branch `infra_error` before any agent
+  runs, saying which call failed.
+- A tool a setup calls is the world's own: agents don't get it (as with links). A world is refused when a setup
+  names a part it doesn't have or a tool that part doesn't list.
+- A task's gold save is made from the base with its setup calls first, then its gold actions.
 
 ### Gates on tools
 

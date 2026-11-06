@@ -19,10 +19,10 @@
       `poke`'s result gives an event of that kind with data {"n": <the new value>}.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]] [--link JSON ...]
-               [--gate JSON ...] [--scored]
+               [--gate JSON ...] [--setup JSON ...] [--scored]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
       --part list; each part's config is `{}` or the --config given for it. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
-      ran on PART (default `box`). --link adds a link to the world, --gate a gate. With --scored,
+      ran on PART (default `box`). --link adds a link to the world, --gate a gate, --setup a call to `t1`'s setup. With --scored,
       `score` has one check `poked`: the first part's box/n is at least 1. Gold: one TOOL with JSON args (default `poke` with `{}`).
 """
 import json
@@ -188,7 +188,8 @@ class Bench:
         tools = [dict(TOOLS[0], description="The benchmark's own poke.")] if "--clash" in ARGS else []
         tools += [RING] if "--bench-tool" in ARGS else []
         return {"name": "toybench", "version": "0.1.0", "protocol": 1, "world": world(),
-                "tasks": [{"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n"}],
+                "tasks": [{"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n",
+                           "setup": [json.loads(call) for call in opts("--setup")]}],
                 "instructions": "Be kind to the box.", "tools": tools,
                 "links": [json.loads(link) for link in opts("--link")],
                 "gates": [json.loads(gate) for gate in opts("--gate")], "scored": "--scored" in ARGS}

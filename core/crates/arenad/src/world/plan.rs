@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
 use parts::{
-    proto::{BenchDescribe, Describe, Gate, Link, ToolSchema, WorldPart},
+    proto::{BenchDescribe, Describe, Gate, Link, SetupCall, ToolSchema, WorldPart},
     Hub,
 };
 
@@ -32,7 +32,8 @@ pub struct Plan {
 
 /// The parts of `bench`'s world and its tool table: the benchmark's tools, then each part's.
 /// Refuses a world in which two tools share a name (`handoff` counts as one) or a link names a
-/// part or tool it doesn't have, or a gate does. A tool a link calls is the world's own: agents don't get it.
+/// part or tool it doesn't have, or a gate or a task's setup does. A tool a link or a setup calls is
+/// the world's own: agents don't get it.
 pub async fn plan(hub: &Hub, bench: &BenchDescribe) -> Result<Plan> {
     let parts = describe_parts(hub, bench).await?;
     let mut tools: Vec<(ToolSchema, Route)> = bench
@@ -48,7 +49,12 @@ pub async fn plan(hub: &Hub, bench: &BenchDescribe) -> Result<Plan> {
         bail!("two tools are called {}", t.name);
     }
     check_links(&bench.links, &parts)?;
-    tools.retain(|(t, _)| !bench.links.iter().any(|l| l.tool == t.name));
+    let setup: Vec<&SetupCall> = bench.tasks.iter().flat_map(|t| &t.setup).collect();
+    check_setup(&setup, &parts)?;
+    let worlds_own = |name: &str| {
+        bench.links.iter().any(|l| l.tool == name) || setup.iter().any(|c| c.tool == name)
+    };
+    tools.retain(|(t, _)| !worlds_own(&t.name));
     check_gates(&bench.gates, &parts, &tools)?;
     Ok(Plan {
         parts,
@@ -69,6 +75,22 @@ fn check_links(links: &[Link], parts: &[PlannedPart]) -> Result<()> {
         };
         if !to.describe.tools.iter().any(|t| t.name == l.tool) {
             bail!("a link calls {}, which {} does not have", l.tool, l.to);
+        }
+    }
+    Ok(())
+}
+
+fn check_setup(calls: &[&SetupCall], parts: &[PlannedPart]) -> Result<()> {
+    for c in calls {
+        let Some(part) = parts.iter().find(|p| p.part.part == c.part) else {
+            bail!("a task's setup calls {}, which is not a part", c.part);
+        };
+        if !part.describe.tools.iter().any(|t| t.name == c.tool) {
+            bail!(
+                "a task's setup calls {}, which {} does not have",
+                c.tool,
+                c.part
+            );
         }
     }
     Ok(())
