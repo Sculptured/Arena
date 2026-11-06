@@ -43,6 +43,7 @@ class Mirror(DocsPart):
 
     def describe(self):
         return {"name": NAME, "version": "0.1.0", "protocol": 1, "restore": {"exact": "none", "approximate": False},
+                "system": {"kind": "plant", "product": "NVIDIA Isaac Sim (mirror)", "simulated": True},
                 "uses_clock": True, "fingerprint": {"adapter": 1, "mode": "mirror"}, "tools": []}
 
     def start(self, instance, config, seed, clock_ms, from_=None):

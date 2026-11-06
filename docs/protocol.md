@@ -52,7 +52,7 @@ environment, and `${ARENA_BIN_DIR}` substituted). Use it for a part on another m
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, restore: {exact: "save"\|"replay"\|"none", approximate: bool}, uses_clock: bool, fingerprint: {...}, tools: [ToolSchema]}` |
+| `describe` | `{}` | `{name, version, protocol, restore: {exact: "save"\|"replay"\|"none", approximate: bool}, uses_clock: bool, fingerprint: {...}, tools: [ToolSchema], system?: {kind, product, stands_in_for?, simulated}}` |
 | `start` | `{instance, config, seed, clock_ms, from?: {save, mode: "exact"\|"approximate"}}` | `{}` |
 | `call_tool` | `{instance, name, args, clock_ms}` | `{result?, error?, reads: [key], writes: [key], events?: [{kind, text, data}]}` |
 | `advance` | `{instance, clock_ms}` | `{changed: bool, events: [{kind, text, data}]}` |
@@ -64,6 +64,12 @@ environment, and `${ARENA_BIN_DIR}` substituted). Use it for a part on another m
 | `usage` | `{}` | `{bytes}` |
 | `gc` (optional) | `{keep: [save]}` | `{dropped, bytes}` |
 | `connect` (optional) | `{instance}` | connection info, e.g. `{url}` for `postgres` |
+
+`system` (optional, additive) says what kind of system the part is, for monitoring views: `kind` is a
+short word ("erp", "crm", "database", "api", "mcp", "messaging", "approvals", "plant", "lims", "files",
+"logistics"), `product` what runs ("ERPNext"), `stands_in_for` the commercial systems an open-source
+stand-in represents ("SAP S/4HANA, Oracle"), and `simulated` is true for a simulation rather than the
+real product. Each tool's `effect` already says whether it reads or writes.
 
 - `ToolSchema` is the MCP shape (`name`, `description`, `inputSchema`) plus `effect: "read"|"write"`. Tool
   names must be unique across a world; a world that has a clash is refused.

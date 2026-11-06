@@ -100,6 +100,7 @@ impl Part for Folder {
             uses_clock: false,
             fingerprint: json!({"integration": PACKAGE}),
             tools: tools::schemas(),
+            system: Some(SystemInfo::real("files", "Folder", None)),
         })
     }
 

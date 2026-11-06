@@ -127,6 +127,11 @@ impl Part for Erpnext {
             uses_clock: false,
             fingerprint: self.fingerprint().await?,
             tools: tool_schemas::schemas(),
+            system: Some(SystemInfo::real(
+                "erp",
+                "ERPNext",
+                Some("SAP S/4HANA, Oracle"),
+            )),
         })
     }
 

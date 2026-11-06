@@ -137,6 +137,7 @@ impl Part for Sculptured {
             uses_clock: false,
             fingerprint: json!({"integration": PACKAGE}),
             tools: tool_schemas::schemas(),
+            system: Some(SystemInfo::real("approvals", "Sculptured approvals", None)),
         })
     }
 

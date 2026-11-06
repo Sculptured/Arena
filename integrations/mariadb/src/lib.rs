@@ -99,6 +99,7 @@ impl Part for Mariadb {
             uses_clock: false,
             fingerprint: json!({"server_version": server_version()}),
             tools: if self.sql_tools { sql::tools() } else { vec![] },
+            system: Some(SystemInfo::real("database", "MariaDB", None)),
         })
     }
 

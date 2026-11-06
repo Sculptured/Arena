@@ -532,6 +532,7 @@ impl Part for Postgres {
             } else {
                 vec![]
             },
+            system: Some(SystemInfo::real("database", "PostgreSQL", None)),
         })
     }
 

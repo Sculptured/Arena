@@ -84,6 +84,44 @@ pub struct Describe {
     pub uses_clock: bool,
     pub fingerprint: Value,
     pub tools: Vec<ToolSchema>,
+    /// What kind of system this part is, for monitoring views (absent: not said).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemInfo>,
+}
+
+/// The kind of system a part is: `kind` is one of "erp", "crm", "database", "api", "mcp",
+/// "messaging", "approvals", "plant", "lims", "files", "logistics" or another short word;
+/// `product` is what runs ("ERPNext"); `stands_in_for` names the commercial systems an
+/// open-source stand-in represents ("SAP S/4HANA"); `simulated` is true when the part is a
+/// simulation, not the real product.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemInfo {
+    pub kind: String,
+    pub product: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_in_for: Option<String>,
+    #[serde(default)]
+    pub simulated: bool,
+}
+
+impl SystemInfo {
+    /// A real product: `kind`, `product`, and what it stands in for (if anything).
+    pub fn real(kind: &str, product: &str, stands_in_for: Option<&str>) -> Self {
+        SystemInfo {
+            kind: kind.into(),
+            product: product.into(),
+            stands_in_for: stands_in_for.map(Into::into),
+            simulated: false,
+        }
+    }
+
+    /// A simulation of a kind of system.
+    pub fn simulated(kind: &str, product: &str, stands_in_for: Option<&str>) -> Self {
+        SystemInfo {
+            simulated: true,
+            ..SystemInfo::real(kind, product, stands_in_for)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

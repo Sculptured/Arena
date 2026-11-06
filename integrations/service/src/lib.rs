@@ -122,6 +122,7 @@ impl Part for Service {
             uses_clock: false,
             fingerprint: json!({"integration": PACKAGE}),
             tools: vec![],
+            system: Some(SystemInfo::real("api", "HTTP service", None)),
         })
     }
 

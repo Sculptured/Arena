@@ -108,6 +108,7 @@ impl Part for TwentyCrm {
             uses_clock: false,
             fingerprint: json!({"image": self.settings.image}),
             tools: tool_schemas::schemas(),
+            system: Some(SystemInfo::real("crm", "Twenty", Some("Salesforce"))),
         })
     }
 

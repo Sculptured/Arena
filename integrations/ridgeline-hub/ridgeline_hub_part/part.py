@@ -37,6 +37,7 @@ class RidgelineHub(Part):
         return {
             "name": NAME, "version": "0.1.0", "protocol": 1,
             "restore": {"exact": "save", "approximate": False},
+            "system": {"kind": "logistics", "product": "Ridgeline hub (simulated suppliers, carriers, customers)", "simulated": True},
             "uses_clock": True,
             "fingerprint": {"adapter": 1, "tick_ms": TICK_MS, "seed": SEED_NOTE,
                             "sha256": source_hashes(parse_config({}))},
