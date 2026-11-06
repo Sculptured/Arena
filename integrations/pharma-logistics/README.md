@@ -1,0 +1,44 @@
+# pharma-logistics
+
+**A simulation.** Puts cold-chain carriers and a customer desk in the world for the `pharma` benchmark: a register of
+carrier lanes with their 2-8 C qualification, quotes, bookings limited by each lane's weekly capacity, notices to
+customers, and a **simulated supply chain director** who decides changes by fixed rules. `describe.system` is `{kind:
+"logistics", product: "Simulated cold-chain carriers and customer desk", simulated: true}`. Restore: exact from a save
+(one `state.json`); approximate: no. `uses_clock`: false. Built on the kit's `arena_part.jsonstate`, like `pharma-lims`.
+
+## Config
+
+Given by the benchmark from its data file: `logistics` (`origins`, `lanes` with carrier, origin, destination,
+temperature, `qualified`, transit days, price and capacity; `restricted_batches`; `scenarios`), `customers` (`[{name,
+region}]`), `today`, and `defer` (the change actions another desk decides: the QA head's).
+
+## Tools
+
+| tool | effect | what |
+|---|---|---|
+| `qualified_lanes {}` | read | the register, with each lane's shipments left this week |
+| `cold_chain_quotes {origin, customer, qty}` | write | a quote (`Q-0001`, ...) from every lane from `origin` (`US`, `EU` or the origin's name) to the customer's region, shipping today |
+| `book_shipment {proposal_id, quote_id, carrier, order, batch, qty}` | write | books a quote once (`SHP-0001`, ...), with its arrival date; refused for an unknown or used quote, another carrier or quantity, or no capacity left |
+| `shipments {}` | read | the bookings |
+| `send_customer_notice {customer, order, new_date, message}` | write | a notice (`N-0001`, ...); refused for an unknown customer or a date that isn't `YYYY-MM-DD` |
+| `customer_notices {}` | read | the notices |
+| `logistics_scenario {name}` | write | sets the scenario; a task's `setup` calls it |
+| `supply_review {id, action, payload, summary?}` | write | the director reviews a change; a link calls it |
+
+Keys: `scenario/current`, `quote/<id>`, `shipment/<id>`, `notice/<id>`, `review/<change id>`. The part records the
+booking's order and batch as given: it doesn't know the ERP. The benchmark gates `book_shipment` on an approved
+`cold_chain_shipment` change with the same carrier, quote, order, batch and quantity.
+
+**The director** reviews every change whose action is not in `defer`, records it and gives a `decided` event `{id,
+approved, note}`. `stock_reallocation` needs `batch` and a numeric `qty`; `cold_chain_shipment` needs carrier, quote,
+order, batch and qty, a quote of that carrier, a lane qualified for 2-8 C, and for a restricted batch enough quantity
+left in the reallocations it approved of that batch. Any other action is rejected, naming what each desk decides. The
+director does not check a lot's QA status or shelf life: the benchmark's safety checks do.
+
+**Scenarios:** `carrier-no-capacity` sets Tundra Medical Courier's capacity to 0; `reallocation-rejected` rejects the
+first `stock_reallocation` with a note asking for the quantity and orders.
+
+## Tests
+
+`uv run --with pytest pytest -q`: quotes, bookings and their refusals, capacity, the director's rules, the scenarios,
+notices, save and restore, and `arena-part-check`. Verified on Linux, 2026-11-06: all 9 pass, conformance included.
