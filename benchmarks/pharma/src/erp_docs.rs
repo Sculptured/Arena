@@ -152,29 +152,39 @@ pub fn batch(d: &Data, lot: &Lot) -> Value {
            "reserved_for": lot.reserved_for.clone().unwrap_or_default()})
 }
 
-fn receipt(d: &Data, remarks: &str, rows: Vec<Value>) -> Value {
+fn receipt(d: &Data, posted: &str, remarks: &str, rows: Vec<Value>) -> Value {
     json!({"doctype": "Stock Entry", "stock_entry_type": "Material Receipt", "purpose": "Material Receipt",
-           "company": d.company, "set_posting_time": 1, "posting_date": OPENING, "remarks": remarks,
+           "company": d.company, "set_posting_time": 1, "posting_date": posted, "remarks": remarks,
            "items": rows})
 }
 
-/// The opening stock: the components in the plant's stores, and each lot in its warehouse.
+/// The day a lot's stock is received: the day it was made, kept within the books' year and not
+/// after the opening (ERPNext refuses a receipt of an expired lot, and one dated in the future).
+fn received(lot: &Lot) -> String {
+    let first = format!("{}-01-02", &OPENING[..4]);
+    let made = lot.manufactured.as_str().max(first.as_str());
+    made.min(OPENING).to_string()
+}
+
+/// The opening stock: the components in the plant's stores, then each lot in its warehouse.
 pub fn opening_stock(d: &Data) -> Vec<Value> {
     let parts: Vec<Value> = (d.components.iter())
         .map(|c| json!({"item_code": c.code, "qty": d.component_stock.get(&c.code).copied().unwrap_or(0.0),
                         "t_warehouse": warehouse(d, "US", "Stores"), "basic_rate": c.price}))
         .collect();
-    let lots: Vec<Value> = (d.lots.iter())
-        .map(|l| {
-            json!({"item_code": d.product.code, "qty": l.qty, "batch_no": l.batch,
-                        "use_serial_batch_fields": 1, "basic_rate": 410.0,
-                        "t_warehouse": warehouse(d, &l.site, &l.warehouse)})
-        })
-        .collect();
-    vec![
-        receipt(d, "Opening stock: components", parts),
-        receipt(d, "Opening stock: Corvexa lots", lots),
-    ]
+    let mut out = vec![receipt(d, OPENING, "Opening stock: components", parts)];
+    out.extend(d.lots.iter().map(|l| {
+        let row = json!({"item_code": d.product.code, "qty": l.qty, "batch_no": l.batch,
+                         "use_serial_batch_fields": 1, "basic_rate": 410.0,
+                         "t_warehouse": warehouse(d, &l.site, &l.warehouse)});
+        receipt(
+            d,
+            &received(l),
+            &format!("Opening stock: {}", l.batch),
+            vec![row],
+        )
+    }));
+    out
 }
 
 pub fn customer_masters() -> Vec<Value> {
@@ -270,10 +280,20 @@ mod tests {
             (&affected["transaction_date"], &affected["set_warehouse"]),
             (&json!("2026-10-20"), &json!("US Plant Released - LB"))
         );
-        assert_eq!(
-            opening_stock(d)[1]["items"].as_array().unwrap().len(),
-            d.lots.len()
-        );
+        let stock = opening_stock(d);
+        assert_eq!(stock.len(), 1 + d.lots.len());
+        let posted: Vec<&str> = (stock.iter())
+            .map(|s| s["posting_date"].as_str().unwrap())
+            .collect();
+        let want = [
+            "2026-01-02",
+            "2026-01-02",
+            "2026-01-02",
+            "2026-01-29",
+            "2026-10-19",
+            "2026-11-01",
+        ];
+        assert_eq!(posted[1..], want);
         assert_eq!(warehouses(d).len(), 8);
         let c = customer(d.customer("Pinecrest Wholesale Drug").unwrap());
         assert_eq!(

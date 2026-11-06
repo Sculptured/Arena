@@ -152,7 +152,7 @@ async fn stock(erp: &Erp, d: &Data) -> Result<(Vec<Value>, Vec<String>)> {
         .await?;
     let committed = |batch: &Value| -> f64 {
         let of = orders.iter().filter(|o| o["planned_batch"] == *batch);
-        of.filter_map(|o| o["total_qty"].as_f64()).sum()
+        of.filter_map(|o| o["total_qty"].as_f64()).sum::<f64>() + 0.0
     };
     let rows: Vec<Value> = lots
         .iter()

@@ -42,6 +42,9 @@ async fn company(erp: &Erp, d: &Data) -> Result<()> {
     let defaults = json!({"default_company": d.company});
     erp.update("Global Defaults", "Global Defaults", &defaults)
         .await?;
+    let batches = json!({"enable_serial_and_batch_no_for_item": 1});
+    erp.update("Stock Settings", "Stock Settings", &batches)
+        .await?;
     Ok(())
 }
 
