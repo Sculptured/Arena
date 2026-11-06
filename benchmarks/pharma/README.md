@@ -117,5 +117,21 @@ the ERPNext and Twenty images, and arenad stopped. It is `opt_in`.
   (the failing batch released without approval and shipped). It starts an ERPNext stack and a Twenty server of its own
   and removes them after.
 
+**Verified (Linux, 2026-11-06):**
+- `cargo test -p arena-pharma` passes (25 tests).
+- `live_seed` against a fresh site of the `erpnext` integration (`frappe/erpnext:v16.53.0`): the whole ERP seed wrote
+  in about 30 s, and the four reports read it back right (free stock 1,000 of CVX-2604 and 2,500 of CVX-2598; 8
+  affected orders; CVX-2598 and CVX-2604 eligible for Pinecrest on 2026-11-12; 3 work orders). On the same site, by
+  hand through the REST API: a Non Conformance linked to the seeded procedure, a Batch set On Hold, and the next
+  batch's draft work order moved to 2026-11-16, as the gold path does.
+- The `sculptured` integration by hand: `propose_change` gives `change_proposed` with the change (id, action,
+  payload, summary), and `decide_change` with `note: null` approves while a note rejects, both recorded `by: person`,
+  as the links send them.
+- `pharma-lims` and `pharma-logistics`: their pytest suites and `arena-part-check`.
+
+**Not run:** the arenad live test (`tests/pharma.rs`), so not the CRM seed, `arenad base`, the links and the gate
+inside a run, or a run of any scenario: the machine had under 20 GB free when it was ready. No real agent or model has
+run this world.
+
 **Possible later steps, not built:** Paperless-ngx for documents (SOPs and certificates of analysis, now in the
 simulated LIMS) and SENAITE as a real open-source LIMS in place of the simulated one.
