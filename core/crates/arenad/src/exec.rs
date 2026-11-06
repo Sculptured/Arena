@@ -221,8 +221,18 @@ struct CallFacts {
     save_error: Option<String>,
     clock_ms: Option<i64>,
     paused_ms: Option<i64>,
+    duration_ms: Option<f64>,
     /// Events the call gave the world, reported after the call is recorded.
     events: Vec<PartEvent>,
+}
+
+impl CallFacts {
+    /// Takes what a world call gave back besides its outcome: its part, reads, writes and events.
+    fn take(&mut self, called: Called, clock_ms: i64) {
+        let Called { output, part, .. } = called;
+        self.events = part_events(part.as_deref(), output.events, clock_ms);
+        (self.part, self.reads, self.writes) = (part, output.reads, output.writes);
+    }
 }
 
 fn tool_call_payload(
@@ -246,6 +256,7 @@ fn tool_call_payload(
         saves: f.saves,
         clock_ms: f.clock_ms,
         paused_ms: f.paused_ms,
+        duration_ms: f.duration_ms,
     }
 }
 
@@ -377,19 +388,16 @@ impl ToolExec {
         if let Err(e) = self.advance(branch, clock).await {
             return (Err(e), facts);
         }
-        let called = branch.world.call_tool(name, args.clone(), clock).await;
-        let Called {
-            output,
-            part,
-            gate_ms,
-        } = match called {
+        let since = std::time::Instant::now();
+        let called = match branch.world.call_tool(name, args.clone(), clock).await {
             Ok(c) => c,
             Err(e) => return (Err(failure(branch, e)), facts),
         };
+        let gate_ms = called.gate_ms;
+        facts.duration_ms = Some((since.elapsed().as_secs_f64() * 1000.0 - gate_ms).max(0.0));
         overhead::add(&branch.branch_id, Cat::Gate, gate_ms);
-        let outcome = outcome_of(&output);
-        facts.events = part_events(part.as_deref(), output.events, clock);
-        (facts.part, facts.reads, facts.writes) = (part, output.reads, output.writes);
+        let outcome = outcome_of(&called.output);
+        facts.take(called, clock);
         let wrote = outcome.is_ok() && !facts.writes.is_empty();
         let written = facts.part.clone().filter(|_| wrote);
         save_step(branch, written.as_deref(), &mut facts).await;

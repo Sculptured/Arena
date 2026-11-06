@@ -122,9 +122,10 @@ pub async fn setup_failed(state: &AppState, branch_id: &str, error: String) {
 }
 
 /// Starts the first branch's world from the base save and records `RunStart`:
-/// `{task_id, team, benchmark, world, seed, base_seed, fingerprints, saves, runner, handoff}`
-/// (`saves` names only the parts that keep saves; `base_seed` is the seed the base save was made
-/// with; `runner` and `handoff` are the run's rules).
+/// `{task_id, team, benchmark, world, seed, base_seed, fingerprints, saves, runner, handoff,
+/// systems, tools}` (`saves` names only the parts that keep saves; `base_seed` is the seed the
+/// base save was made with; `runner` and `handoff` are the run's rules; `systems` and `tools` are
+/// what `World::systems` and `World::tool_info` say).
 async fn start_world(
     state: &AppState,
     bench: &BenchDescribe,
@@ -162,6 +163,8 @@ fn run_start(bench: &BenchDescribe, world: &World, seed: u64, of: &RunStartOf<'_
         "saves": world.saves(),
         "runner": of.rules.runner,
         "handoff": of.rules.handoff_word(),
+        "systems": world.systems(),
+        "tools": world.tool_info(),
     })
 }
 

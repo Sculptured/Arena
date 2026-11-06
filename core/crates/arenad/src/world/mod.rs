@@ -10,6 +10,7 @@ mod plan;
 mod saving;
 mod scoring;
 mod standard;
+mod systems;
 
 use std::{
     collections::{BTreeMap, BTreeSet},

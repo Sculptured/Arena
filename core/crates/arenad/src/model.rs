@@ -257,6 +257,10 @@ pub struct ToolCallPayload {
     /// How long the world's clock was paused for this step's saves (None when nothing was saved).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_ms: Option<i64>,
+    /// How long the tool ran in the world, gate checks and saves left out (None when it reached
+    /// no part, and in calls recorded before durations were kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
 }
 
 /// Payload of `EventKind::WorldEvent`: something a part reported when its clock advanced.

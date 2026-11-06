@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 use anyhow::Result;
 use axum::{extract::State, Json};
 use futures_util::future::join_all;
-use parts::proto::{Describe, ExactKind, WorldPart};
+use parts::proto::{Describe, ExactKind, SystemInfo, WorldPart};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -44,6 +44,9 @@ struct PartInfo {
     uses_clock: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<String>>,
+    /// The kind of system the part is, when its integration says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<SystemInfo>,
 }
 
 impl PartInfo {
@@ -57,6 +60,7 @@ impl PartInfo {
             restore: None,
             uses_clock: None,
             tools: None,
+            system: None,
         };
         match described {
             Ok(d) => {
@@ -67,6 +71,7 @@ impl PartInfo {
                     approximate: d.restore.approximate,
                 });
                 info.uses_clock = Some(d.uses_clock);
+                info.system = d.system;
                 info.tools = Some(d.tools.into_iter().map(|t| t.name).collect());
             }
             Err(e) => info.error = Some(e),
