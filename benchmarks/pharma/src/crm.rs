@@ -21,14 +21,18 @@ pub fn person(c: &Contact, account: &str) -> Value {
            "jobTitle": c.title, "companyId": account})
 }
 
+/// The account of a customer; the address names a state only where the customer has one.
 pub fn company(c: &Customer) -> Value {
-    let country = if c.region == "US" {
-        "United States"
-    } else {
-        c.country.as_deref().unwrap_or_default()
+    let country = match c.region.as_str() {
+        "US" => "United States",
+        _ => c.country.as_deref().unwrap_or_default(),
     };
+    let mut address = json!({"addressCity": c.city, "addressCountry": country});
+    if let Some(state) = &c.state {
+        address["addressState"] = json!(state);
+    }
     json!({"name": c.name, "domainName": {"primaryLinkUrl": format!("https://{}", c.domain)},
-           "address": {"addressCity": c.city, "addressState": c.state, "addressCountry": country}})
+           "address": address})
 }
 
 struct Crm {
@@ -131,5 +135,6 @@ mod tests {
         assert_eq!(deal["amount"]["amountMicros"], 496_000_000_000u64);
         let eu = company(d.customer("Hôpital Saint-Aubin").unwrap());
         assert_eq!(eu["address"]["addressCountry"], "France");
+        assert!(eu["address"].get("addressState").is_none());
     }
 }
