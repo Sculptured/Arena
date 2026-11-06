@@ -190,6 +190,18 @@ and `tools` maps each tool of the world to `{effect, part?}` (a benchmark's own 
 records the part it ran on). With each tool call's `part`, a UI can tell from the run's record alone which system
 a step touched and whether it read or wrote. A run recorded before this, or a part that does not say, has no such
 entry: unknown, not guessed. Named checks keep their `safety` flag in the run's `check` event.
+Each tool call also records `duration_ms`, how long the tool ran in the world (gate checks and saves left out;
+absent for a call that reached no part, and in older runs).
+
+Arena's web UI shows a run in the same control form as Sculptured Control (`/control/{run}/{branch}`): the agents
+as units and the world's parts as equipment, labelled with their kind, product, what they stand in for and
+whether they are simulated, with the action flows between them; a timeline with a lane per agent, each tool call
+marked by system kind and read or write (writes solid, reads hollow, approvals and refusals as interlocks, errors
+and refusals the only colour), with its duration and outcome; trends (actions per minute per system, context per
+model call, tokens and cost); and the inspector for one step. It follows a running branch over the event stream.
+Suites have an overview (`/suites/{id}`: scenarios × repeats, pass rates, safety, spread) and a comparison
+(`/suites/compare/{a}/{b}`). Checked by eye on two external suites of the retail benchmark driven by a script
+(no model).
 
 ## Test suites
 

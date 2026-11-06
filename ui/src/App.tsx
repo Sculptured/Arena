@@ -6,6 +6,10 @@ import Compare from './pages/Compare';
 import Run from './pages/Run';
 import Runs from './pages/Runs';
 import Team from './pages/Team';
+import ProcessPage from './control/ProcessPage';
+import SuiteComparePage from './control/SuiteComparePage';
+import SuitePage from './control/SuitePage';
+import SuitesPage from './control/SuitesPage';
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -27,6 +31,7 @@ export default function App() {
         <nav className="nav">
           <NavLink to="/" end>Runs</NavLink>
           <NavLink to="/team">Team</NavLink>
+          <NavLink to="/suites">Suites</NavLink>
         </nav>
         <span className="spacer" />
         <span
@@ -53,6 +58,10 @@ export default function App() {
         <Route path="/team" element={<Team />} />
         <Route path="/runs/:runId/:branchId" element={<Run />} />
         <Route path="/compare/:a/:b" element={<Compare />} />
+        <Route path="/suites" element={<SuitesPage />} />
+        <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
+        <Route path="/suites/:id" element={<SuitePage />} />
+        <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
       </Routes>
     </div>
