@@ -4,6 +4,7 @@
 //! asked. A team whose rules approve the change answers at once (the agent's reply names it);
 //! Sculptured refusing the arguments ends the agent's turn with its reason instead.
 use anyhow::{bail, Context, Result};
+use arena_part::proto::{ToolOutput, WorldEvent};
 use reqwest::Method;
 use serde_json::{json, Value};
 
@@ -38,7 +39,26 @@ pub async fn propose(api: &Api, team: &str, args: &Value) -> Result<Outcome> {
     };
     let all = changes::fetch(api, team).await?;
     let change = changes::find(&all, &id).with_context(|| format!("{id} is not listed"))?;
-    Ok(Ok(wrote(change.clone())))
+    Ok(Ok(proposed(change.clone())))
+}
+
+/// The output of a proposal: the change written, and a `change_proposed` event whose data is the
+/// change, so a world's links can hand it to whoever decides it (a simulated person, say).
+fn proposed(change: Value) -> ToolOutput {
+    let id = change["id"].as_str().unwrap_or_default();
+    let text = format!(
+        "change {id} proposed: {}",
+        change["summary"].as_str().unwrap_or_default()
+    );
+    let event = WorldEvent {
+        kind: "change_proposed".into(),
+        text,
+        data: change.clone(),
+    };
+    ToolOutput {
+        events: Box::new([event]),
+        ..wrote(change)
+    }
 }
 
 /// A running agent of the team with no change waiting for a decision.
@@ -114,6 +134,17 @@ fn read_reply(text: &str) -> Asked {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_proposal_gives_an_event_with_the_change() {
+        let change = json!({"id": "chg-1", "action": "batch_release", "summary": "Release",
+                            "payload": {"batch": "B"}, "decision": null});
+        let out = proposed(change.clone());
+        assert_eq!(out.writes, ["change/chg-1"]);
+        let e = &out.events[0];
+        assert_eq!((e.kind.as_str(), &e.data), ("change_proposed", &change));
+        assert_eq!(e.text, "change chg-1 proposed: Release");
+    }
 
     #[test]
     fn the_proposal_is_asked_about_or_refused() {
