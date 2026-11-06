@@ -212,3 +212,23 @@ repeats, each cell a run that opens in the process view.
    drives its own agents through Arena's external-run API).
 4. When credits allow: the runs (suite × deployments × repeats, a tuning re-run), the Isaac render of
    the filling line, and the video.
+
+## Efficient deployments (user, 2026-11-06)
+
+User: "try as hard as possible with your design that certain agents have restricted knowledge (eg only
+the whole querying of the database) and that only instructions and all the necessary context (but not
+necessarily all the data, just the reports that are needed for it, and how to query directly if needs
+more so its doesn't require overhead, except not too many instructions since thats additional overhead)
+so it can be efficent as a system coordinating work."
+
+- One role owns broad data access (a records/data agent with the wide ERP and database query tools);
+  other roles get only the tools their decisions need.
+- Each role starts with short instructions plus the compact reports it needs, not raw data, and a
+  one-line hint on how to query directly when it needs more.
+- The world offers compact report tools (for example affected orders for a batch, eligible lots for a
+  customer) beside the raw query tools, so a deployment can choose summaries over dumps.
+- Instructions are overhead too: kept short. The single-agent deployment gets the same tools and the
+  same brevity, so the comparison is fair.
+- Arena measures the effect: context per call, tokens per role, actions per system.
+
+**Agents run on Codex CLI** (user: "use codex preferably", "Be careful of agent token usage").
