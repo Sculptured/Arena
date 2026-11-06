@@ -280,6 +280,11 @@ mod tests {
             (&affected["transaction_date"], &affected["set_warehouse"]),
             (&json!("2026-10-20"), &json!("US Plant Released - LB"))
         );
+    }
+
+    #[test]
+    fn each_lot_is_received_before_it_expires_and_not_in_the_future() {
+        let d = data();
         let stock = opening_stock(d);
         assert_eq!(stock.len(), 1 + d.lots.len());
         let posted: Vec<&str> = (stock.iter())

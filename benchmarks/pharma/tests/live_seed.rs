@@ -10,6 +10,18 @@ fn connect_info() -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+async fn report(erp: &Erp, name: &str, args: Value) -> Value {
+    let out = reports::run(erp, data(), name, &args).await.unwrap().0;
+    println!("{name}: {out}");
+    out
+}
+
+/// The free quantity of `batch` in the stock report.
+fn free(stock: &Value, batch: &str) -> Option<f64> {
+    let lots = stock["lots"].as_array()?;
+    lots.iter().find(|l| l["batch"] == batch)?["free"].as_f64()
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_seed_into_a_given_site() {
@@ -17,44 +29,24 @@ async fn live_seed_into_a_given_site() {
         eprintln!("skipped: no PHARMA_ERP_CONNECT");
         return;
     };
-    if std::env::var_os("PHARMA_SKIP_SEED").is_none() {
-        seed::seed_erp(&info, data()).await.unwrap();
-    }
+    seed::seed_erp(&info, data()).await.unwrap();
     let erp = Erp::connect(&info).unwrap();
-    let run = |name: &'static str, args: Value| {
-        let erp = &erp;
-        async move { reports::run(erp, data(), name, &args).await.unwrap().0 }
-    };
-    let stock = run("stock_report", json!({})).await;
-    println!("{}", serde_json::to_string_pretty(&stock).unwrap());
-    let lot = |b: &str| {
-        stock["lots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|l| l["batch"] == b)
-            .cloned()
-            .unwrap()
-    };
+    let stock = report(&erp, "stock_report", json!({})).await;
     assert_eq!(
-        (
-            lot("CVX-2604")["free"].as_f64(),
-            lot("CVX-2598")["free"].as_f64()
-        ),
+        (free(&stock, "CVX-2604"), free(&stock, "CVX-2598")),
         (Some(1000.0), Some(2500.0))
     );
-    let hit = run("affected_orders", json!({"batch": "CVX-2611"})).await;
-    assert_eq!(hit["orders"].as_array().unwrap().len(), 8, "{hit}");
-    let eligible = run(
-        "eligible_lots",
-        json!({"customer": "Pinecrest Wholesale Drug", "arrives": "2026-11-12"}),
-    )
-    .await;
-    println!("{eligible}");
-    let schedule = run("production_schedule", json!({})).await;
-    assert_eq!(
-        schedule["work_orders"].as_array().unwrap().len(),
-        3,
-        "{schedule}"
-    );
+    let hit = report(&erp, "affected_orders", json!({"batch": "CVX-2611"})).await;
+    assert_eq!(hit["orders"].as_array().unwrap().len(), 8);
+    let who = json!({"customer": "Pinecrest Wholesale Drug", "arrives": "2026-11-12"});
+    let eligible = report(&erp, "eligible_lots", who).await;
+    let lots: Vec<&Value> = eligible["lots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| &l["lot"]["batch"])
+        .collect();
+    assert_eq!(lots, [&json!("CVX-2598"), &json!("CVX-2604")]);
+    let schedule = report(&erp, "production_schedule", json!({})).await;
+    assert_eq!(schedule["work_orders"].as_array().unwrap().len(), 3);
 }
