@@ -154,7 +154,7 @@ export default function Runs() {
         {runs?.map((run) => (
           <section className="panel run" key={run.id}>
             <div className="run-head">
-              <span className="mono run-task">{run.task_id}</span>
+              <span className="mono run-task">{run.name ?? run.task_id}</span>
               <span className="muted small">{formatTime(run.created_at)}</span>
               <span className="muted small mono">{run.id.slice(0, 8)}</span>
               <span className="spacer" />

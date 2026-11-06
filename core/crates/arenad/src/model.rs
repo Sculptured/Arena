@@ -387,6 +387,8 @@ pub struct Branch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunSummary {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub task_id: String,
     pub created_at: DateTime<Utc>,
     pub branches: Vec<Branch>,

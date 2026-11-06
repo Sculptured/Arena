@@ -805,3 +805,53 @@ fn delete_treats_an_unknown_save_as_gone() {
         ));
     })
 }
+
+#[test]
+fn run_names_are_optional_validated_metadata() {
+    run(async {
+        let upstream = FakeUpstream::start(vec![]).await;
+        let fx = setup("names", &upstream).await;
+        let id = fx
+            .state
+            .store
+            .create_run("original-task", &team())
+            .await
+            .unwrap();
+        let url = format!("{}/api/runs/{id}/name", fx.base);
+        let before = fx.state.store.runs().await.unwrap();
+        assert_eq!(before[0].name, None);
+        let response = fx
+            .http
+            .post(&url)
+            .json(&json!({"name": " Demo: scripted "}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let after = fx.state.store.runs().await.unwrap();
+        assert_eq!(after[0].name.as_deref(), Some("Demo: scripted"));
+        assert_eq!(after[0].task_id, "original-task");
+        invalid_run_names(&fx, &url).await;
+    });
+}
+
+async fn invalid_run_names(fx: &Fx, url: &str) {
+    for name in ["".to_string(), "x".repeat(301)] {
+        let response = fx
+            .http
+            .post(url)
+            .json(&json!({"name": name}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+    }
+    let response = fx
+        .http
+        .post(format!("{}/api/runs/missing/name", fx.base))
+        .json(&json!({"name": "Demo: absent"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}

@@ -235,6 +235,7 @@ export interface BranchDetail extends Branch {
 
 export interface RunSummary {
   id: string;
+  name?: string;
   task_id: string;
   created_at: string;
   branches: Branch[];

@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS events (
     payload jsonb NOT NULL,
     PRIMARY KEY (branch_id, seq)
 );
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS name text;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS restore_mode text;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS restored jsonb NOT NULL DEFAULT '[]';
 "#;
@@ -130,6 +131,15 @@ impl Store {
             )
             .await?;
         Ok(id)
+    }
+
+    /// Sets a run's display name without changing its task or recorded events.
+    pub async fn name_run(&self, id: &str, name: &str) -> Result<bool> {
+        Ok(self
+            .client
+            .execute("UPDATE runs SET name = $2 WHERE id = $1", &[&id, &name])
+            .await?
+            == 1)
     }
 
     /// `team` is the branch's effective team (the run's team with `changes` applied).
@@ -291,7 +301,7 @@ impl Store {
         let runs = self
             .client
             .query(
-                "SELECT id, task_id, created_at FROM runs ORDER BY created_at DESC, id",
+                "SELECT id, name, task_id, created_at FROM runs ORDER BY created_at DESC, id",
                 &[],
             )
             .await?;
@@ -303,6 +313,7 @@ impl Store {
                 RunSummary {
                     branches: by_run.remove(&id).unwrap_or_default(),
                     id,
+                    name: r.get("name"),
                     task_id: r.get("task_id"),
                     created_at: r.get("created_at"),
                 }

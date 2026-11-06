@@ -40,6 +40,7 @@ use crate::{
 };
 
 mod external;
+mod names;
 mod suites;
 mod world;
 
@@ -51,6 +52,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/team/default", get(default_team))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", axum::routing::delete(delete_run))
+        .route("/api/runs/{id}/name", post(names::set))
         .route("/api/branches/{id}", get(get_branch))
         .route("/api/branches/{id}/stream", get(stream))
         .route("/api/branches/{id}/rows", get(rows))
