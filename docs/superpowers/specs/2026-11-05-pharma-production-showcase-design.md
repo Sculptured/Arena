@@ -12,10 +12,23 @@ information systems fit together. They should come away seeing that:
    clearly named as such) and an incident running across them;
 2. a team of agents designed in **Sculptured's visual board** works the incident through those tools,
    step by step, within its approval limits;
-3. Arena can **compare different deployments** of that work, side by side, with measured time, cost,
-   context and outcome.
+3. Arena **tests agent systems deterministically** before they reach production: the same seeded
+   world and the same scripted disruptions every time, scored by the same checks, so a deployment's
+   performance and behaviour can be measured, tuned and re-tested, and different deployments compared.
 
-The user: "Just show how you can compare different deployments", "Thats honestly fine if the single
+The selling point is getting reliable agent systems into production at enterprise scale, in safety-
+and mission-critical work for organisations: test, tune, re-test, then deploy. Forking is a side
+feature, not the story.
+
+What is deterministic, said plainly in the video: the world, the scenarios, the disruptions and the
+scoring. The models are not, so Arena measures the agents' reliability across repeats (how often a
+deployment passes, how often it does something unsafe, how much its runs vary).
+
+The user: "a big selling point of our system should be running determinsitic tests on agent systems
+to see the performance and behavior, tuning and testing things. Not just a fork system since most
+people won't care about that. Its mostly about getting reliable agents into production at enterprise
+scale in safety / mission critical systems for organizational porposes", "Just show how you can
+compare different deployments", "Thats honestly fine if the single
 agent does better I dont care", "Show exactly the visual sculptured team", "open source alternatives
 and make it clear what those alternatives are".
 
@@ -24,8 +37,12 @@ and make it clear what those alternatives are".
 - A fictional sterile-injectables maker and one production incident, end to end, in real open-source
   systems wherever one exists.
 - Every deployment shown on screen as its actual Sculptured board (the org chart the user designs).
-- Two or three deployments run in Arena on the same seeded world and compared with Arena's own
-  metrics, compare and fork. Whatever the numbers say is what the video says.
+- A small **test suite**: the incident and a few variants, each a deterministic scenario with named
+  checks and hard safety checks. Each deployment runs the suite with repeats; Arena reports pass
+  rate, safety violations, consistency across repeats, time and cost.
+- A **tuning loop** on screen: change one thing in a deployment (an instruction, a decision right, the
+  model), re-run the suite, and Arena shows what improved and what regressed.
+- Two or three deployments compared on the same suite. Whatever the numbers say is what the video says.
 - A 5–8 minute narrated video built with the factory showcase's tools (`make_video.sh`, `story.py`).
 
 ## Non-goals
@@ -87,7 +104,24 @@ Built as Sculptured boards, run through Arena, same model and same world:
 - **Optional third:** the same team event-driven, or the team on a cheaper model ("different
   deployments" can mean either). Chosen after the first two run.
 
-One or two runs each; an Arena fork shows a fix tested from the step where a run went wrong.
+Each runs the whole suite with repeats (see below); a fork may appear briefly, as a debugging aid.
+
+## The test suite (new in Arena)
+
+- **Scenarios:** the base incident plus three or four variants, for example: the alternate stock is
+  short-dated for one customer; the qualified carrier has no capacity; the person rejects the first
+  reallocation; a document in the system carries a misleading instruction. Each is seeded and
+  scripted, so every deployment meets exactly the same world.
+- **Checks:** per scenario, the named outcome checks and the hard safety checks above.
+- **Running a suite:** one request runs a deployment over every scenario, N repeats each, and Arena
+  aggregates: pass rate per check, safety violations, spread across repeats, time to each milestone,
+  tokens and cost, production estimates.
+- **Comparing suites:** two suite results side by side (two deployments, or before and after a change),
+  each check's pass rate with its change: the regression test before going to production.
+- Tested without models: scripted stand-in agents pass and fail known scenarios.
+
+Runs cost credits: 4–5 scenarios × 2 deployments × 2 repeats is 16–20 runs, plus a tuning re-run.
+A cheaper model for the suite (one of the "deployments") keeps that down.
 
 ## Sculptured board → Arena (new)
 
@@ -101,9 +135,10 @@ board's roles, tools, permissions and links are what runs. Arena gains nothing d
 1. The plant and the failure (Isaac render, real time).
 2. The systems, each labelled with what it stands in for, showing the seeded data.
 3. Each deployment: its Sculptured board, then the run in Arena (steps, messages, tool calls).
-4. Comparison in Arena: checks, time to each milestone, context, tokens and cost, overhead-corrected
-   production estimate; compare and a fork.
-5. How to recreate it: commands on screen.
+4. The test suite: every deployment over every scenario, pass rates, safety violations, spread.
+5. Tuning: one change, the suite re-run, what improved and what regressed.
+6. Comparison of deployments: checks, time, context, tokens and cost, production estimates.
+7. How to recreate it: commands on screen.
 
 ## Constraints
 
@@ -121,7 +156,7 @@ check thresholds, the board layouts, and the scene's dressing.
 ## Calls made without the user (review these)
 
 - Company, product and incident are my inventions (fictional names).
-- Two deployments plus an optional third; one or two runs each.
+- Two deployments plus an optional third; a suite of 4–5 scenarios with 2 repeats each.
 - SENAITE and Paperless-ngx are time-boxed; simulated stand-ins if they don't fit.
 - The factory showcase video stays paused; its tools are reused.
 - Deadline assumed to be the summit.
