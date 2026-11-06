@@ -1,0 +1,42 @@
+{
+ "note": "The deployments this benchmark suggests, as data a design (a Sculptured board, an external runner) can use: each role's short prompt, the tools its decisions need and the change actions it proposes. Arena itself imposes none of it: arenad's built-in team gets every role's prompt and keeps read_only roles to read tools. No agent decides a change; the simulated QA head and supply chain director do.",
+ "tools": {
+  "erp_query": ["get_doc", "list_docs"],
+  "erp_write": ["insert_doc", "update_doc"],
+  "reports": ["affected_orders", "stock_report", "eligible_lots", "production_schedule"],
+  "crm_query": ["crm_find_account", "crm_find_contact", "crm_find_opportunities"],
+  "crm_write": ["crm_log_note", "crm_update_opportunity"],
+  "lims": ["lims_em_results", "lims_batch_results", "lims_documents", "lims_get_document"],
+  "carriers": ["qualified_lanes", "cold_chain_quotes", "book_shipment", "shipments"],
+  "customers": ["send_customer_notice", "customer_notices"],
+  "approvals": ["propose_change", "list_changes"]
+ },
+ "deployments": [
+  {"id": "single", "name": "Single agent",
+   "roles": [
+    {"id": "operator", "name": "Operations agent", "read_only": false,
+     "prompt": "You handle the incident alone, end to end. Use the reports first; query the ERP directly (list_docs, get_doc) only for what they lack.",
+     "tools": ["erp_query", "erp_write", "reports", "crm_query", "crm_write", "lims", "carriers", "customers", "approvals"],
+     "proposes": ["deviation", "batch_hold", "batch_release", "stock_reallocation", "cold_chain_shipment"]}]},
+  {"id": "team", "name": "Coordinated team",
+   "roles": [
+    {"id": "coordinator", "name": "Incident coordinator", "read_only": true,
+     "prompt": "Read the ticket and the reports, then hand off a short plan: the batch, the affected orders, who does what. You only read.",
+     "tools": ["reports", "approvals", "carriers", "customers"], "proposes": []},
+    {"id": "records", "name": "Records analyst", "read_only": true,
+     "prompt": "You are the only role that queries the ERP and the CRM directly. Hand off compact facts the others need: affected orders (PO, customer, due, qty, minimum shelf life), free stock per lot, the next batch's work order. Ids and numbers only.",
+     "tools": ["erp_query", "crm_query", "reports"], "proposes": []},
+    {"id": "quality", "name": "Quality assurance", "read_only": false,
+     "prompt": "Open the deviation and put the failing batch on hold. Check the LIMS for quarantined lots whose testing is complete and passed; propose batch_release for them and set them Released only once approved.",
+     "tools": ["lims", "erp_write", "approvals"], "proposes": ["deviation", "batch_hold", "batch_release"]},
+    {"id": "supply", "name": "Supply planner", "read_only": false,
+     "prompt": "Allocate eligible lots to the affected orders per SOP-SC-014 (eligible_lots for each customer). Propose stock_reallocation for reserved stock you need. Hand off the allocation: order, lot, site, and orders left unserved with when they can be.",
+     "tools": ["reports", "lims", "approvals"], "proposes": ["stock_reallocation"]},
+    {"id": "production", "name": "Production planner", "read_only": false,
+     "prompt": "Bring the next batch's work order forward (production_schedule, then update its planned start). Hand off the new start date.",
+     "tools": ["reports", "erp_write"], "proposes": []},
+    {"id": "logistics", "name": "Logistics and customer service", "read_only": false,
+     "prompt": "For each allocated order: get quotes from the lot's site, propose cold_chain_shipment on a qualified 2-8 C lane, and book it once approved. Tell every affected customer each order's delivery date and record it in the CRM.",
+     "tools": ["carriers", "customers", "crm_query", "crm_write", "approvals", "reports"], "proposes": ["cold_chain_shipment"]}]}
+ ]
+}
