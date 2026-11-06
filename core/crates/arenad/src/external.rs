@@ -5,7 +5,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{exec::BranchCtx, model::*, store::Store};
+use std::sync::Arc;
+
+use crate::{
+    app::AppState,
+    exec::BranchCtx,
+    model::*,
+    runner,
+    store::{BranchId, RunId, Store},
+};
 
 /// Where an agent reaches the world's tools (MCP, streamable HTTP) and its models (an
 /// OpenAI-compatible base URL: `{gateway_url}/chat/completions`).
@@ -24,6 +32,36 @@ pub fn endpoints(self_base: &str, branch: &str, agent: &str) -> Endpoints {
         mcp_url: format!("{base}/mcp/{branch}/{agent}"),
         gateway_url: format!("{base}/gateway/{branch}/{agent}/v1"),
     }
+}
+
+/// A run an external system drives, just started: its ids and each agent's endpoints.
+#[derive(Debug, Clone, Serialize)]
+pub struct Started {
+    pub run_id: RunId,
+    pub branch_id: BranchId,
+    pub agents: Vec<Endpoints>,
+}
+
+/// Starts a run of `task_id` whose agents an external system drives: its world started, its
+/// clock ticking, the team's agents (there may be none yet) started.
+pub async fn start(state: &AppState, task_id: &str, team: Team) -> anyhow::Result<Started> {
+    let rules = Rules::new(Runner::External);
+    let (run_id, ctx) = runner::begin_run(state, task_id, team, rules).await?;
+    let ctx = Arc::new(ctx);
+    runner::go_live(state, ctx.clone()).await;
+    let mut agents = vec![];
+    for spec in &ctx.team.agents {
+        let start = start_payload(spec);
+        ctx.append(&state.store, Some(&spec.id), EventKind::AgentStart, start)
+            .await?;
+        agents.push(endpoints(&state.config.self_base, &ctx.branch_id, &spec.id));
+    }
+    let branch_id = ctx.branch_id.clone();
+    Ok(Started {
+        run_id,
+        branch_id,
+        agents,
+    })
 }
 
 /// An agent an external system registers. Only `id` is needed; `kind` defaults to `external`.

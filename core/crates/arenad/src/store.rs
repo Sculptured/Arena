@@ -12,6 +12,9 @@ use crate::{
 };
 use parts::proto::Mode;
 
+mod suites;
+pub use suites::NewSuite;
+
 pub type RunId = String;
 pub type BranchId = String;
 
@@ -54,6 +57,21 @@ const BRANCH_COLS: &str = "id, run_id, parent_id, start_seq, team, changes, fork
      error, created_at, ended_at, restore_mode, restored";
 const EVENT_COLS: &str = "branch_id, seq, at, agent, kind, payload";
 
+/// Makes the tables (adding what newer arenads keep), and marks what was running when arenad
+/// last stopped as interrupted.
+async fn migrate(client: &Client) -> Result<()> {
+    client.batch_execute(SCHEMA).await?;
+    client.batch_execute(suites::SCHEMA).await?;
+    client
+        .execute(
+            "UPDATE branches SET status = 'interrupted', ended_at = now() WHERE status = 'running'",
+            &[],
+        )
+        .await?;
+    client.execute(suites::INTERRUPT, &[]).await?;
+    Ok(())
+}
+
 fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
@@ -85,13 +103,7 @@ impl Store {
             .await
             .with_context(|| format!("connecting to {name}"))?;
         tokio::spawn(conn);
-        client.batch_execute(SCHEMA).await?;
-        client
-            .execute(
-                "UPDATE branches SET status = 'interrupted', ended_at = now() WHERE status = 'running'",
-                &[],
-            )
-            .await?;
+        migrate(&client).await?;
         let (tx, _) = broadcast::channel(1024);
         Ok(Store {
             client,

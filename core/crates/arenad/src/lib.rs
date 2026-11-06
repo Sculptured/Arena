@@ -22,5 +22,6 @@ pub mod restore;
 pub mod runner;
 pub mod saves;
 pub mod store;
+pub mod suite;
 pub mod ticker;
 pub mod world;

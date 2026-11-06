@@ -35,20 +35,9 @@ pub(super) async fn create_run(
     check_disk(&state).await?;
     detached(async move {
         let _cleanup = cleanup;
-        let rules = Rules::new(Runner::External);
-        let (run_id, ctx) = runner::begin_run(&state, &task_id, team, rules).await?;
-        let ctx = Arc::new(ctx);
-        runner::go_live(&state, ctx.clone()).await;
-        let mut agents = vec![];
-        for spec in &ctx.team.agents {
-            let start = external::start_payload(spec);
-            ctx.append(&state.store, Some(&spec.id), EventKind::AgentStart, start)
-                .await?;
-            agents.push(endpoints(&state.config.self_base, &ctx.branch_id, &spec.id));
-        }
-        let branch_id = &ctx.branch_id;
+        let started = external::start(&state, &task_id, team).await?;
         Ok(Json(
-            json!({"run_id": run_id, "branch_id": branch_id, "agents": agents}),
+            serde_json::to_value(started).map_err(anyhow::Error::from)?,
         ))
     })
     .await

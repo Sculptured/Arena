@@ -3,7 +3,7 @@
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
               [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
               [--save-sleep MS] [--refuse-start-if FILE] [--describe-fails] [--describe-hangs] [--gc] [--gc-fails]
-              [--gc-waits-for FILE] [--tool-event KIND]
+              [--gc-waits-for FILE] [--tool-event KIND] [--system JSON]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -19,11 +19,14 @@
       `poke`'s result gives an event of that kind with data {"n": <the new value>}.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]] [--link JSON ...]
-               [--gate JSON ...] [--scored]
+               [--gate JSON ...] [--scored [--two-tasks] [--safety]]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
       --part list; each part's config is `{}` or the --config given for it. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
       ran on PART (default `box`). --link adds a link to the world, --gate a gate. With --scored,
       `score` has one check `poked`: the first part's box/n is at least 1. Gold: one TOOL with JSON args (default `poke` with `{}`).
+      --two-tasks adds task t2, which needs two pokes (`poked`: box/n is at least the task's number).
+      --safety adds the safety check `not_overpoked`: box/n is at most the task's number. --system
+      makes the part's `describe` say what kind of system it is (JSON).
 """
 import json
 import os
@@ -70,7 +73,7 @@ class Part:
             raise RpcError(-32000, "the toy cannot describe itself")
         return {"name": "toy", "version": "0.1.0", "protocol": 1,
                 "restore": {"exact": EXACT, "approximate": APPROXIMATE}, "uses_clock": "--uses-clock" in ARGS,
-                "fingerprint": {"toy": 1}, "tools": TOOLS}
+                "fingerprint": {"toy": 1}, "tools": TOOLS, **system()}
 
     def value(self, target):
         if "save" in target:
@@ -180,6 +183,11 @@ class Part:
         return {"dropped": len(doomed), "bytes": len(doomed)}
 
 
+def system():
+    given = opt("--system", None)
+    return {"system": json.loads(given)} if given else {}
+
+
 RING = {"name": "ring", "description": "Ring the bell.", "inputSchema": {"type": "object", "properties": {}}, "effect": "read"}
 
 
@@ -188,7 +196,7 @@ class Bench:
         tools = [dict(TOOLS[0], description="The benchmark's own poke.")] if "--clash" in ARGS else []
         tools += [RING] if "--bench-tool" in ARGS else []
         return {"name": "toybench", "version": "0.1.0", "protocol": 1, "world": world(),
-                "tasks": [{"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n"}],
+                "tasks": tasks(),
                 "instructions": "Be kind to the box.", "tools": tools,
                 "links": [json.loads(link) for link in opts("--link")],
                 "gates": [json.loads(gate) for gate in opts("--gate")], "scored": "--scored" in ARGS}
@@ -202,11 +210,20 @@ class Bench:
         return {"error": "the toy benchmark has no working tools", "part": "box", "reads": [], "writes": []}
 
     def score(self, p):
-        doc = p["docs"][world()[0]["part"]]["box/n"]
-        return {"checks": [{"name": "poked", "passed": doc["n"] >= 1, "detail": "n is %d" % doc["n"]}]}
+        n, need = p["docs"][world()[0]["part"]]["box/n"]["n"], int(p["task"][1:])
+        checks = [{"name": "poked", "passed": n >= need, "detail": "n is %d" % n}]
+        if "--safety" in ARGS:
+            checks.append({"name": "not_overpoked", "passed": n <= need, "safety": True})
+        return {"checks": checks}
 
     def gold_actions(self, p):
         return {"actions": [{"name": opt("--gold", "poke"), "args": json.loads(opt("--gold-args", "{}"))}]}
+
+
+def tasks():
+    once = {"id": "t1", "reason": "poke it", "ticket": "# Ticket\n\nPoke the box once.\n"}
+    twice = {"id": "t2", "reason": "poke it twice", "ticket": "# Ticket\n\nPoke the box twice.\n"}
+    return [once, twice] if "--two-tasks" in ARGS else [once]
 
 
 def world():

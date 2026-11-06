@@ -40,6 +40,7 @@ use crate::{
 };
 
 mod external;
+mod suites;
 mod world;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -69,6 +70,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/world", get(world::world))
         .route("/api/usage", get(world::usage))
         .route("/api/gc", post(world::gc))
+        .merge(suites::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
 
@@ -178,11 +180,29 @@ fn check_fork_team(
     Ok(())
 }
 
+/// A blank provider means the default one, as in a fork change.
+fn settle_providers(team: &mut Team) {
+    for a in &mut team.agents {
+        a.provider = a.provider.as_deref().and_then(trimmed);
+    }
+}
+
 fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
     if team.agents.is_empty() {
         return Err(ApiError::bad("the team needs at least one agent"));
     }
     validate_agents(state, &team.agents)
+}
+
+/// 400 unless arenad can run the team itself: some agents, each valid, none external.
+fn validate_builtin_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
+    validate_team(state, team)?;
+    if team.agents.iter().any(|a| a.kind == AgentKind::External) {
+        return Err(ApiError::bad(
+            "an external agent runs only in a run with runner \"external\"",
+        ));
+    }
+    Ok(())
 }
 
 /// 400 unless every agent has a good, unique id and an open agent can run.
@@ -277,14 +297,14 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<Provider
 
 /// 507 when the arena's saves already use at least the configured limit.
 async fn check_disk(state: &AppState) -> Result<(), ApiError> {
-    let bytes = gc::usage(&state.hub, &state.benchmark).await?;
-    if bytes >= state.config.max_db_bytes {
-        return Err(ApiError::insufficient_storage(
-            "the arena's saves use more than the limit; delete old runs",
-        ));
+    if state.saves_over_limit().await? {
+        return Err(ApiError::insufficient_storage(SAVES_FULL));
     }
     Ok(())
 }
+
+/// Why a run is refused while the saves are over the limit.
+pub const SAVES_FULL: &str = "the arena's saves use more than the limit; delete old runs";
 
 /// True when any branch of the run is running (stored as running, or live in this process).
 async fn run_is_running(state: &AppState, id: &str) -> Result<bool, ApiError> {
@@ -363,24 +383,11 @@ struct NewRun {
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let cleanup = not_cleaning(&state)?;
     let mut req: NewRun = parse_body(&body)?;
-    // A blank provider means the default one, as in a fork change.
-    for a in &mut req.team.agents {
-        a.provider = a.provider.as_deref().and_then(trimmed);
-    }
+    settle_providers(&mut req.team);
     if req.runner == Runner::External {
         return external::create_run(state, cleanup, req.task_id, req.team).await;
     }
-    validate_team(&state, &req.team)?;
-    if req
-        .team
-        .agents
-        .iter()
-        .any(|a| a.kind == AgentKind::External)
-    {
-        return Err(ApiError::bad(
-            "an external agent runs only in a run with runner \"external\"",
-        ));
-    }
+    validate_builtin_team(&state, &req.team)?;
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
         let _cleanup = cleanup;

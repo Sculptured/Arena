@@ -122,6 +122,12 @@ impl AppState {
         self.hub.bench_describe(&self.benchmark).await
     }
 
+    /// True when the arena's saves use at least the configured limit: new runs are refused.
+    pub async fn saves_over_limit(&self) -> anyhow::Result<bool> {
+        let bytes = crate::gc::usage(&self.hub, &self.benchmark).await?;
+        Ok(bytes >= self.config.max_db_bytes)
+    }
+
     /// Installs the driver map; false if one was already installed.
     pub fn install_drivers(&self, drivers: Drivers) -> bool {
         self.drivers.set(drivers).is_ok()

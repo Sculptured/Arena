@@ -31,6 +31,10 @@ are in [reference.md](reference.md).
 - **Scoring**: when a branch ends, arenad saves every part and diffs the world with the task's gold world (the
   base world plus the task's gold actions, made once and kept). The branch passes when no key differs and at
   least one part could be checked.
+- **Suite**: one team run over a set of a benchmark's tasks, each repeated, on the same seeded world and scored
+  by the same checks, then aggregated (see [Test suites](#test-suites)).
+- **Safety check**: a named check a benchmark marks `safety: true`: an unsafe action, not a missed goal. Suites
+  count its failures apart from the score.
 - **Clock**: parts with `uses_clock` get the arena clock, which runs with real time (times
   `ARENA_CLOCK_SPEED`) while agents work and stands still while the world is saved or restored and while the
   record is written, so time-based world logic sees about the time it would see in production.
@@ -176,6 +180,44 @@ A fork of an external run starts at the step asked for, restores the world as it
 the new branch live. Its answer gives each agent's recorded history before the fork point and its endpoints on the
 new branch, so the design resumes its agents its own way. A branch whose design never calls `finish` stays running
 until arenad restarts (it is then `interrupted`).
+
+## What the world says about itself
+
+An integration may say in `describe` what kind of system it is: `system: {kind, product, stands_in_for?,
+simulated}` (for example an ERP, `ERPNext`, standing in for `SAP S/4HANA`). Each tool already says whether it
+reads or writes (`effect`). A run's `RunStart` records both: `systems` maps each part that says to its `system`,
+and `tools` maps each tool of the world to `{effect, part?}` (a benchmark's own tool has no fixed part; its step
+records the part it ran on). With each tool call's `part`, a UI can tell from the run's record alone which system
+a step touched and whether it read or wrote. A run recorded before this, or a part that does not say, has no such
+entry: unknown, not guessed. Named checks keep their `safety` flag in the run's `check` event.
+
+## Test suites
+
+A suite runs one team (a deployment) over a set of the benchmark's tasks, each `repeats` times. Every run starts
+from the same seeded world and is scored by the same checks, so what varies between runs is the agents. The models
+are not deterministic, so a suite measures how reliable the deployment is: how often each check passes, how often
+it does something unsafe, and how much its runs vary.
+
+- **Runners.** With `chain` or `concurrent`, arenad makes the runs itself, one after another (each waits for the
+  previous one to end). With `external`, the design's own system claims each next run (`POST
+  /api/suites/{id}/claim`), and arenad starts it as an external run that the system drives as described in
+  [External designs](#external-designs). A built-in suite that arenad was running when it stopped is `stopped`
+  at the next start; the runs it had made keep their results.
+- **What is counted.** Only scored runs (ended with a `check` event) count in rates and spreads; runs that ended
+  without one (an infrastructure error, an interruption) are `unscored`. A run scored against the task's gold
+  world instead of named checks has one check, `matches_gold`. Per task and check, the pass rate. The score is
+  the share of goal checks passed (safety checks left out); safety violations (failed safety checks) are counted
+  apart, with the runs that had one. The pass rate is the share of runs that passed every check, safety included.
+- **Spread.** Per task and over the whole suite: the checks passed, measured and estimated time, tokens, cost and
+  peak context of the scored runs, each as `{n, unknown, min, max, mean}`.
+- **Compare.** Two suites (two deployments, or one before and after a change): each check's pass rate with its
+  change, safety, the pass rate, time, tokens and cost, each flagged improved, regressed or the same. Any change in
+  a pass rate counts; time, tokens and cost count only beyond 10% of the first suite's mean, as runs vary a little.
+  A suite whose task lacks a check the other has shows it as `incomparable`.
+
+Verified by `core/crates/arenad/tests/suites.rs` on a toy world with scripted agents (no model): a built-in
+suite of 2 tasks × 2 repeats, a comparison that flags a safety regression and a goal improvement, and an external
+suite claimed and driven over HTTP.
 
 ## Overhead and estimates
 
