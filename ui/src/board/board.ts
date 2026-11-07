@@ -95,3 +95,23 @@ function boardLayout(agents: AgentSpec[], board: Board): BoardLayout {
 export function layoutBoard(team: Team, runner: Runner = 'chain'): BoardLayout {
   return team.board ? boardLayout(team.agents, team.board) : plainLayout(team.agents, runner);
 }
+
+/** Cards are never drawn smaller than this when a board opens: a bigger board scrolls and pans instead. */
+export const READABLE_ZOOM = 0.8;
+
+/** The board's size: the furthest card or group edge from the corner. */
+export function boardSize(b: BoardLayout): { w: number; h: number } {
+  const w = Math.max(0, ...b.cards.map((c) => c.x + CARD_W), ...b.groups.map((g) => g.x + g.w));
+  const h = Math.max(0, ...b.cards.map((c) => c.y + CARD_H), ...b.groups.map((g) => g.y + g.h));
+  return { w, h };
+}
+
+/**
+ * Where a board opens in a box `boxW` × `boxH`: the whole board centred when it fits at a readable
+ * size (never above 1:1), else at the readable size from its top-left corner, to pan from there.
+ */
+export function openingView(size: { w: number; h: number }, boxW: number, boxH: number, pad = 16): { x: number; y: number; zoom: number } {
+  const fit = Math.min(1, (boxW - 2 * pad) / Math.max(1, size.w), (boxH - 2 * pad) / Math.max(1, size.h));
+  if (fit < READABLE_ZOOM) return { x: pad, y: pad, zoom: READABLE_ZOOM };
+  return { x: (boxW - size.w * fit) / 2, y: (boxH - size.h * fit) / 2, zoom: fit };
+}

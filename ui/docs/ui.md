@@ -148,7 +148,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   cards (name, a one-line job from the prompt, model badge, Read-only, the decisions it owns), group
   zones and "hands work to" arrows from a Sculptured design; any other team laid out from its runner
   (in order: rows of three left to right with an arrow to the next; at once: one row;
-  `board/board.ts`). A card shows its prompt beside the board. **Import** (`board/importTeam.ts`) takes a
+  `board/board.ts`). It opens readable: a board that only fits below 80% opens at 80% from its top-left corner. The wheel pans, Ctrl/⌘ + wheel or a pinch zooms, a drag pans; −, Fit and + zoom by button, and **Expand** opens it full screen. A card shows its prompt beside the board. **Import** (`board/importTeam.ts`) takes a
   Sculptured design (`TeamDraft`: `claude` becomes Claude Code, `codex` Codex; the model from the
   agent, its group or the team; places, groups and hands-work-to connections kept; agents put in work
   order; an agent whose `data_access.writes` is empty is read-only) or an Arena team, picked, dropped

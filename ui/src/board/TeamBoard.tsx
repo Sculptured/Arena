@@ -1,10 +1,12 @@
-import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow, ReactFlowProvider } from '@xyflow/react';
-import { useMemo } from 'react';
+import { type Edge, Handle, MarkerType, type Node, type NodeProps, Panel, Position, ReactFlow, type ReactFlowInstance, ReactFlowProvider, useReactFlow } from '@xyflow/react';
+import { Maximize2, Minus, Plus } from 'lucide-react';
+import { useMemo, useRef } from 'react';
+import { Button } from '../components/ui/button';
 import { Tag } from '../components/ui/status';
 import { cn } from '@/lib/cn';
 import type { AgentSpec, Runner, Team } from '../types';
 import { agentModelLine } from '../providers';
-import { type BoardGroup, CARD_H, CARD_W, jobLine, layoutBoard } from './board';
+import { type BoardGroup, CARD_H, CARD_W, boardSize, jobLine, layoutBoard, openingView } from './board';
 
 type CardData = { agent: AgentSpec; decides: string[]; selected: boolean };
 type ZoneData = { group: BoardGroup };
@@ -57,19 +59,45 @@ function graph(team: Team, runner: Runner, selected: string | null): { nodes: (C
   return { nodes: [...zones, ...cards], edges };
 }
 
-/** A team as a read-only Sculptured-style board: cards grouped by role, "hands work to" arrows. Clicking a card picks it. */
-export default function TeamBoard({ team, runner, selected, onSelect, className }: {
-  team: Team; runner: Runner; selected: string | null; onSelect: (id: string | null) => void; className?: string;
+const ZOOM_MS = 150;
+
+/** −, Fit and +, and Expand: the same feel as the timeline. */
+function Controls({ onExpand }: { onExpand?: () => void }) {
+  const rf = useReactFlow();
+  return (
+    <Panel position="top-right" className="!m-2 flex items-center gap-0.5 rounded-md border border-line bg-raised p-0.5 shadow-panel">
+      <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" onClick={() => rf.zoomOut({ duration: ZOOM_MS })}><Minus /></Button>
+      <Button size="sm" variant="ghost" onClick={() => rf.fitView({ padding: 0.08, duration: ZOOM_MS })} title="Show the whole board">Fit</Button>
+      <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" onClick={() => rf.zoomIn({ duration: ZOOM_MS })}><Plus /></Button>
+      {onExpand && <Button size="sm" variant="ghost" onClick={onExpand} title="Open the board full screen"><Maximize2 />Expand</Button>}
+    </Panel>
+  );
+}
+
+/**
+ * A team as a read-only Sculptured-style board: cards grouped by role, "hands work to" arrows.
+ * It opens readable (a big board from its corner, to pan); the wheel pans, Ctrl/⌘ + wheel or a
+ * pinch zooms, a drag pans. Clicking a card picks it.
+ */
+export default function TeamBoard({ team, runner, selected, onSelect, onExpand, className }: {
+  team: Team; runner: Runner; selected: string | null; onSelect: (id: string | null) => void; onExpand?: () => void; className?: string;
 }) {
   const g = useMemo(() => graph(team, runner, selected), [team, runner, selected]);
-  // A new team or runner refits the view.
+  const box = useRef<HTMLDivElement>(null);
+  // A new team or runner opens afresh.
   const fitKey = `${team.id}:${team.agents.map((a) => a.id).join(',')}:${runner}`;
+  const open = (rf: ReactFlowInstance<CardNode | ZoneNode>) => {
+    const el = box.current;
+    if (el) rf.setViewport(openingView(boardSize(layoutBoard(team, runner)), el.clientWidth, el.clientHeight));
+  };
   return (
-    <div className={cn('h-72 w-full', className)}>
+    <div ref={box} className={cn('h-72 w-full', className)}>
       <ReactFlowProvider key={fitKey}>
-        <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} fitView fitViewOptions={{ padding: 0.08 }} proOptions={{ hideAttribution: true }}
-          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnScroll={false} preventScrolling={false} minZoom={0.2} maxZoom={1.25}
-          onNodeClick={(_, n) => { if (n.type === 'card') onSelect(n.id === selected ? null : n.id); }} onPaneClick={() => onSelect(null)} />
+        <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} onInit={open} proOptions={{ hideAttribution: true }}
+          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnScroll zoomOnScroll={false} zoomOnPinch minZoom={0.2} maxZoom={1.5}
+          onNodeClick={(_, n) => { if (n.type === 'card') onSelect(n.id === selected ? null : n.id); }} onPaneClick={() => onSelect(null)}>
+          <Controls onExpand={onExpand} />
+        </ReactFlow>
       </ReactFlowProvider>
     </div>
   );

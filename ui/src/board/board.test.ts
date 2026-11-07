@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentSpec, Team } from '../types';
 import { agentModelLine } from '../providers';
-import { CARD_H, CARD_W, jobLine, layoutBoard } from './board';
+import { CARD_H, CARD_W, READABLE_ZOOM, boardSize, jobLine, layoutBoard, openingView } from './board';
 import { importTeam, workOrder } from './importTeam';
 
 const agent = (id: string, more: Partial<AgentSpec> = {}): AgentSpec => ({ id, name: id, kind: 'claude_code', model: null, prompt: '', ...more });
@@ -54,6 +54,17 @@ describe('team board layout', () => {
     expect(at).toEqual({ design: [24, 172], build: [288, 172], check: [552, 52] });
     expect(b.groups.map((g) => [g.id, g.x, g.y])).toEqual([['make', 0, 120], ['review', 528, 0]]);
     expect(b.links).toEqual([{ from: 'design', to: 'build' }, { from: 'build', to: 'check' }]);
+  });
+
+  it('opens a small board whole, a big one readable from its corner', () => {
+    const small = boardSize(layoutBoard(team(3), 'chain'));
+    expect(small).toEqual({ w: 3 * CARD_W + 2 * 56, h: CARD_H });
+    const v = openingView(small, 1000, 400);
+    expect(v.zoom).toBe(1);
+    expect(v.x).toBeCloseTo((1000 - small.w) / 2);
+    const big = { w: 1400, h: 1200 };
+    expect(openingView(big, 780, 320)).toEqual({ x: 16, y: 16, zoom: READABLE_ZOOM });
+    expect(openingView(big, 1200, 1000).zoom).toBeCloseTo(968 / 1200);
   });
 
   it('says what each agent does and runs on in one line', () => {
