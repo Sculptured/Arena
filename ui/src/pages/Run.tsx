@@ -18,6 +18,7 @@ import EventLog from '../run/EventLog';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
 import MetricsPanel from '../run/Metrics';
+import { pausesOf } from '../run/flow';
 import { checkMark, runStats, safetyLine } from '../run/runStats';
 import { formatCost, summarize } from '../run/timeline';
 import { stepOrder } from '../run/timelineLayout';
@@ -148,7 +149,10 @@ function Main({ detail, selected, onSelect, models, setModels }: {
   detail: BranchDetail; selected: number | null; onSelect: (s: number) => void; models: boolean; setModels: (m: boolean) => void;
 }) {
   const lanes = useMemo(() => buildLanes(detail.events, detail.team, detail.start_seq), [detail]);
-  const span = spanOf(lanes, detail.status === 'running' ? Date.now() : undefined);
+  const live = detail.status === 'running';
+  const now = Date.now();
+  const span = spanOf(lanes, live ? now : undefined);
+  const pauses = useMemo(() => pausesOf(detail.events, now), [detail.events, now]);
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <Panel>
@@ -157,7 +161,7 @@ function Main({ detail, selected, onSelect, models, setModels }: {
             <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">Actions{detail.status === 'running' ? ' · live' : ''}</h2>
             <TabsList className="border-b-0"><TabsTrigger value="timeline">Timeline</TabsTrigger><TabsTrigger value="log">Event log</TabsTrigger></TabsList>
           </div>
-          <TabsContent value="timeline"><ActionTimeline lanes={lanes} team={detail.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} /></TabsContent>
+          <TabsContent value="timeline"><ActionTimeline lanes={lanes} team={detail.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} live={live} pauses={pauses} /></TabsContent>
           <TabsContent value="log"><EventLog lanes={lanes} span={span} selected={selected} onSelect={onSelect} models={models} /></TabsContent>
         </Tabs>
       </Panel>

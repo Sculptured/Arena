@@ -21,7 +21,7 @@ describe('actions', () => {
     const info = worldInfo([old]);
     expect(info.known).toBe(false);
     const a = classify(ev(2, 1, 'a', 'tool_call', { name: 'open_deviation', part: 'erp' }), info)!;
-    expect([a.system, a.effect, actionWord(a)]).toEqual([null, 'unknown', 'unknown call']);
+    expect([a.system, a.effect, actionWord(a)]).toEqual([null, 'unknown', 'Unknown call']);
   });
 
   it('a_benchmark_tool_takes_its_part_from_the_call_and_errors_are_not_refusals', () => {

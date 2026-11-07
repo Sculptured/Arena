@@ -1,14 +1,15 @@
-import { Minus, Plus } from 'lucide-react';
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { CircleHelp, Minus, Plus, Radio } from 'lucide-react';
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CHECK_LANE, type LaneRow, type Mark, type Span, WORLD_LANE } from '../control/lanes';
 import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { cn } from '@/lib/cn';
 import { agentModelLine } from '../providers';
 import type { Team } from '../types';
+import type { Pause } from './flow';
 import { LANE_H, type Layout, type Placed, type Shape, layoutTimeline, shapeOf, shortLabel } from './timelineLayout';
-
-const ZOOMS = [1, 2, 4, 8, 16, 32];
+import { MAX_ZOOM, MIN_ZOOM, type View, clampScroll, endScroll, onWheel, stepZoom, trackWidth } from './zoom';
 const RULER_H = 22;
 
 /** Each shape's look: hollow reads, solid (heavier) writes, diamonds for approvals, a triangle in alarm colour for refusals and errors. */
@@ -96,7 +97,7 @@ function Wires({ layout, lanes, width, selected }: { layout: Layout; lanes: numb
 function LaneLabels({ lanes, team, width }: { lanes: LaneRow[]; team: Team; width: number }) {
   return (
     <div className="sticky left-0 z-30 shrink-0 border-r border-line bg-surface" style={{ width }}>
-      <div className="border-b border-line px-2 text-2xs leading-[21px] font-medium tracking-wide text-muted uppercase" style={{ height: RULER_H }}>Agent</div>
+      <div className="border-b border-line px-2 text-2xs leading-[21px] font-medium text-muted" style={{ height: RULER_H }}>Agent</div>
       {lanes.map((l) => {
         const agent = team.agents.find((a) => a.id === l.id);
         const model = agent ? agentModelLine(agent) : l.id === WORLD_LANE ? 'links and world events' : l.id === CHECK_LANE ? 'scoring' : '';
@@ -125,17 +126,6 @@ function useWidth() {
   return { ref, width };
 }
 
-/** Scrolls the track sideways so the selected mark sits in the middle of the visible part, past the lane names. */
-function useFollow(box: React.RefObject<HTMLDivElement | null>, selected: number | null, layout: Layout | null, labelW: number) {
-  useEffect(() => {
-    const el = box.current;
-    const x = layout?.placed.find((p) => p.mark.seq === selected)?.x;
-    if (!el || x == null) return;
-    const visible = el.clientWidth - labelW;
-    if (x < el.scrollLeft + 24 || x > el.scrollLeft + visible - 24) el.scrollLeft = Math.max(0, x - visible / 2);
-  }, [box, selected, layout, labelW]);
-}
-
 export interface TimelineProps {
   lanes: LaneRow[];
   team: Team;
@@ -144,18 +134,99 @@ export interface TimelineProps {
   onSelect: (seq: number) => void;
   models: boolean;
   onModels: (show: boolean) => void;
+  /** A live run: the track follows the newest step until the user scrolls or zooms away. */
+  live?: boolean;
+  /** Pauses, drawn as bands across the lanes. */
+  pauses?: Pause[];
 }
 
-function Toolbar({ zoom, setZoom, models, onModels }: { zoom: number; setZoom: (z: number) => void; models: boolean; onModels: (s: boolean) => void }) {
-  const i = ZOOMS.indexOf(zoom);
+/** The track's zoom and scroll, applied to the box, and whether it follows the newest step. */
+function useTrackView(el: HTMLDivElement | null, viewW: number, minW: number, live: boolean) {
+  const [view, setView] = useState<View>({ zoom: 1, scroll: 0 });
+  const [follow, setFollow] = useState(true);
+  const trackW = trackWidth(viewW, view.zoom, minW);
+  const following = live && follow;
+  // While following, the end of the track (the newest step) stays in view.
+  const scroll = following ? endScroll(trackW, viewW) : clampScroll(view.scroll, trackW, viewW);
+  useLayoutEffect(() => { if (el && Math.abs(el.scrollLeft - scroll) > 0.5) el.scrollLeft = scroll; });
+  const latest = useRef({ view: { ...view, scroll }, viewW, minW });
+  latest.current = { view: { ...view, scroll }, viewW, minW };
+  /** A move the user made: it stops following. */
+  const move = useCallback((next: View) => { setView(next); setFollow(false); }, []);
+  return { view: { ...view, scroll }, trackW, following, move, latest, follow: () => setFollow(true), setFollow };
+}
+
+/** Ctrl/⌘ + wheel or a pinch zooms around the cursor, the wheel scrolls sideways, a drag on empty space pans. */
+function useMouse(el: HTMLDivElement | null, labelW: number, t: ReturnType<typeof useTrackView>) {
+  const { latest, move } = t;
+  useEffect(() => {
+    if (!el) return;
+    const onWheelEvent = (e: WheelEvent) => {
+      const { view, viewW, minW } = latest.current;
+      const cursor = Math.max(0, e.clientX - el.getBoundingClientRect().left - labelW);
+      const next = onWheel(e, view, cursor, viewW, minW);
+      if (!next) return;
+      e.preventDefault();
+      move(next);
+    };
+    el.addEventListener('wheel', onWheelEvent, { passive: false });
+    return () => el.removeEventListener('wheel', onWheelEvent);
+  }, [el, labelW, latest, move]);
+  const drag = useRef<{ x: number; scroll: number } | null>(null);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+    drag.current = { x: e.clientX, scroll: latest.current.view.scroll };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!drag.current) return;
+    const { view, viewW, minW } = latest.current;
+    const trackW = trackWidth(viewW, view.zoom, minW);
+    move({ ...view, scroll: clampScroll(drag.current.scroll - (e.clientX - drag.current.x), trackW, viewW) });
+  };
+  const onPointerUp = () => { drag.current = null; };
+  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };
+}
+
+/** A scrollbar or touch scroll the user made also stops following. */
+function useNativeScroll(el: HTMLDivElement | null, t: ReturnType<typeof useTrackView>) {
+  const { latest, move } = t;
+  useEffect(() => {
+    if (!el) return;
+    const onScroll = () => {
+      const { view } = latest.current;
+      if (Math.abs(el.scrollLeft - view.scroll) > 1) move({ ...view, scroll: el.scrollLeft });
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [el, latest, move]);
+}
+
+/** Scrolls the selected mark into the middle of the view when it is out of sight. */
+function useShowSelected(selected: number | null, layout: Layout | null, t: ReturnType<typeof useTrackView>) {
+  const { latest, move } = t;
+  useEffect(() => {
+    const x = layout?.placed.find((p) => p.mark.seq === selected)?.x;
+    const { view, viewW, minW } = latest.current;
+    if (x == null || (x >= view.scroll + 24 && x <= view.scroll + viewW - 24)) return;
+    move({ ...view, scroll: clampScroll(x - viewW / 2, trackWidth(viewW, view.zoom, minW), viewW) });
+  }, [selected, layout, latest, move]);
+}
+
+function Toolbar({ t, viewW, minW, models, onModels, live }: {
+  t: ReturnType<typeof useTrackView>; viewW: number; minW: number; models: boolean; onModels: (s: boolean) => void; live: boolean;
+}) {
+  const { view } = t;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-1.5 text-xs text-muted">
       <Legend />
+      <span className="hidden text-faint sm:inline">Scroll to move · Ctrl + scroll or pinch to zoom · drag to pan</span>
+      {live && !t.following && <Button size="sm" onClick={t.follow} title="Follow the newest step"><Radio />Follow</Button>}
       <label className="ml-auto flex items-center gap-1.5"><Checkbox checked={models} onChange={(e) => onModels(e.target.checked)} />Model calls</label>
       <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
-        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" disabled={i <= 0} onClick={() => setZoom(ZOOMS[i - 1])}><Minus /></Button>
-        <Button size="sm" variant="ghost" className="w-10 font-mono" onClick={() => setZoom(1)} title="Fit the run to the width">{zoom === 1 ? 'fit' : `${zoom}×`}</Button>
-        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" disabled={i >= ZOOMS.length - 1} onClick={() => setZoom(ZOOMS[i + 1])}><Plus /></Button>
+        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" disabled={view.zoom <= MIN_ZOOM} onClick={() => t.move(stepZoom(view, -1, viewW, minW))}><Minus /></Button>
+        <Button size="sm" variant="ghost" className="w-12 font-mono" onClick={() => t.move({ zoom: 1, scroll: 0 })} title="Fit the run to the width">{view.zoom <= 1.01 ? 'Fit' : `${view.zoom.toFixed(view.zoom < 10 ? 1 : 0)}×`}</Button>
+        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" disabled={view.zoom >= MAX_ZOOM} onClick={() => t.move(stepZoom(view, 1, viewW, minW))}><Plus /></Button>
       </div>
     </div>
   );
@@ -163,34 +234,52 @@ function Toolbar({ zoom, setZoom, models, onModels }: { zoom: number; setZoom: (
 
 function Legend() {
   const item = (shape: Shape, word: string) => (
-    <span className="inline-flex items-center gap-1"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE[shape])} /></span>{word}</span>
+    <span className="inline-flex items-center gap-1.5"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE[shape])} /></span>{word}</span>
   );
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      {item('read', 'read')}{item('write', 'write')}{item('gate-write', 'approval')}{item('message', 'message')}{item('model', 'model call')}
-      <span className="inline-flex items-center gap-1 text-alarm">{<span className="grid size-3 place-items-center"><span className={cn('block', SHAPE.abnormal)} /></span>}refused / error</span>
-    </span>
+    <Popover>
+      <PopoverTrigger asChild><Button size="icon" variant="ghost" className="size-6" aria-label="What the marks mean"><CircleHelp /></Button></PopoverTrigger>
+      <PopoverContent className="flex w-56 flex-col gap-1.5 text-xs">
+        {item('read', 'Read')}{item('write', 'Write')}{item('gate-write', 'Approval')}{item('message', 'Message')}{item('model', 'Model call')}
+        <span className="inline-flex items-center gap-1.5 text-alarm"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE.abnormal)} /></span>Refused or error</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 bg-sunken ring-1 ring-line" />Paused</span>
+      </PopoverContent>
+    </Popover>
   );
 }
 
+/** Pauses as shaded bands across the lanes. */
+function Bands({ layout, height }: { layout: Layout; height: number }) {
+  return layout.bands.map((b) => (
+    <div key={b.x1} className="pointer-events-none absolute bg-sunken/80 ring-1 ring-line" style={{ left: b.x1, width: b.x2 - b.x1, top: RULER_H, height }} title="Paused">
+      <span className="absolute top-1 left-1 text-2xs text-faint">Paused</span>
+    </div>
+  ));
+}
+
 /** Swim lanes per agent on one time axis: every action labelled by system kind and read/write, messages drawn between lanes. */
-export default function ActionTimeline({ lanes, team, span, selected, onSelect, models, onModels }: TimelineProps) {
-  const [zoom, setZoom] = useState(1);
+export default function ActionTimeline({ lanes, team, span, selected, onSelect, models, onModels, live = false, pauses = [] }: TimelineProps) {
   const box = useWidth();
   const labelW = box.width && box.width < 640 ? 112 : 184;
   // A phone gets a track wider than the screen, to scroll; a desktop fits the run at 1×.
-  const trackW = Math.max(box.width < 640 ? 640 : 240, (box.width - labelW) * zoom);
-  const layout = useMemo(() => (span ? layoutTimeline(lanes, span, trackW, models) : null), [lanes, span, trackW, models]);
-  useFollow(box.ref, selected, layout, labelW);
+  const minW = box.width < 640 ? 640 : 240;
+  const viewW = Math.max(0, box.width - labelW);
+  const t = useTrackView(box.ref.current, viewW, minW, live);
+  const layout = useMemo(() => (span ? layoutTimeline(lanes, span, t.trackW, models, pauses) : null), [lanes, span, t.trackW, models, pauses]);
+  const mouse = useMouse(box.ref.current, labelW, t);
+  useNativeScroll(box.ref.current, t);
+  useShowSelected(selected, layout, t);
+  const height = lanes.length * LANE_H;
   return (
     <div className="flex min-w-0 flex-col">
-      <Toolbar zoom={zoom} setZoom={setZoom} models={models} onModels={onModels} />
-      <div ref={box.ref} className="relative flex min-w-0 overflow-x-auto overscroll-x-contain">
+      <Toolbar t={t} viewW={viewW} minW={minW} models={models} onModels={onModels} live={live} />
+      <div ref={box.ref} className="relative flex min-w-0 cursor-grab touch-pan-y overflow-x-auto overscroll-x-contain select-none active:cursor-grabbing" {...mouse}>
         <LaneLabels lanes={lanes} team={team} width={labelW} />
         {layout && (
-          <div className="relative shrink-0" style={{ width: trackW, height: RULER_H + lanes.length * LANE_H }}>
+          <div className="relative shrink-0" style={{ width: t.trackW, height: RULER_H + height }}>
             <Ruler layout={layout} />
-            <Wires layout={layout} lanes={lanes.length} width={trackW} selected={selected} />
+            <Bands layout={layout} height={height} />
+            <Wires layout={layout} lanes={lanes.length} width={t.trackW} selected={selected} />
             {layout.placed.map((p) => <MarkButton key={p.mark.seq} p={p} selected={selected === p.mark.seq} onSelect={onSelect} />)}
           </div>
         )}

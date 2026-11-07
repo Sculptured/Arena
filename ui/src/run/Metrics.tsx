@@ -12,6 +12,7 @@ export const OVERHEAD_KINDS: [keyof Overhead, string][] = [
   ['link', 'link calls'],
   ['wait', 'waiting for the step lock'],
   ['score', 'final save and scoring'],
+  ['pause', 'paused'],
 ];
 
 const secs = (s: number) => (s < 10 ? s.toFixed(2) : s.toFixed(1));

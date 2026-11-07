@@ -24,7 +24,7 @@ describe('action timeline', () => {
     expect(html).toContain('aria-label="step 6 · LIMS read');
     expect(html).toContain('aria-label="step 9 · ERP write · hold_batch: hold_batch refused: no approval for CVX-2611"');
     expect(html).toContain('aria-pressed="true"');
-    expect(text(html)).toContain('refused / error');
+    expect(html).toContain('aria-label="What the marks mean"');
   });
   it('a model call names the provider that answered', () => {
     expect(modelCallLine({ provider: 'anthropic', request: { model: 'claude-x' } })).toBe('Anthropic · claude-x');

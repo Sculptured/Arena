@@ -35,14 +35,14 @@ describe('suite display', () => {
       ['short', [1, 2], 0, 1, 1],
     ]);
     const c = g[1].cells[0];
-    expect([c.mark.word, c.mark.abnormal, c.checks, c.unsafe, c.branchId]).toEqual(['failed', true, '1/2', true, 'bshort1']);
-    expect([g[1].cells[1].mark.word, g[1].cells[1].checks]).toEqual(['pending', '']);
+    expect([c.mark.word, c.mark.abnormal, c.checks, c.unsafe, c.branchId]).toEqual(['Failed', true, '1/2', true, 'bshort1']);
+    expect([g[1].cells[1].mark.word, g[1].cells[1].checks]).toEqual(['Pending', '']);
   });
 
   it('shows_status_and_verdicts_as_glyph_and_word_with_colour_only_for_abnormal', () => {
-    expect(runMark('passed')).toEqual({ glyph: '✓', word: 'passed', abnormal: false });
+    expect(runMark('passed')).toEqual({ glyph: '✓', word: 'Passed', abnormal: false });
     expect(runMark('infra_error').abnormal).toBe(true);
-    expect(verdictMark('regressed')).toEqual({ glyph: '▼', word: 'regressed', abnormal: true });
+    expect(verdictMark('regressed')).toEqual({ glyph: '▼', word: 'Regressed', abnormal: true });
     expect(verdictMark('improved').abnormal).toBe(false);
   });
 

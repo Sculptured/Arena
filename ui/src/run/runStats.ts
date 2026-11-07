@@ -34,7 +34,7 @@ export function runStats(events: Event[], startSeq: number | null): RunStats {
 /** "✓ passed 13/13", "✕ failed 11/13": the check as a mark. */
 export function checkMark(c: NonNullable<RunStats['check']>): Mark {
   const count = c.total ? ` ${c.ok}/${c.total}` : '';
-  return c.passed ? { glyph: '✓', word: `passed${count}`, abnormal: false } : { glyph: '✕', word: `failed${count}`, abnormal: true };
+  return c.passed ? { glyph: '✓', word: `Passed${count}`, abnormal: false } : { glyph: '✕', word: `Failed${count}`, abnormal: true };
 }
 
 /** "◆ 1 of 4 violated", "0 of 4 violated". */

@@ -58,21 +58,22 @@ type Payload = Record<string, unknown>;
 function messageMark(e: Event, p: Payload, base: Base): Mark {
   const raw = typeof p.to === 'string' ? p.to : null;
   const to = raw == null ? 'next' : raw === '*' ? 'everyone' : raw;
-  return { ...base, kind: 'message', label: `${e.kind} → ${to}`, detail: String(p.text ?? p.note ?? ''), to: raw };
+  const word = e.kind === 'handoff' ? 'Handoff' : 'Message';
+  return { ...base, kind: 'message', label: `${word} → ${to}`, detail: String(p.text ?? p.note ?? ''), to: raw };
 }
 
 function endMark(p: Payload, base: Base): Mark {
   const failed = p.ok === false;
-  return { ...base, kind: 'end', label: failed ? 'ended: failed' : 'ended', detail: String(p.error ?? ''), outcome: failed ? 'error' : 'ok' };
+  return { ...base, kind: 'end', label: failed ? 'Ended: failed' : 'Ended', detail: String(p.error ?? ''), outcome: failed ? 'error' : 'ok' };
 }
 
 const MARKS: Partial<Record<Event['kind'], (e: Event, p: Payload, base: Base) => Mark>> = {
   message: messageMark,
   handoff: messageMark,
-  model_call: (_e, _p, base) => ({ ...base, kind: 'model', label: 'model call', detail: '' }),
-  agent_start: (_e, _p, base) => ({ ...base, kind: 'start', label: 'start', detail: '' }),
+  model_call: (_e, _p, base) => ({ ...base, kind: 'model', label: 'Model call', detail: '' }),
+  agent_start: (_e, _p, base) => ({ ...base, kind: 'start', label: 'Start', detail: '' }),
   agent_end: (_e, p, base) => endMark(p, base),
-  check: (_e, p, base) => ({ ...base, kind: 'check', label: p.passed ? 'check passed' : 'check failed', detail: '', outcome: p.passed ? 'ok' : 'error' }),
+  check: (_e, p, base) => ({ ...base, kind: 'check', label: p.passed ? 'Check passed' : 'Check failed', detail: '', outcome: p.passed ? 'ok' : 'error' }),
   world_event: (_e, p, base) => ({ ...base, kind: 'world', label: `${String(p.part ?? '')} ${String(p.kind ?? 'event')}`.trim(), detail: String(p.text ?? '') }),
 };
 
@@ -116,7 +117,7 @@ export interface Span {
   end: number;
 }
 
-/** The time the marks cover (at least one second, so a single mark has room). */
+/** The time the marks cover, and `now` while live (at least one second, so a single mark has room). */
 export function spanOf(lanes: LaneRow[], now?: number): Span | null {
   const times = lanes.flatMap((l) => l.marks.map((m) => m.at)).filter((t) => !Number.isNaN(t));
   if (!times.length) return null;

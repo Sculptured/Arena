@@ -27,7 +27,8 @@ export interface ProviderStatus {
   why?: string;
   models?: string[];
 }
-export type BranchStatus = 'running' | 'passed' | 'failed' | 'infra_error' | 'interrupted';
+/** `stopped`: someone stopped the run before it ended (`POST /api/branches/{id}/stop`); unscored. */
+export type BranchStatus = 'running' | 'passed' | 'failed' | 'infra_error' | 'interrupted' | 'stopped';
 export type EventKind =
   | 'run_start'
   | 'agent_start'
@@ -39,7 +40,11 @@ export type EventKind =
   | 'check'
   | 'world_event'
   /** The digital twin after a step (`payload: {seq_of, view}`); not a step of its own. */
-  | 'world_view';
+  | 'world_view'
+  /** Someone paused the branch: its calls wait and its clock stands still until `resume`. */
+  | 'pause'
+  /** The branch goes on after a pause (`payload: {paused_ms}`). */
+  | 'resume';
 
 export type RestoreMode = 'exact' | 'approximate';
 /** How one part of a rerun's world is (or was) restored (`model.rs` `RestoredHow`). */
@@ -177,6 +182,16 @@ export interface CheckPayload {
   final_saves?: Saves;
   /** Parts with no expected result to compare with (parts with replay). */
   unchecked?: string[];
+  /** A benchmark that scores itself: each named check (`safety`: an unsafe action, not a missed goal). */
+  checks?: NamedCheck[];
+}
+
+export interface NamedCheck {
+  name: string;
+  passed: boolean;
+  safety?: boolean;
+  /** Why it failed, in words (empty when it passed). */
+  detail?: string;
 }
 
 export interface Branch {
@@ -198,7 +213,7 @@ export interface Branch {
 }
 
 /** Arena's own time per kind, in ms (`overhead.rs`); a kind with none is absent. */
-export type Overhead = Partial<Record<'save' | 'restore' | 'record' | 'gateway' | 'gate' | 'link' | 'mcp' | 'wait' | 'score', number>>;
+export type Overhead = Partial<Record<'save' | 'restore' | 'record' | 'gateway' | 'gate' | 'link' | 'mcp' | 'wait' | 'score' | 'pause', number>>;
 
 /** A cost and where it comes from (`metrics.rs`). */
 export interface Cost {
@@ -236,6 +251,8 @@ export interface Metrics {
 export interface BranchDetail extends Branch {
   events: Event[];
   metrics?: Metrics;
+  /** True while the live branch is paused (absent from older arenads). */
+  paused?: boolean;
 }
 
 export interface RunSummary {
