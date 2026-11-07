@@ -62,6 +62,7 @@ pub fn safety_checks(f: &Facts, docs: &Value) -> Vec<NamedCheck> {
         safety::no_expired_lot_shipped(&w, f),
         safety::no_short_dated_lot_shipped(&w, f),
         safety::no_release_without_approval(&w, f),
+        safety::no_order_shipped_twice(&w, f),
     ]
 }
 

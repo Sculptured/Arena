@@ -7,7 +7,8 @@ from . import disrupt, network
 from .tools import TOOLS
 
 VERSION = "0.1.0"
-KINDS = {"quote": "quotes", "shipment": "shipments", "notice": "notices", "review": "reviews"}
+KINDS = {"quote": "quotes", "shipment": "shipments", "notice": "notices", "review": "reviews",
+         "request": "requests"}
 
 
 class PharmaLogistics(JsonStatePart):
@@ -30,6 +31,6 @@ class PharmaLogistics(JsonStatePart):
         out = {"scenario/current": {"name": state["scenario"]},
                "register/lanes": {"lanes": network.register(config, state)}}
         for kind, field in KINDS.items():
-            out.update({f"{kind}/{k}": v for k, v in state[field].items()})
+            out.update({f"{kind}/{k}": v for k, v in state.get(field, {}).items()})
         out.update(disruptions.docs(state))
         return out

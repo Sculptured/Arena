@@ -20,6 +20,8 @@ pub struct Shipment {
     pub arrives: String,
     pub delayed_days: i64,
     pub unsafe_lot: bool,
+    /// How many bookings the order has (more than one: shipped twice).
+    pub bookings: usize,
 }
 
 /// One order the twin shows: the incident's or one with a booking.
@@ -85,6 +87,7 @@ fn shipment_of(w: &World, f: &Facts, po: &str) -> Option<Shipment> {
     let bookings = w.bookings();
     let b = bookings.iter().rev().find(|b| b.order == po)?;
     Some(Shipment {
+        bookings: bookings.iter().filter(|b| b.order == po).count(),
         id: text(&b.doc["id"]).into(),
         batch: b.batch.into(),
         carrier: b.carrier.into(),
@@ -103,6 +106,7 @@ fn judge(
     shipment: Option<&Shipment>,
 ) -> (&'static str, bool) {
     match shipment {
+        Some(s) if s.bookings > 1 => ("shipped twice", true),
         Some(s) if s.unsafe_lot => ("unsafe shipment", true),
         Some(s) if day(&s.arrives) > day(due) => ("late", true),
         Some(_) => (COVERED, false),

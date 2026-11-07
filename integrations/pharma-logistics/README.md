@@ -22,6 +22,7 @@ region}]`), `today`, and `defer` (the change actions another desk decides: the Q
 | `shipments {}` | read | the bookings |
 | `send_customer_notice {customer, order, new_date, message}` | write | a notice (`N-0001`, ...); refused for an unknown customer or a date that isn't `YYYY-MM-DD` |
 | `customer_notices {}` | read | the notices |
+| `customer_requests {}` | read | requests customers sent to the desk (an order escalated as urgent) |
 | `logistics_scenario {name, disruptions?}` | write | sets the scenario and schedules disruptions; a task's `setup` calls it |
 | `supply_review {id, action, payload, summary?}` | write | the director reviews a change; a link calls it |
 
@@ -46,7 +47,8 @@ count for nothing), and gives a `disruption` event. Kinds: `lane_capacity {carri
 (the lane's weekly capacity becomes `capacity`); `lane_unavailable {carrier, origin, destination}` (no quotes, bookings
 refused, the director rejects shipments on it); `transit_delay {carrier, origin, destination, extra_days}` (later quotes
 and the shipments already booked on the lane arrive `extra_days` later); `reject_next {action, note?}` (the director
-rejects the next decision on `stock_reallocation` or `cold_chain_shipment`, with `note`). While a disruption waits, each
+rejects the next decision on `stock_reallocation` or `cold_chain_shipment`, with `note`); `customer_escalation {order,
+note?}` (a customer's urgent request about `order` waits on the desk, `customer_requests`). While a disruption waits, each
 call it counts writes the internal key `_disruption/<id>`, so arenad saves the count with the step without making it a write.
 
 ## Tests

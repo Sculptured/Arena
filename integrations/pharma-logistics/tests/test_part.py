@@ -225,3 +225,14 @@ def test_a_bad_disruption_is_refused_and_the_schedule_survives_a_save(tmp_path):
     fired = again.call_tool("i2", "qualified_lanes", {}, 0)
     assert fired["result"]["lanes"][0]["capacity_left"] == 0 and fired["events"][0]["kind"] == "disruption"
     assert again.inspect({"instance": "i2"}, ["_disruption/d1"])["docs"]["_disruption/d1"]["fired"] is True
+
+
+def test_an_escalated_order_waits_on_the_desk_and_a_waiting_count_is_internal():
+    part, _ = disrupted(after(1, {"kind": "customer_escalation", "order": "PO-SBMC-4471"}))
+    assert call(part, "customer_requests", {})["result"] == {"requests": []}
+    seen = call(part, "customer_requests", {})
+    assert seen["result"]["requests"][0]["order"] == "PO-SBMC-4471" and seen["events"][0]["kind"] == "disruption"
+    assert seen["writes"] == ["_disruption/d1", "request/R-0001"]
+    part, _ = disrupted(after(5, {"kind": "customer_escalation", "order": "PO-SBMC-4471"}))
+    waiting = call(part, "customer_requests", {})
+    assert waiting["writes"] == ["_disruption/d1"], "only the internal count: no write of the world"

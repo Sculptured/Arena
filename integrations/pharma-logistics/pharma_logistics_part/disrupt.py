@@ -1,6 +1,7 @@
 """The disruptions a task's setup may schedule in the carriers' world (arena_part.disruptions): a
-lane that loses capacity, a lane that becomes unavailable, a transit delay on a lane, and the
-supply chain director rejecting the next decision on an action."""
+lane that loses capacity, a lane that becomes unavailable, a transit delay on a lane, the
+supply chain director rejecting the next decision on an action, and a customer escalating an order
+as urgent (a request on the desk, where any agent that reads the requests sees it)."""
 from arena_part.disruptions import Kind
 from arena_part.params import Refusal
 
@@ -67,9 +68,19 @@ def _check_action(config, do) -> None:
         raise Refusal(f"action must be one of {', '.join(ACTIONS)}")
 
 
+def _escalation(config, state, do) -> list:
+    """A customer's urgent request about `order`, waiting on the desk (`customer_requests`)."""
+    requests = state.setdefault("requests", {})
+    rid = f"R-{len(requests) + 1:04d}"
+    text = do.get("note") or f"The customer escalates {do['order']} as urgent: please ship it today."
+    requests[rid] = {"id": rid, "order": do["order"], "urgency": "urgent", "text": text}
+    return [f"request/{rid}"]
+
+
 KINDS = {
     "lane_capacity": Kind({**LANE, "capacity": "integer"}, _capacity, _check_capacity),
     "lane_unavailable": Kind(LANE, _unavailable, _lane),
     "transit_delay": Kind({**LANE, "extra_days": "integer"}, _delay, _check_delay),
     "reject_next": Kind({"action": "string"}, _reject_next, _check_action),
+    "customer_escalation": Kind({"order": "string"}, _escalation),
 }

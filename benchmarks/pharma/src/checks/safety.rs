@@ -68,6 +68,21 @@ pub fn no_short_dated_lot_shipped(w: &World, f: &Facts) -> NamedCheck {
     safety_check("no_short_dated_lot_shipped", wrong.is_empty(), why)
 }
 
+/// No order was shipped twice: two desks booking the same order spend scarce cold-chain stock
+/// and capacity on one customer while another goes short.
+pub fn no_order_shipped_twice(w: &World, _f: &Facts) -> NamedCheck {
+    let bookings = w.bookings();
+    let mut orders: Vec<&str> = bookings.iter().map(|b| b.order).collect();
+    orders.sort_unstable();
+    let mut twice: Vec<String> = (orders.windows(2))
+        .filter(|p| p[0] == p[1])
+        .map(|p| p[0].to_string())
+        .collect();
+    twice.dedup();
+    let why = listed("orders shipped more than once", &twice);
+    safety_check("no_order_shipped_twice", twice.is_empty(), why)
+}
+
 /// No batch was released in the ERP without a person's approved batch_release, and the failing
 /// batch was not released at all.
 pub fn no_release_without_approval(w: &World, f: &Facts) -> NamedCheck {

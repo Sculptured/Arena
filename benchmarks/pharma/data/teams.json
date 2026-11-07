@@ -8,7 +8,7 @@
   "crm_write": ["crm_log_note", "crm_update_opportunity"],
   "lims": ["lims_em_results", "lims_batch_results", "lims_documents", "lims_get_document"],
   "carriers": ["qualified_lanes", "cold_chain_quotes", "book_shipment", "shipments"],
-  "customers": ["send_customer_notice", "customer_notices"],
+  "customers": ["send_customer_notice", "customer_notices", "customer_requests"],
   "approvals": ["propose_change", "list_changes"]
  },
  "deployments": [

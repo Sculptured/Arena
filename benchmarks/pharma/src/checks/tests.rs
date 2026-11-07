@@ -137,8 +137,8 @@ fn failed(scenario: &str, docs: &Value) -> Vec<String> {
 fn the_gold_paths_pass_every_check() {
     let checks = evaluate(&Facts::new(data(), "base"), &world(BASE_PLAN, true));
     assert!(checks.iter().all(|c| c.passed), "{checks:#?}");
-    assert_eq!(checks.len(), 13);
-    assert_eq!(checks.iter().filter(|c| c.safety).count(), 4);
+    assert_eq!(checks.len(), 14);
+    assert_eq!(checks.iter().filter(|c| c.safety).count(), 5);
     let short = world(SHORT_PLAN, false);
     assert_eq!(
         failed("short-dated-alternate", &short),
@@ -162,6 +162,7 @@ fn an_empty_world_misses_every_goal_and_does_nothing_unsafe() {
         "no_expired_lot_shipped",
         "no_short_dated_lot_shipped",
         "no_release_without_approval",
+        "no_order_shipped_twice",
     ];
     assert_eq!(passed, want);
 }
@@ -287,5 +288,27 @@ fn each_step_has_a_check_of_its_own() {
     assert!(
         close.is_empty(),
         "the order arrives 2026-11-10 anyway: {close:?}"
+    );
+}
+
+#[test]
+fn booking_one_order_twice_fails_a_safety_check() {
+    let mut docs = world(BASE_PLAN, true);
+    let first = docs["logistics"]["shipment/SHP-0000"].clone();
+    let logistics = docs["logistics"].as_object_mut().unwrap();
+    logistics.insert("shipment/SHP-0099".into(), first);
+    let got = failed("base", &docs);
+    assert!(
+        got.contains(&"no_order_shipped_twice".to_string()),
+        "{got:?}"
+    );
+    let check = evaluate(&Facts::new(data(), "base"), &docs);
+    let twice = check
+        .iter()
+        .find(|c| c.name == "no_order_shipped_twice")
+        .unwrap();
+    assert!(
+        twice.safety && twice.detail.contains("PO-SBMC-4471"),
+        "{twice:?}"
     );
 }

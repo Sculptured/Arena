@@ -158,6 +158,24 @@ fn retest_fails(d: &crate::data::Data) -> DisruptionOption {
     option(what, params, template)
 }
 
+fn urgent_escalation(d: &crate::data::Data) -> DisruptionOption {
+    let what = (
+        "urgent-escalation",
+        "A customer escalates an order",
+        "{order}'s customer escalates it as urgent after {after} logistics call(s): the request waits on the desk, where every agent that reads the requests sees it; the agents are not told",
+        "logistics",
+    );
+    let orders: Vec<&str> = d.affected().iter().map(|o| o.po.as_str()).collect();
+    let params = vec![
+        choice("order", "Order", &orders),
+        int("after", "After how many logistics calls", (0, 30, 3)),
+    ];
+    let template = json!({"id": "urgent-escalation", "when": {"after_calls": "{after}"},
+        "do": {"kind": "customer_escalation", "order": "{order}"},
+        "text": "The customer escalates {order} as urgent"});
+    option(what, params, template)
+}
+
 /// What the builder may add, to any of the five tasks.
 pub fn scenario_options(d: &crate::data::Data) -> ScenarioOptions {
     let setup = |tool: &str| SetupTemplate {
@@ -172,6 +190,7 @@ pub fn scenario_options(d: &crate::data::Data) -> ScenarioOptions {
             transit_delay(),
             first_reallocation_rejected(d),
             retest_fails(d),
+            urgent_escalation(d),
         ],
         setup: BTreeMap::from([
             ("lims".into(), setup("lims_scenario")),

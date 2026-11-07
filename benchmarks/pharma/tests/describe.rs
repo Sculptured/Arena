@@ -53,15 +53,23 @@ async fn an_unknown_tool_is_the_erps_error() {
     assert!(out.error.unwrap().contains("no tool nope"));
 }
 
+/// The disruptions the builder offers, in order.
+const DISRUPTIONS: [&str; 6] = [
+    "courier-capacity",
+    "lane-unavailable",
+    "transit-delay",
+    "first-reallocation-rejected",
+    "retest-fails",
+    "urgent-escalation",
+];
+
 #[tokio::test]
 async fn it_offers_the_demos_disruptions_and_a_view() {
     let d = Pharma::default().describe().await.unwrap();
     let o = d.scenario_options.unwrap();
     assert_eq!(o.base.len(), 5);
     let ids: Vec<&str> = o.disruptions.iter().map(|x| x.id.as_str()).collect();
-    let logistics = ["courier-capacity", "lane-unavailable", "transit-delay"];
-    let others = ["first-reallocation-rejected", "retest-fails"];
-    assert_eq!(ids, [&logistics[..], &others[..]].concat());
+    assert_eq!(ids, DISRUPTIONS);
     assert!(
         o.disruptions.iter().all(|x| !x.default),
         "nothing is preselected"

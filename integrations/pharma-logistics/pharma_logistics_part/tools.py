@@ -18,6 +18,11 @@ def _listed(kind, field):
     return run
 
 
+def _requests(config, state, args):
+    rows = list(state.get("requests", {}).values())
+    return Done({"requests": rows}, reads=[f"request/{r['id']}" for r in rows])
+
+
 def _scenario(config, state, args):
     return set_scenario(config, state, args, network.scenarios(config), network.overlay, disrupt.KINDS, TOOLS)
 
@@ -39,6 +44,8 @@ TOOLS = {t.name: t for t in [
          (Param("customer", "string"), Param("order", "string"), Param("new_date", "string"),
           Param("message", "string")), freight.notify),
     Tool("customer_notices", "The notices sent to customers so far.", "read", (), _listed("notice", "notices")),
+    Tool("customer_requests", "Requests customers sent to the desk, such as an order escalated as urgent.", "read",
+         (), _requests),
     Tool("logistics_scenario", "Sets the carriers' scenario and schedules its disruptions (a task's setup "
          "calls it; agents don't get it).", "write",
          (Param("name", "string"), Param("disruptions", "array", None)), _scenario),
