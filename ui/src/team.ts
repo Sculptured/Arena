@@ -1,5 +1,5 @@
 import { defaultTeam } from './api';
-import type { AgentSpec, Team } from './types';
+import type { AgentSpec, Runner, Team } from './types';
 
 export const TEAM_KEY = 'arena.team.v1';
 
@@ -41,10 +41,15 @@ export async function loadTeam(): Promise<Team> {
 }
 
 /** The team as a run is started with: a provider only on API-mode agents, trimmed, never blank. */
-export function teamForRun(team: Team): Team {
+/**
+ * The team as a run takes it: an open agent's blank provider dropped; with the `external` runner,
+ * every agent is `external` (the system that drives the run runs them, not arenad).
+ */
+export function teamForRun(team: Team, runner: Runner = 'chain'): Team {
   return {
     ...team,
     agents: team.agents.map(({ provider, ...a }) => {
+      if (runner === 'external') return { ...a, kind: 'external' as const };
       const p = provider?.trim();
       return a.kind === 'open' && p ? { ...a, provider: p } : a;
     }),

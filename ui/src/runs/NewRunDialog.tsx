@@ -9,7 +9,7 @@ import ScenarioBuilder, { useScenario } from '../scenario/ScenarioBuilder';
 import { loadTeam, teamForRun } from '../team';
 import type { Runner, TaskSummary, Team } from '../types';
 
-const RUNNER_HINT = 'Arena tracks every agent either way and imposes no order or handoff. An external system can also drive a run through the API.';
+const RUNNER_HINT = 'Arena tracks every agent either way and imposes no order or handoff. With an external system, the run waits for your own code (or a scripted driver) to drive its agents through their endpoints.';
 
 /** The tasks and the team a new run would use. */
 function useRunInputs(open: boolean) {
@@ -63,7 +63,7 @@ function useNewRun(open: boolean) {
   const start = async () => {
     setBusy(true); inputs.setError(null);
     try {
-      const r = await startRun(selected, teamForRun(inputs.team ?? await loadTeam()), runner, scenario.scenario);
+      const r = await startRun(selected, teamForRun(inputs.team ?? await loadTeam(), runner), runner, scenario.scenario);
       nav(`/runs/${r.run_id}/${r.branch_id}`);
     } catch (e) { inputs.setError(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -83,6 +83,7 @@ export default function NewRunDialog({ open, onOpenChange }: { open: boolean; on
             <NativeSelect value={runner} onChange={(e) => setRunner(e.target.value as Runner)} disabled={busy}>
               <option value="chain">one after another</option>
               <option value="concurrent">all at once</option>
+              <option value="external">by an external system</option>
             </NativeSelect>
           </Field>
           <ScenarioBuilder s={scenario} busy={busy} />

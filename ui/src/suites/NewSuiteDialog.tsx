@@ -43,7 +43,7 @@ function useNewSuite(tasks: TaskSummary[] | null, open: boolean) {
     setBusy(true); setError(null);
     try {
       const chosen = all.filter((t) => picked.includes(t));
-      const r = await createSuite({ name: name.trim() || undefined, team: teamForRun(await loadTeam()), tasks: chosen, repeats, runner, scenario: scenario.scenario });
+      const r = await createSuite({ name: name.trim() || undefined, team: teamForRun(await loadTeam(), runner), tasks: chosen, repeats, runner, scenario: scenario.scenario });
       nav(`/suites/${r.id}`);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
