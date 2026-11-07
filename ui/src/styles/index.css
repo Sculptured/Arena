@@ -93,6 +93,8 @@
   --color-warn-soft: var(--warn-soft);
   --color-equip: var(--equip);
   --color-equip-line: var(--equip-line);
+  --color-flow: var(--flow);
+  --color-flow-strong: var(--flow-strong);
   --shadow-panel: var(--shadow);
   --shadow-pop: var(--shadow-pop);
 }
