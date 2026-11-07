@@ -1,7 +1,10 @@
 //! Branch comparison: per-branch totals, first divergent step, differing final rows.
 
 use anyhow::{anyhow, Result};
-use parts::{proto::WorldPart, Hub};
+use parts::{
+    proto::{is_internal_key, WorldPart},
+    Hub,
+};
 use serde_json::{json, Map, Value};
 
 use crate::{
@@ -141,8 +144,10 @@ pub async fn differing_rows(
 }
 
 /// `[{key, a, b}]` of one part: the keys that differ between its two saves, with their docs.
+/// The part's internal keys (its own bookkeeping) are left out.
 async fn part_rows(hub: &Hub, p: &WorldPart, [a, b]: [&str; 2]) -> Result<Vec<Value>> {
-    let keys = saves::diff(hub, &p.integration, a, b).await?;
+    let mut keys = saves::diff(hub, &p.integration, a, b).await?;
+    keys.retain(|k| !is_internal_key(k));
     let da = docs(hub, &p.integration, a, &keys).await?;
     let db = docs(hub, &p.integration, b, &keys).await?;
     let doc = |d: &Map<String, Value>, k: &str| d.get(k).cloned().unwrap_or(Value::Null);

@@ -76,13 +76,13 @@ def call(box, name, instance="i1"):
 def test_it_fires_once_before_the_call_that_crosses_the_count():
     box, _ = armed(cap_after(2))
     first = call(box, "peek")
-    assert first["result"]["cap"] == 9 and first["writes"] == ["disruption/full"]
+    assert first["result"]["cap"] == 9 and first["writes"] == ["_disruption/full"]
     assert call(box, "take")["result"] == {"n": 1}
     third = call(box, "peek")
     assert third["result"]["cap"] == 0, "the crossing call already sees the change"
     assert third["events"] == [{"kind": "disruption", "text": "The box is full.",
                                 "data": {"id": "full", "kind": "cap", "cap": 0}}]
-    assert third["writes"] == ["disruption/full", "box/cap"]
+    assert third["writes"] == ["_disruption/full", "box/cap"]
     again = call(box, "peek")
     assert "events" not in again and again["writes"] == [], "it fires once; then reads write nothing"
 
@@ -94,8 +94,8 @@ def test_a_tool_counts_only_its_calls_and_a_refused_call_still_sets_it_off():
     refused = call(box, "take")
     assert refused["error"] == "full at 1"
     assert refused["events"][0]["data"]["id"] == "full", "the event comes even though the call refused"
-    assert refused["writes"] == ["disruption/full", "box/cap"]
-    assert box.inspect({"instance": "i1"}, ["disruption/full"])["docs"]["disruption/full"]["fired"]
+    assert refused["writes"] == ["_disruption/full", "box/cap"]
+    assert box.inspect({"instance": "i1"}, ["_disruption/full"])["docs"]["_disruption/full"]["fired"]
 
 
 def test_after_zero_calls_it_fires_as_it_is_armed_and_world_tools_count_for_nothing():

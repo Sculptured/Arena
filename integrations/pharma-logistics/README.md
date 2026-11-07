@@ -26,7 +26,7 @@ region}]`), `today`, and `defer` (the change actions another desk decides: the Q
 | `supply_review {id, action, payload, summary?}` | write | the director reviews a change; a link calls it |
 
 Keys: `scenario/current`, `register/lanes` (the register as it stands now), `quote/<id>`, `shipment/<id>`, `notice/<id>`,
-`review/<change id>`, `disruption/<id>`. The part records the
+`review/<change id>`, `_disruption/<id>` (internal). The part records the
 booking's order and batch as given: it doesn't know the ERP. The benchmark gates `book_shipment` on an approved
 `cold_chain_shipment` change with the same carrier, quote, order, batch and quantity.
 
@@ -47,7 +47,7 @@ count for nothing), and gives a `disruption` event. Kinds: `lane_capacity {carri
 refused, the director rejects shipments on it); `transit_delay {carrier, origin, destination, extra_days}` (later quotes
 and the shipments already booked on the lane arrive `extra_days` later); `reject_next {action, note?}` (the director
 rejects the next decision on `stock_reallocation` or `cold_chain_shipment`, with `note`). While a disruption waits, each
-call it counts writes `disruption/<id>`, so arenad saves the count with the step.
+call it counts writes the internal key `_disruption/<id>`, so arenad saves the count with the step without making it a write.
 
 ## Tests
 

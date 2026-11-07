@@ -75,7 +75,7 @@ is the task as above.
 | `first-reallocation-rejected` | logistics | the director rejects the first `stock_reallocation`, with the note of `reallocation-rejected` |
 | `retest-fails` `{lot, after}` | lims | the lot's sterility test fails after `after` LIMS calls, so QA rejects its release |
 
-Scoring counts the disruptions that fired (the parts' `disruption/<id>` docs): what could have been done changes with
+Scoring counts the disruptions that fired (the parts' internal `_disruption/<id>` docs): what could have been done changes with
 them (a lane without capacity, a lot that can't be released).
 
 ## The digital twin

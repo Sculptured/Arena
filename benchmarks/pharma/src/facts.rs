@@ -35,11 +35,11 @@ impl<'a> Facts<'a> {
     }
 
     /// The same facts with the disruptions that fired in the world `docs` (`{part: {key: doc}}`):
-    /// what the simulated parts' `disruption/<id>` docs say fired.
+    /// what the simulated parts' `_disruption/<id>` docs say fired.
     pub fn with_disruptions(mut self, docs: &Value) -> Facts<'a> {
         let parts = ["lims", "logistics"].map(|p| docs[p].as_object());
         let all = parts.into_iter().flatten().flatten();
-        let fired = all.filter(|(k, d)| k.starts_with("disruption/") && d["fired"] == true);
+        let fired = all.filter(|(k, d)| k.starts_with("_disruption/") && d["fired"] == true);
         self.fired = fired.map(|(_, d)| d["do"].clone()).collect();
         self
     }
@@ -207,7 +207,7 @@ mod tests {
     }
 
     fn fired(part: &str, d: Value) -> Value {
-        serde_json::json!({part: {"disruption/d": {"fired": true, "do": d}, "disruption/x": {"fired": false,
+        serde_json::json!({part: {"_disruption/d": {"fired": true, "do": d}, "_disruption/x": {"fired": false,
             "do": {"kind": "result_fails", "lot": "CVX-2604"}}}})
     }
 

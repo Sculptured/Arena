@@ -47,6 +47,13 @@ environment, and `${ARENA_BIN_DIR}` substituted). Use it for a part on another m
 - Package names match `^[a-z0-9-]{1,40}$`.
 - Keys name a piece of a part's state, `<kind>/<id>` (for Postgres, `orders/#W1`). The part decides what
   its keys are.
+- **Internal keys.** A key whose kind starts with `_` (`_disruption/courier-capacity`) is the part's own
+  bookkeeping, which no agent's call is about (a scheduled disruption's count of calls). A call that changes one
+  names it in `writes` like any key, and arenad saves the part with that step, so an exact restore keeps it. But
+  such a key doesn't make the step a write: arenad records it under the step's `internal` instead of `writes`, a
+  step that changed only internal keys counts as the read (or refusal) it is, no world view follows it
+  ([The world's view](#the-worlds-view)), and a comparison of two final worlds leaves internal keys out of the
+  differing rows. `inspect` and `diff` show them as usual.
 
 ## Calls from arenad to the part
 
@@ -212,9 +219,10 @@ may list more). The Python kit implements this convention (`arena_part.disruptio
   so that call already sees the changed world, and fires even if that call is then refused. One with `after_calls` 0
   and no `tool` fires as it is armed, in the setup call.
 - When one fires, the call's `events` get `{kind: "disruption", text, data: {id, ...do}}`, which arenad records as a
-  world event at that moment. While one waits, each call it counts names `disruption/<id>` in `writes`, so arenad
-  saves the count with the step: the schedule is part of the part's state, so forks and replays meet the same
-  schedule. `inspect` shows `disruption/<id>` with its count (`seen`) and whether it `fired`.
+  world event at that moment. While one waits, each call it counts names the internal key `_disruption/<id>` in
+  `writes`, so arenad saves the count with the step without making the step a write: the schedule is part of the
+  part's state, so forks and replays meet the same schedule. `inspect` shows `_disruption/<id>` with its count
+  (`seen`) and whether it `fired`.
 - `do.kind` is the part's own. pharma-logistics: `lane_capacity {carrier, origin, destination, capacity}`,
   `lane_unavailable {carrier, origin, destination}`, `transit_delay {carrier, origin, destination, extra_days}`,
   `reject_next {action, note?}` (the director rejects the next decision on that action). pharma-lims: `result_fails
@@ -223,7 +231,8 @@ may list more). The Python kit implements this convention (`arena_part.disruptio
 ### The world's view
 
 A benchmark whose `describe` has `view: {docs: [part]}` draws the world's digital twin. After a run's setup, and after
-every step that wrote anything (an agent's, a link's or a setup's step, a disruption's included), arenad calls `view`
+every step that wrote anything (an agent's, a link's or a setup's step, a disruption's included; internal keys don't
+count), arenad calls `view`
 and records an event `{kind: "world_view", payload: {seq_of, view}}` right after that step (and its world events and
 link steps): `seq_of` is the seq of the step the view follows (of `RunStart` when the setup wrote nothing). One view
 follows an agent's step and the link steps it set off. A failing or late (10 s) `view` is logged, records nothing and

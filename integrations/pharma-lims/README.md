@@ -32,7 +32,7 @@ A start without `lims`, `lots` or a date in `today` is `-32602`.
 | `lims_scenario {name, disruptions?}` | write | sets the scenario and schedules disruptions; a task's `setup` calls it, so agents don't get it |
 | `qa_review {id, action, payload, summary?}` | write | the QA head reviews a change; a link calls it, so agents don't get it |
 
-Keys: `scenario/current`, `review/<change id>`, `sample/<id>`, `batch/<id>`, `document/<id>`, `disruption/<id>`. An unknown batch,
+Keys: `scenario/current`, `review/<change id>`, `sample/<id>`, `batch/<id>`, `document/<id>`, `_disruption/<id>` (internal). An unknown batch,
 document or scenario, or a missing argument, is the tool's error.
 
 **The QA head.** `qa_review` of an action outside `decides` does nothing. For one inside it, it records a review and

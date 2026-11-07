@@ -242,6 +242,10 @@ pub struct ToolCallPayload {
     pub error: Option<String>,
     pub reads: Value,
     pub writes: Value,
+    /// Keys the call changed for its part's own bookkeeping (`_disruption/<id>`): saved like a
+    /// write, but not one (docs/protocol.md, "Ids and keys").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub internal: Vec<String>,
     /// `saves["retail"]` when that part was saved, so the old UIs keep working. Runs recorded
     /// before integrations have only this (read as `saves: {"retail": snapshot}`).
     pub snapshot: Option<String>,

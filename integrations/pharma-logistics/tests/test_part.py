@@ -224,4 +224,4 @@ def test_a_bad_disruption_is_refused_and_the_schedule_survives_a_save(tmp_path):
     assert again.call_tool("i2", "qualified_lanes", {}, 0)["result"]["lanes"][0]["capacity_left"] == 10
     fired = again.call_tool("i2", "qualified_lanes", {}, 0)
     assert fired["result"]["lanes"][0]["capacity_left"] == 0 and fired["events"][0]["kind"] == "disruption"
-    assert again.inspect({"instance": "i2"}, ["disruption/d1"])["docs"]["disruption/d1"]["fired"] is True
+    assert again.inspect({"instance": "i2"}, ["_disruption/d1"])["docs"]["_disruption/d1"]["fired"] is True

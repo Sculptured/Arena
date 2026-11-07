@@ -44,7 +44,8 @@ class Fired:
 
 
 def key(d) -> str:
-    return f"disruption/{d['id']}"
+    """The disruption's key: internal (`_`), since it is the part's bookkeeping, not the world's state."""
+    return f"_disruption/{d['id']}"
 
 
 def _when(did, when, tools) -> dict:
@@ -135,7 +136,8 @@ def before_call(config, state, kinds, tool) -> Fired:
 
 
 def docs(state) -> dict:
-    """`{disruption/<id>: doc}`: each disruption with how many calls it has seen and whether it fired."""
+    """`{_disruption/<id>: doc}`: each disruption with how many calls it has seen and whether it fired.
+    The keys are internal (docs/protocol.md, "Ids and keys"): arenad saves them but no step writes them."""
     return {key(d): d for d in state.get("disruptions", [])}
 
 

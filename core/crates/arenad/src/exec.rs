@@ -219,7 +219,10 @@ pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
 struct CallFacts {
     part: Option<String>,
     reads: Vec<String>,
+    /// The world's keys the call wrote.
     writes: Vec<String>,
+    /// The part's internal keys it wrote: the part is saved for them, but the step is no write.
+    internal: Vec<String>,
     saves: Option<Saves>,
     save_error: Option<String>,
     clock_ms: Option<i64>,
@@ -230,11 +233,29 @@ struct CallFacts {
 }
 
 impl CallFacts {
-    /// Takes what a world call gave back besides its outcome: its part, reads, writes and events.
-    fn take(&mut self, called: Called, clock_ms: i64) {
-        let Called { output, part, .. } = called;
-        self.events = part_events(part.as_deref(), output.events, clock_ms);
-        (self.part, self.reads, self.writes) = (part, output.reads, output.writes);
+    /// What a call on `part` gave back besides its outcome: its reads, writes (the world's and
+    /// the internal ones apart) and events.
+    fn of_output(part: Option<String>, output: ToolOutput, clock_ms: i64) -> CallFacts {
+        let (writes, internal) = ToolOutput::split_writes(output.writes);
+        CallFacts {
+            events: part_events(part.as_deref(), output.events, clock_ms),
+            part,
+            reads: output.reads,
+            writes,
+            internal,
+            clock_ms: Some(clock_ms),
+            ..CallFacts::default()
+        }
+    }
+
+    /// True when the call changed its part at all, internal keys included: it must be saved.
+    fn changed_part(&self) -> bool {
+        !self.writes.is_empty() || !self.internal.is_empty()
+    }
+
+    /// True when the call wrote the world's state (internal keys aside): a step that wrote.
+    fn wrote_world(&self) -> bool {
+        self.part.is_some() && !self.writes.is_empty()
     }
 }
 
@@ -252,6 +273,7 @@ fn tool_call_payload(
         error: outcome.as_ref().err().cloned(),
         reads: json!(f.reads),
         writes: json!(f.writes),
+        internal: f.internal,
         snapshot: f.saves.as_ref().and_then(|s| s.get(LEGACY_PART).cloned()),
         snapshot_error: f.save_error,
         tool_call_id,
@@ -400,10 +422,14 @@ impl ToolExec {
         facts.duration_ms = Some((since.elapsed().as_secs_f64() * 1000.0 - gate_ms).max(0.0));
         overhead::add(&branch.branch_id, Cat::Gate, gate_ms);
         let outcome = outcome_of(&called.output);
-        facts.take(called, clock);
-        // A refused call may have changed its part anyway (a disruption fired): saved too.
-        let wrote = !facts.writes.is_empty();
-        let written = facts.part.clone().filter(|_| wrote);
+        let Called { output, part, .. } = called;
+        facts = CallFacts {
+            duration_ms: facts.duration_ms,
+            ..CallFacts::of_output(part, output, clock)
+        };
+        // A refused call may have changed its part anyway (a disruption fired), and a call that
+        // changed only internal keys must keep them: saved too.
+        let written = facts.part.clone().filter(|_| facts.changed_part());
         save_step(branch, written.as_deref(), &mut facts).await;
         (outcome, facts)
     }
@@ -423,7 +449,7 @@ impl ToolExec {
         }
         let (outcome, mut facts) = self.execute(branch, agent, name, &args).await;
         let events = std::mem::take(&mut facts.events);
-        let wrote = facts.part.is_some() && !facts.writes.is_empty();
+        let wrote = facts.wrote_world();
         let payload = tool_call_payload(name, args, &outcome, tool_call_id, facts);
         let seq = self
             .record_seq(branch, Some(agent), EventKind::ToolCall, &payload)

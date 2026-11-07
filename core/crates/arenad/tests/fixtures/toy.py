@@ -3,7 +3,7 @@
   toy.py part [--crash-on-call N [--crash-mark FILE]] [--save-fails-after N] [--bad-diff] [--log FILE]
               [--prefix P] [--exact save|replay|none] [--approximate] [--uses-clock [--event-every]]
               [--save-sleep MS] [--refuse-start-if FILE] [--describe-fails] [--describe-hangs] [--gc] [--gc-fails]
-              [--gc-waits-for FILE] [--tool-event KIND] [--system JSON]
+              [--gc-waits-for FILE] [--tool-event KIND] [--system JSON] [--internal-peeks]
       An integration with one counter per instance and tools `poke` (write, adds 1) and `peek`
       (read), named `<P>poke` and `<P>peek` with --prefix. It exits on its N-th call_tool (only
       once across restarts when FILE marks that it did); every `save` after the first N is an
@@ -16,7 +16,9 @@
       advance (on every advance with --event-every). --save-sleep makes every `save` take MS
       milliseconds. With --refuse-start-if, `start` answers -32003 (fingerprint mismatch) while
       FILE exists. With --gc-waits-for, `gc` answers only once FILE exists. With --tool-event,
-      `poke`'s result gives an event of that kind with data {"n": <the new value>}.
+      `poke`'s result gives an event of that kind with data {"n": <the new value>}. With
+      --internal-peeks, `peek` counts its calls in the internal key `_peeks/n` (saved with the
+      counter) and answers {"n", "peeks"}.
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]] [--link JSON ...]
                [--gate JSON ...] [--setup JSON ...] [--scored [--two-tasks] [--safety]]
@@ -68,6 +70,7 @@ class Part:
         self.saves_ok = int(opt("--save-fails-after", "-1"))
         self.calls = self.saved = 0
         self.counters, self.saves, self.clocks = {}, {}, {}
+        self.peeks, self.peek_saves = {}, {}
 
     def describe(self, p):
         if "--describe-hangs" in ARGS:
@@ -98,6 +101,7 @@ class Part:
         if src and not mode_ok:
             raise RpcError(-32001, "the toy can't restore from a save in that mode")
         self.counters[p["instance"]] = 0 if not src else self.lookup(self.saves, src["save"], "save")
+        self.peeks[p["instance"]] = self.peek_saves.get(src.get("save"), 0)
         return {}
 
     def advance(self, p):
@@ -122,6 +126,9 @@ class Part:
             if "--tool-event" in ARGS:
                 out["events"] = [{"kind": opt("--tool-event", ""), "text": "poked", "data": {"n": n + 1}}]
             return out
+        if p["name"] == PREFIX + "peek" and "--internal-peeks" in ARGS:
+            self.peeks[i] = self.peeks.get(i, 0) + 1
+            return {"result": {"n": n, "peeks": self.peeks[i]}, "reads": ["box/n"], "writes": ["_peeks/n"]}
         if p["name"] == PREFIX + "peek":
             return {"result": {"n": n}, "reads": ["box/n"], "writes": []}
         return {"error": "unknown tool " + p["name"], "reads": [], "writes": []}
@@ -144,6 +151,7 @@ class Part:
         if 0 <= self.saves_ok < self.saved:
             raise RpcError(-32000, "the toy can't save today")
         self.saves[p["save"]] = self.lookup(self.counters, p["instance"], "instance")
+        self.peek_saves[p["save"]] = self.peeks.get(p["instance"], 0)
         return {"bytes": 1, "exact": EXACT == "save"}
 
     def inspect(self, p):

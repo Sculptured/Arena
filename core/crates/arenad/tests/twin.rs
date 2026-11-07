@@ -62,6 +62,11 @@ fn options() -> Value {
 
 /// Parts `a` and `b`; the view reads `b`. `extra` goes to the benchmark's arguments.
 fn world(tag: &str, extra: &[&str]) -> ToyRoot {
+    world_with(tag, extra, &[])
+}
+
+/// `world`, with `part` given to `b`'s integration as well.
+fn world_with(tag: &str, extra: &[&str], part: &[&str]) -> ToyRoot {
     let options = options().to_string();
     let mut args = vec![
         "bench", "--scored", "--part", "a=toy-a", "--part", "b=toy-b",
@@ -72,7 +77,11 @@ fn world(tag: &str, extra: &[&str]) -> ToyRoot {
         tag,
         &[
             toy("toy-a", "integration", &["part", "--prefix", "a_"]),
-            toy("toy-b", "integration", &["part", "--prefix", "b_"]),
+            toy(
+                "toy-b",
+                "integration",
+                &[&["part", "--prefix", "b_"], part].concat(),
+            ),
             toy("toybench", "benchmark", &args),
         ],
     )
@@ -130,6 +139,16 @@ impl Fx {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         panic!("branch still running");
+    }
+
+    /// Forks `parent` at `at_seq` with no change; the new branch's events, run to its end.
+    async fn fork_to_end(&self, parent: &str, at_seq: i64) -> Vec<Event> {
+        let fork = json!({"at_seq": at_seq});
+        let (status, v) = self
+            .post(&format!("/api/branches/{parent}/fork"), fork)
+            .await;
+        assert_eq!(status, 200, "{v}");
+        self.finished(v["branch_id"].as_str().unwrap()).await
     }
 
     /// Starts a run of `t1` with `scenario`; its branch, run to its end, and its events.
@@ -251,5 +270,40 @@ fn a_failing_view_records_nothing_and_fails_nothing() {
         let (branch, _) = fx.run_in(Value::Null).await;
         let views = fx.get(&format!("/api/branches/{branch}/views")).await;
         assert_eq!(drawn(&views), [(1, "0".to_string())], "after RunStart");
+    })
+}
+
+/// A read that changes only its part's internal keys (`_peeks/n`) is saved, so a fork restores
+/// them exactly, but it is recorded as no write and gets no view.
+#[test]
+fn internal_keys_are_saved_but_make_no_write_and_no_view() {
+    run(async {
+        let script = vec![call("b_peek"), call("b_peek"), call("b_poke"), done()];
+        let up = FakeUpstream::start([script, vec![call("b_peek"), done()]].concat()).await;
+        let root = world_with("internal", &[], &["--internal-peeks"]);
+        let fx = setup("internal", root, &up).await;
+        let (parent, evs) = fx.run_in(Value::Null).await;
+        let solo = steps(&evs, "solo");
+        let peek = &solo[1].payload;
+        let keys = (&peek["writes"], &peek["internal"]);
+        assert_eq!(keys, (&json!([]), &json!(["_peeks/n"])));
+        assert!(
+            peek["saves"]["b"].is_string(),
+            "saved for its internal key: {peek}"
+        );
+        let views = fx.get(&format!("/api/branches/{parent}/views")).await;
+        let seqs: Vec<i64> = drawn(&views).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(
+            seqs,
+            [1, solo[2].seq],
+            "after RunStart and the poke, not the peeks"
+        );
+        let cevs = fx.fork_to_end(&parent, model_call(&evs, 2)).await;
+        let again = steps(&cevs, "solo").into_iter().last().unwrap();
+        let result = &again.payload["result"];
+        assert_eq!(
+            result["peeks"], 3,
+            "the fork restored the two peeks counted: {result}"
+        );
     })
 }

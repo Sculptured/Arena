@@ -178,6 +178,19 @@ pub struct ToolOutput {
     pub events: Box<[WorldEvent]>,
 }
 
+/// True for a key that is the part's own bookkeeping, which no agent's call is about: its kind
+/// starts with `_` (`_disruption/courier-capacity`). See docs/protocol.md, "Ids and keys".
+pub fn is_internal_key(key: &str) -> bool {
+    key.starts_with('_')
+}
+
+impl ToolOutput {
+    /// `writes` split into the world's keys and the part's internal ones, in order.
+    pub fn split_writes(writes: Vec<String>) -> (Vec<String>, Vec<String>) {
+        writes.into_iter().partition(|k| !is_internal_key(k))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceParams {
     pub instance: String,
@@ -460,6 +473,22 @@ pub struct Score {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_keys_are_split_from_the_worlds_writes() {
+        let writes = ["_disruption/a", "quote/Q-1", "_peeks/n"]
+            .map(String::from)
+            .to_vec();
+        let (world, internal) = ToolOutput::split_writes(writes);
+        assert_eq!(
+            (world, internal),
+            (
+                vec!["quote/Q-1".to_string()],
+                vec!["_disruption/a".to_string(), "_peeks/n".to_string()]
+            )
+        );
+        assert!(!is_internal_key("disruption/a"));
+    }
 
     #[test]
     fn ids() {

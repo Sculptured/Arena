@@ -15,8 +15,8 @@ use crate::{
 };
 
 use super::{
-    failure, outcome_of, part_events, save_step, tool_call_payload, world_event_payload, BranchCtx,
-    CallFacts, ToolExec,
+    failure, outcome_of, save_step, tool_call_payload, world_event_payload, BranchCtx, CallFacts,
+    ToolExec,
 };
 
 /// The actor of the steps links make; no agent may have this id.
@@ -77,17 +77,10 @@ pub(super) async fn call_part(
         Err(e) => return step_not_made(tool, args, failure(branch, e), clock_ms),
     };
     let outcome = outcome_of(&output);
-    if !output.writes.is_empty() {
+    let facts = CallFacts::of_output(Some(part.to_string()), output, clock_ms);
+    if facts.changed_part() {
         world.mark_written(part);
     }
-    let facts = CallFacts {
-        part: Some(part.to_string()),
-        events: part_events(Some(part), output.events, clock_ms),
-        reads: output.reads,
-        writes: output.writes,
-        clock_ms: Some(clock_ms),
-        ..CallFacts::default()
-    };
     LinkStep {
         tool: tool.to_string(),
         args,
@@ -173,7 +166,7 @@ impl ToolExec {
                     .map(|_| None)
             }
             Reported::Link(s) => {
-                let wrote = s.facts.part.is_some() && !s.facts.writes.is_empty();
+                let wrote = s.facts.wrote_world();
                 let payload = tool_call_payload(&s.tool, s.args, &s.outcome, None, s.facts);
                 let seq =
                     (self.record_seq(branch, Some(LINK_ACTOR), EventKind::ToolCall, &payload))

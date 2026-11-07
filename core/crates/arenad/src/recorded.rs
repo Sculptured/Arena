@@ -187,8 +187,11 @@ pub fn named_saves(branch: &str, events: &[Event]) -> BTreeSet<NamedSave> {
 
 /// True for a tool call that committed a write: one that names keys it wrote, refused or not (a
 /// part may change on a call it refuses, when a scheduled disruption fires).
+/// True when the call changed its part: the world's keys or the part's internal ones (either
+/// way the part must have been saved with the step).
 fn wrote(payload: &Value) -> bool {
-    payload["writes"].as_array().is_some_and(|w| !w.is_empty())
+    let any = |k: &str| payload[k].as_array().is_some_and(|w| !w.is_empty());
+    any("writes") || any("internal")
 }
 
 #[cfg(test)]
