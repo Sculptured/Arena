@@ -27,6 +27,7 @@ pub fn suite(id: &str, tasks: &[&str], repeats: i32) -> Suite {
         ended_at: None,
         error: None,
         scenario: Default::default(),
+        variants: vec![],
     }
 }
 
@@ -82,7 +83,7 @@ pub fn infra_error() -> RunOutcome {
 
 /// The slots of `suite`, filled in order with `outcomes` (each ending 10 s after the last).
 pub fn filled(suite: &Suite, outcomes: Vec<RunOutcome>) -> Vec<SlotRun> {
-    let mut slots = slots_of(&suite.tasks, suite.repeats).into_iter();
+    let mut slots = slots_of(&suite.tasks, 1, suite.repeats).into_iter();
     let mut out = vec![];
     for (i, o) in outcomes.into_iter().enumerate() {
         let mut slot = slots.next().expect("a slot per outcome");

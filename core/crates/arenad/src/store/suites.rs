@@ -9,7 +9,7 @@ use super::{new_id, Store};
 use crate::{
     model::{Runner, Team},
     scenario::Scenario,
-    suite::{slots_of, Slot, Suite},
+    suite::{slots_of, variant_count, Slot, Suite},
 };
 
 pub(super) const SCHEMA: &str = r#"
@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS suite_runs (
     PRIMARY KEY (suite_id, ord)
 );
 ALTER TABLE suites ADD COLUMN IF NOT EXISTS scenario jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS variants jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE suite_runs ADD COLUMN IF NOT EXISTS variant integer NOT NULL DEFAULT 0;
 "#;
 
 /// Built-in suites arenad was driving when it stopped get no more runs.
@@ -45,15 +47,16 @@ pub(super) const INTERRUPT: &str = "UPDATE suites SET ended_at = now(), \
      WHERE runner <> 'external' AND ended_at IS NULL";
 
 const SUITE_COLS: &str =
-    "id, name, team, tasks, repeats, runner, benchmark, created_at, ended_at, error, scenario";
-/// Inserts a suite (`$1`..`$7`, `$11` the scenario) and its slots (`$8`..`$10`, in arrays).
+    "id, name, team, tasks, repeats, runner, benchmark, created_at, ended_at, error, scenario, variants";
+/// Inserts a suite (`$1`..`$7`, `$11` the scenario, `$12` the variants) and its slots (`$8`..`$10`
+/// and `$13`, in arrays).
 const INSERT_SUITE: &str =
-    "WITH s AS (INSERT INTO suites (id, name, team, tasks, repeats, runner, benchmark, scenario)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $11) RETURNING id)
-           INSERT INTO suite_runs (suite_id, ord, task_id, repeat)
-           SELECT s.id, u.o, u.t, u.r
-           FROM s, unnest($8::int[], $9::text[], $10::int[]) AS u(o, t, r)";
-const SLOT_COLS: &str = "ord, task_id, repeat, claimed, run_id, branch_id, error";
+    "WITH s AS (INSERT INTO suites (id, name, team, tasks, repeats, runner, benchmark, scenario, variants)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $11, $12) RETURNING id)
+           INSERT INTO suite_runs (suite_id, ord, task_id, repeat, variant)
+           SELECT s.id, u.o, u.t, u.r, u.v
+           FROM s, unnest($8::int[], $9::text[], $10::int[], $13::int[]) AS u(o, t, r, v)";
+const SLOT_COLS: &str = "ord, task_id, variant, repeat, claimed, run_id, branch_id, error";
 
 /// What a new suite is: its team, tasks, repeats, runner and benchmark.
 pub struct NewSuite<'a> {
@@ -64,6 +67,7 @@ pub struct NewSuite<'a> {
     pub runner: Runner,
     pub benchmark: &'a str,
     pub scenario: &'a Scenario,
+    pub variants: &'a [Scenario],
 }
 
 fn runner_word(r: Runner) -> Result<String> {
@@ -78,6 +82,7 @@ fn suite_from(r: &Row) -> Result<Suite> {
     let tasks: Value = r.get("tasks");
     let runner: String = r.get("runner");
     let scenario: Value = r.get("scenario");
+    let variants: Value = r.get("variants");
     Ok(Suite {
         id: r.get("id"),
         name: r.get("name"),
@@ -90,6 +95,7 @@ fn suite_from(r: &Row) -> Result<Suite> {
         ended_at: r.get("ended_at"),
         error: r.get("error"),
         scenario: serde_json::from_value(scenario).unwrap_or_default(),
+        variants: serde_json::from_value(variants).unwrap_or_default(),
     })
 }
 
@@ -97,6 +103,7 @@ fn slot_from(r: &Row) -> Slot {
     Slot {
         ord: r.get("ord"),
         task_id: r.get("task_id"),
+        variant: r.get("variant"),
         repeat: r.get("repeat"),
         claimed: r.get("claimed"),
         run_id: r.get("run_id"),
@@ -109,13 +116,15 @@ impl Store {
     /// Stores a new suite and its slots, none claimed: the suite.
     pub async fn create_suite(&self, new: NewSuite<'_>) -> Result<Suite> {
         let id = new_id();
-        let slots = slots_of(new.tasks, new.repeats);
+        let slots = slots_of(new.tasks, variant_count(new.variants), new.repeats);
         let ords: Vec<i32> = slots.iter().map(|s| s.ord).collect();
         let tasks: Vec<&str> = slots.iter().map(|s| s.task_id.as_str()).collect();
         let repeats: Vec<i32> = slots.iter().map(|s| s.repeat).collect();
+        let variants: Vec<i32> = slots.iter().map(|s| s.variant).collect();
         let sql = INSERT_SUITE;
         let scenario = serde_json::to_value(new.scenario)?;
-        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 11] = [
+        let scenarios = serde_json::to_value(new.variants)?;
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 13] = [
             &id,
             &new.name,
             &serde_json::to_value(new.team)?,
@@ -127,6 +136,8 @@ impl Store {
             &tasks,
             &repeats,
             &scenario,
+            &scenarios,
+            &variants,
         ];
         self.client.execute(sql, &params).await?;
         self.suite(&id)

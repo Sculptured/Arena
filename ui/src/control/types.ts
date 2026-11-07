@@ -45,6 +45,8 @@ export type RunRowStatus = BranchStatus | 'pending' | 'starting' | 'error' | 'mi
 
 export interface RunRow {
   task_id: string;
+  /** Which of the suite's scenarios (`variants`) the run started in; 0 without them. */
+  variant?: number;
   repeat: number;
   run_id: string | null;
   branch_id: string | null;

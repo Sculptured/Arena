@@ -23,6 +23,8 @@ pub struct SlotRun {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RunRow {
     pub task_id: String,
+    /// Which of the suite's variants the run started in (0 when it has none).
+    pub variant: i32,
     pub repeat: i32,
     pub run_id: Option<String>,
     pub branch_id: Option<String>,
@@ -155,6 +157,7 @@ fn row_status(s: &SlotRun) -> String {
 fn row(s: &SlotRun) -> RunRow {
     RunRow {
         task_id: s.slot.task_id.clone(),
+        variant: s.slot.variant,
         repeat: s.slot.repeat,
         run_id: s.slot.run_id.clone(),
         branch_id: s.slot.branch_id.clone(),

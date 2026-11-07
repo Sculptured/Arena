@@ -2,8 +2,9 @@
 //! same seeded world and scored by the same checks, then aggregated (pass rate per check, safety
 //! violations apart from the score, spread across repeats) and compared with another suite.
 //!
-//! A suite is stored as its definition and one slot per task × repeat; a slot gets the run that
-//! filled it. Everything else (status, aggregates) is worked out from the runs' records on read.
+//! A suite is stored as its definition and one slot per task × variant × repeat (a variant is one
+//! of the suite's scenarios; a suite with one scenario or none has one variant); a slot gets the run
+//! that filled it. Everything else (status, aggregates) is worked out from the runs' records on read.
 
 mod compare;
 mod drive;
@@ -47,6 +48,23 @@ pub struct Suite {
     /// The expanded scenario every run of the suite starts in (empty: the tasks as they are).
     #[serde(default)]
     pub scenario: Scenario,
+    /// The expanded scenarios each task × repeat runs in, one slot each (empty: just `scenario`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<Scenario>,
+}
+
+impl Suite {
+    /// The scenario a slot's run starts in: its variant's, else the suite's one scenario.
+    pub fn scenario_of(&self, slot: &Slot) -> &Scenario {
+        let variant = usize::try_from(slot.variant).ok();
+        let found = variant.and_then(|i| self.variants.get(i));
+        found.unwrap_or(&self.scenario)
+    }
+}
+
+/// How many variants each task × repeat runs in: one per scenario of `variants`, at least one.
+pub fn variant_count(variants: &[Scenario]) -> i32 {
+    i32::try_from(variants.len().max(1)).expect("a suite has few variants")
 }
 
 /// One task × repeat of a suite and the run that filled it.
@@ -55,6 +73,9 @@ pub struct Slot {
     /// Its place in the order the runs are made (task by task, repeat by repeat).
     pub ord: i32,
     pub task_id: String,
+    /// Which of the suite's `variants` the run starts in (0 when it has none).
+    #[serde(default)]
+    pub variant: i32,
     /// 1-based.
     pub repeat: i32,
     /// True once a runner took it (its run may still be starting).
@@ -65,16 +86,17 @@ pub struct Slot {
     pub error: Option<String>,
 }
 
-/// The slots of `tasks` × `repeats`, in run order: every repeat of the first task, then the next.
-pub fn slots_of(tasks: &[String], repeats: i32) -> Vec<Slot> {
-    let pairs = tasks
-        .iter()
-        .flat_map(|t| (1..=repeats).map(move |r| (t, r)));
-    pairs
+/// The slots of `tasks` × `variants` × `repeats`, in run order: every repeat of the first task's
+/// first variant, then its next variant, then the next task.
+pub fn slots_of(tasks: &[String], variants: i32, repeats: i32) -> Vec<Slot> {
+    let per_task = move |t| (0..variants).flat_map(move |v| (1..=repeats).map(move |r| (t, v, r)));
+    let cells = tasks.iter().flat_map(per_task);
+    cells
         .enumerate()
-        .map(|(i, (task_id, repeat))| Slot {
+        .map(|(i, (task_id, variant, repeat))| Slot {
             ord: i as i32,
             task_id: task_id.clone(),
+            variant,
             repeat,
             claimed: false,
             run_id: None,
@@ -89,8 +111,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slots_go_task_by_task_then_repeat_by_repeat() {
-        let s = slots_of(&["a".into(), "b".into()], 2);
+    fn slots_go_task_by_task_then_variant_by_variant_then_repeat_by_repeat() {
+        let s = slots_of(&["a".into()], 2, 2);
+        let got: Vec<(i32, i32)> = s.iter().map(|x| (x.variant, x.repeat)).collect();
+        assert_eq!(got, vec![(0, 1), (0, 2), (1, 1), (1, 2)]);
+        let s = slots_of(&["a".into(), "b".into()], 1, 2);
         let got: Vec<(i32, &str, i32)> = s
             .iter()
             .map(|x| (x.ord, x.task_id.as_str(), x.repeat))

@@ -396,6 +396,7 @@ fn a_builtin_suite_left_running_is_stopped_when_arenad_starts_again() {
             runner,
             benchmark: "b",
             scenario: &scenario,
+            variants: &[],
         };
         let builtin = store.create_suite(new(Runner::Chain)).await.unwrap();
         let external = store.create_suite(new(Runner::External)).await.unwrap();
@@ -431,10 +432,50 @@ fn a_suite_keeps_its_scenario() {
             runner: Runner::External,
             benchmark: "b",
             scenario: &scenario,
+            variants: &[],
         };
         let id = store.create_suite(new).await.unwrap().id;
         let again = store.suite(&id).await.unwrap().unwrap();
         assert_eq!(again.scenario, scenario);
         assert_eq!(again.scenario.disruptions[0].params["after"], 2);
+    });
+}
+
+/// A scenario of one disruption `jam` after `after` calls, as arenad expands it.
+fn jam(after: i64) -> arenad::scenario::Scenario {
+    let one = json!({"id": "jam", "label": "Jam", "part": "box", "params": {"after": after},
+                     "disruption": {"id": format!("jam-{after}")}});
+    serde_json::from_value(json!({"disruptions": [one]})).unwrap()
+}
+
+/// A suite with several scenarios runs each task × repeat once in each: one slot per variant, and
+/// each slot's run starts in its variant's scenario.
+#[test]
+fn a_suite_varies_its_runs_over_its_scenarios() {
+    run(async {
+        let (name, _clean) = fresh_db();
+        let store = Store::open_named(&pg::admin(), &name).await.unwrap();
+        let team: Team = serde_json::from_value(poker(1)).unwrap();
+        let tasks = vec!["t1".to_string()];
+        let variants: Vec<arenad::scenario::Scenario> = vec![jam(1), jam(3)];
+        let scenario = Default::default();
+        let new = NewSuite {
+            name: "s",
+            team: &team,
+            tasks: &tasks,
+            repeats: 2,
+            runner: Runner::External,
+            benchmark: "b",
+            scenario: &scenario,
+            variants: &variants,
+        };
+        let suite = store.create_suite(new).await.unwrap();
+        let slots = store.slots(&suite.id).await.unwrap();
+        let cells: Vec<(i32, i32)> = slots.iter().map(|s| (s.variant, s.repeat)).collect();
+        assert_eq!(cells, [(0, 1), (0, 2), (1, 1), (1, 2)]);
+        let again = store.suite(&suite.id).await.unwrap().unwrap();
+        assert_eq!(again.variants, variants);
+        let after = |i: usize| again.scenario_of(&slots[i]).disruptions[0].params["after"].clone();
+        assert_eq!((after(0), after(3)), (json!(1), json!(3)));
     });
 }

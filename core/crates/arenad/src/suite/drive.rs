@@ -71,7 +71,8 @@ async fn start_builtin(
         return Err(anyhow!(why));
     }
     let (task, team) = (&slot.task_id, suite.team.clone());
-    match runner::start_run_in(state, task, team, suite.runner, &suite.scenario).await {
+    let scenario = suite.scenario_of(slot);
+    match runner::start_run_in(state, task, team, suite.runner, scenario).await {
         Ok((run, branch)) => {
             state
                 .store
@@ -102,6 +103,8 @@ async fn wait_ended(state: &AppState, branch: &str) -> Result<()> {
 #[derive(Debug, Clone, Serialize)]
 pub struct ExternalClaim {
     pub task_id: String,
+    /// Which of the suite's variants the run starts in (0 when it has none).
+    pub variant: i32,
     pub repeat: i32,
     #[serde(flatten)]
     pub started: Started,
@@ -113,7 +116,8 @@ pub async fn claim_external(state: &AppState, suite: &Suite) -> Result<Option<Ex
     let Some(slot) = state.store.claim_slot(&suite.id).await? else {
         return Ok(None);
     };
-    match external::start(state, &slot.task_id, suite.team.clone(), &suite.scenario).await {
+    let scenario = suite.scenario_of(&slot);
+    match external::start(state, &slot.task_id, suite.team.clone(), scenario).await {
         Ok(started) => {
             let (run, branch) = (&started.run_id, &started.branch_id);
             state
@@ -122,6 +126,7 @@ pub async fn claim_external(state: &AppState, suite: &Suite) -> Result<Option<Ex
                 .await?;
             Ok(Some(ExternalClaim {
                 task_id: slot.task_id,
+                variant: slot.variant,
                 repeat: slot.repeat,
                 started,
             }))

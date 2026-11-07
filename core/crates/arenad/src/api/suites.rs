@@ -19,6 +19,7 @@ use super::{
 use crate::{
     app::AppState,
     model::*,
+    scenario::Scenario,
     store::NewSuite,
     suite::{self, Comparison, Listed, Suite, SuiteReport, MAX_REPEATS},
 };
@@ -51,6 +52,34 @@ struct NewSuiteReq {
     /// The disruptions every run adds to its task (`{disruptions: [{id, params}]}`).
     #[serde(default)]
     scenario: Option<parts::proto::ScenarioRequest>,
+    /// Several scenarios instead: each task × repeat runs once in each (`scenario` must be absent).
+    #[serde(default)]
+    scenarios: Vec<parts::proto::ScenarioRequest>,
+}
+
+/// The most scenarios a suite may vary its runs over.
+const MAX_VARIANTS: usize = 20;
+
+/// The suite's one scenario and its variants, each expanded; 400 for both at once, too many, or
+/// one that can't be expanded.
+async fn suite_scenarios(
+    state: &AppState,
+    req: &NewSuiteReq,
+) -> Result<(Scenario, Vec<Scenario>), ApiError> {
+    let one = req.scenario.as_ref().filter(|s| !s.disruptions.is_empty());
+    if one.is_some() && !req.scenarios.is_empty() {
+        return Err(ApiError::bad(
+            "give a suite either scenario or scenarios, not both",
+        ));
+    }
+    if req.scenarios.len() > MAX_VARIANTS {
+        return Err(ApiError::bad(format!("at most {MAX_VARIANTS} scenarios")));
+    }
+    let mut variants = vec![];
+    for asked in &req.scenarios {
+        variants.push(super::twin::scenario_of(state, Some(asked)).await?);
+    }
+    Ok((super::twin::scenario_of(state, one).await?, variants))
 }
 
 /// The tasks a suite runs: the ones asked for (each once, each the benchmark's), or all.
@@ -95,7 +124,7 @@ async fn create(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Su
     let mut req: NewSuiteReq = parse_body(&body)?;
     settle_providers(&mut req.team);
     validate_suite(&state, &req)?;
-    let scenario = super::twin::scenario_of(&state, req.scenario.as_ref()).await?;
+    let (scenario, variants) = suite_scenarios(&state, &req).await?;
     let tasks = suite_tasks(&state, std::mem::take(&mut req.tasks)).await?;
     if req.runner != Runner::External {
         check_disk(&state).await?;
@@ -113,6 +142,7 @@ async fn create(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Su
         runner: req.runner,
         benchmark: &state.benchmark,
         scenario: &scenario,
+        variants: &variants,
     };
     let stored = state.store.create_suite(new).await?;
     if stored.runner != Runner::External {
