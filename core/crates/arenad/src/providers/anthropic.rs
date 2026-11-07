@@ -83,3 +83,28 @@ pub(super) fn strip_extras(request: &mut Value) {
         m.remove(CONTEXT_KEY);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Endpoint, ProviderConfig, Secret};
+    use super::*;
+
+    /// Claude's key goes as `x-api-key` (marked sensitive) with the API version, never as a
+    /// bearer token.
+    #[test]
+    fn a_claude_request_sends_the_key_and_version_only() {
+        let config = ProviderConfig {
+            anthropic: Endpoint::new("https://api.anthropic.com/v1", Some(Secret::new("k-ant"))),
+            ..ProviderConfig::default()
+        };
+        let p = config.resolve(Some("anthropic")).unwrap();
+        let http = reqwest::Client::new();
+        let req = request(&p, &http, reqwest::Method::POST, "messages");
+        let built = req.build().unwrap();
+        let h = built.headers();
+        assert_eq!((&h["x-api-key"], &h["anthropic-version"]), (&"k-ant".parse::<HeaderValue>().unwrap(), &VERSION.parse::<HeaderValue>().unwrap()));
+        assert!(h["x-api-key"].is_sensitive());
+        assert!(h.get("authorization").is_none());
+        assert_eq!(built.url().as_str(), "https://api.anthropic.com/v1/messages");
+    }
+}

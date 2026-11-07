@@ -140,6 +140,15 @@ pub(super) fn chat_models(kind: ProviderKind, ids: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// A model list over the bound is refused without reading the rest.
+    #[tokio::test]
+    async fn a_list_over_the_bound_is_refused() {
+        let answer = |n: usize| reqwest::Response::from(axum::http::Response::new(vec![b'x'; n]));
+        assert_eq!(read_capped(answer(10), 10).await.unwrap().len(), 10);
+        let refused = read_capped(answer(MAX_LIST_BYTES + 1), MAX_LIST_BYTES).await;
+        assert_eq!(refused.unwrap_err(), "sent a model list over 1024 KB");
+    }
+
     #[test]
     fn hosts_never_show_credentials() {
         assert_eq!(

@@ -354,6 +354,34 @@ mod tests {
         assert_eq!(retry_wait(base, 30, None), MAX_RETRY_WAIT);
     }
 
+    /// Arguments cut off mid-JSON (or not an object) are not run; none at all are `{}`.
+    #[test]
+    fn only_a_json_object_is_run_as_arguments() {
+        assert_eq!(parse_tool_args(""), Some(json!({})));
+        assert_eq!(parse_tool_args(r##"{"order_id": "#W1"}"##), Some(json!({"order_id": "#W1"})));
+        assert_eq!(parse_tool_args(r##"{"order_id": "#W00"##), None);
+        assert_eq!(parse_tool_args("[1]"), None);
+    }
+
+    /// An answer without tool calls ends the agent well, unless its output was cut off or the
+    /// model refused: both are the model's failures, not the infrastructure's.
+    #[test]
+    fn a_cut_off_or_refused_answer_is_a_model_failure() {
+        let answer = |finish: &str, details: Value| {
+            json!({"choices": [{"message": {"role": "assistant", "content": "x"},
+                                "finish_reason": finish, "stop_details": details}]})
+        };
+        assert!(end_without_calls(&answer("stop", Value::Null)).is_ok());
+        let model = |r: Result<(), Fault>| match r {
+            Err(Fault::Model(e)) => e,
+            _ => panic!("not a model failure"),
+        };
+        assert_eq!(model(end_without_calls(&answer("length", Value::Null))), "model output was cut off");
+        let refused = answer("content_filter", json!({"type": "refusal", "category": "cyber"}));
+        assert_eq!(model(end_without_calls(&refused)), "the model refused (category cyber)");
+        assert_eq!(model(end_without_calls(&answer("content_filter", Value::Null))), "the model refused");
+    }
+
     #[test]
     fn failures_say_what_the_provider_said() {
         let claude = json!({"error": "upstream returned 529", "status": 529, "body":

@@ -1,13 +1,16 @@
-//! Model providers end to end: each agent's calls go to its own provider, with that provider's
-//! key and request shape and cost label; `/api/providers` and `/api/health` report them; a fork
-//! can move an agent to another provider. Every upstream is a fake server on 127.0.0.1.
+//! Model providers end to end: `/api/providers` and `/api/health` report them, a run or a fork
+//! is refused on a provider that can't take it, and old records mean OpenRouter. `live_`: an
+//! agent on a real provider (the one whose key is set; see `support/live.rs`) is recorded with
+//! that provider's name and cost label, its model list is read with its key, and a key the
+//! provider turns down is reported and never recorded. How each provider's request is shaped
+//! (its key's header, the usage flag, Claude's Messages API both ways) is tested on the
+//! adapters' own functions in `src/providers`, and retries on the wait they compute in
+//! `src/agents/open.rs`.
 
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_anthropic.rs"]
-mod fake_anthropic;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -20,15 +23,15 @@ use std::{
 };
 
 use arenad::{
-    app::AppState,
+    app::{AppState, Config},
     gateway::REJECTED_MESSAGE,
     model::*,
     providers::{
-        Endpoint, LocalEndpoint, ProviderConfig, ProviderKind, Secret, KEY_REJECTED, NOT_CHECKED,
+        Endpoint, LocalEndpoint, ProviderConfig, ProviderKind, Secret, ANTHROPIC_BASE, KEY_REJECTED,
+        NOT_CHECKED, OPENAI_BASE,
     },
 };
-use fake_anthropic::FakeAnthropic;
-use fake_upstream::FakeUpstream;
+use live::Live;
 use packages::TestHub;
 use pg::Cleanup;
 use serde_json::{json, Value};
@@ -39,10 +42,6 @@ static RT: LazyLock<tokio::runtime::Runtime> =
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
-
-const OR_KEY: &str = "sk-or-test-key";
-const OAI_KEY: &str = "sk-oai-test-key";
-const LOCAL_KEY: &str = "sk-local-test-key";
 
 fn agent(id: &str, provider: Option<&str>, model: Option<&str>) -> AgentSpec {
     AgentSpec {
@@ -71,19 +70,6 @@ fn local(name: &str, base: &str, key: Option<&str>) -> LocalEndpoint {
     }
 }
 
-fn text_msg(t: &str) -> Value {
-    json!({"role": "assistant", "content": t})
-}
-
-fn tool_msg(id: &str, name: &str, args: Value) -> Value {
-    json!({"role": "assistant", "content": null, "tool_calls": [
-        {"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}}]})
-}
-
-fn handoff_msg() -> Value {
-    tool_msg("h", "handoff", json!({"note": "over to you"}))
-}
-
 struct Fx {
     state: Arc<AppState>,
     base: String,
@@ -96,12 +82,7 @@ struct Fx {
 async fn setup(tag: &str, providers: ProviderConfig) -> Fx {
     let hub = TestHub::new(&[]);
     let (store, clean) = app_support::meta_store("prov", tag).await;
-    let (state, base) = app_support::open_app(store, hub.hub.clone(), "http://127.0.0.1:9", |c| {
-        c.providers = providers;
-        // Retries of overloaded calls wait 10 ms, 20 ms, … instead of seconds.
-        c.retry_base = Duration::from_millis(10);
-    })
-    .await;
+    let (state, base) = app_support::app(store, hub.hub.clone(), |c| c.providers = providers).await;
     Fx {
         state,
         base,
@@ -127,21 +108,13 @@ impl Fx {
             .await
     }
 
-    async fn wait(&self, branch: &str) -> Value {
-        for _ in 0..600 {
-            let (_, b) = self.get(&format!("/api/branches/{branch}")).await;
-            if b["status"] != "running" {
-                return b;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("branch still running");
-    }
-
+    /// Runs `team` on task 27 to its end; the branch as the API shows it.
     async fn run_to_end(&self, team: &Team) -> Value {
         let (st, v) = self.start(team).await;
         assert_eq!(st, 200, "{v}");
-        self.wait(v["branch_id"].as_str().unwrap()).await
+        let branch = v["branch_id"].as_str().unwrap();
+        live::ended(&self.state, branch).await;
+        self.get(&format!("/api/branches/{branch}")).await.1
     }
 }
 
@@ -156,135 +129,6 @@ fn payloads(branch: &Value, kind: &str, agent: &str) -> Vec<Value> {
         .collect()
 }
 
-fn bearer(key: &str) -> Option<String> {
-    Some(format!("Bearer {key}"))
-}
-
-/// Four agents, each on its own fake provider.
-struct Four {
-    router: FakeUpstream,
-    openai: FakeUpstream,
-    plain: FakeUpstream,
-    keyed: FakeUpstream,
-}
-
-impl Four {
-    async fn start() -> Four {
-        Four {
-            router: FakeUpstream::start(vec![handoff_msg()]).await,
-            openai: FakeUpstream::start(vec![handoff_msg()]).await,
-            plain: FakeUpstream::start(vec![handoff_msg()]).await,
-            keyed: FakeUpstream::start(vec![text_msg("Done.")]).await,
-        }
-    }
-
-    fn providers(&self) -> ProviderConfig {
-        ProviderConfig {
-            openrouter: Endpoint::new(&self.router.base_url, Some(Secret::new(OR_KEY))),
-            openai: Endpoint::new(&self.openai.base_url, Some(Secret::new(OAI_KEY))),
-            locals: vec![
-                local("plain", &self.plain.base_url, None),
-                local("keyed", &self.keyed.base_url, Some(LOCAL_KEY)),
-            ],
-            ..ProviderConfig::default()
-        }
-    }
-
-    fn team() -> Team {
-        team(vec![
-            agent("router", None, None),
-            agent("oai", Some("openai"), Some("gpt-test")),
-            agent("plain", Some("local:plain"), Some("llama-test")),
-            agent("keyed", Some("local:keyed"), Some("qwen-test")),
-        ])
-    }
-}
-
-/// The one request `u` got: its model, its usage field, and its Authorization header.
-fn only_request(u: &FakeUpstream) -> (Value, Option<Value>, Option<String>) {
-    let reqs = u.requests();
-    assert_eq!(reqs.len(), 1, "{reqs:?}");
-    let auth = u.auth_headers().pop().unwrap();
-    (
-        reqs[0]["model"].clone(),
-        reqs[0].get("usage").cloned(),
-        auth,
-    )
-}
-
-/// Each upstream got its own agent's call: the right key (or none), and OpenRouter alone the
-/// usage flag.
-fn assert_requests(f: &Four) {
-    let usage = Some(json!({"include": true}));
-    let expect = [
-        (
-            &f.router,
-            "deepseek/deepseek-chat-v3.1",
-            usage,
-            bearer(OR_KEY),
-        ),
-        (&f.openai, "gpt-test", None, bearer(OAI_KEY)),
-        (&f.plain, "llama-test", None, None),
-        (&f.keyed, "qwen-test", None, bearer(LOCAL_KEY)),
-    ];
-    for (up, model, usage, auth) in expect {
-        assert_eq!(only_request(up), (json!(model), usage, auth), "{model}");
-    }
-}
-
-const LOCAL_COST: &str = "local (no API charge)";
-
-/// `agent`'s one model call names `provider` and carries `cost` and `source`; so does its end.
-fn assert_agent_record(b: &Value, agent: &str, provider: &str, cost: Value, source: Value) {
-    let calls = payloads(b, "model_call", agent);
-    assert_eq!(calls.len(), 1, "{agent}");
-    let mc: ModelCallPayload = serde_json::from_value(calls[0].clone()).unwrap();
-    assert_eq!(mc.provider.as_deref(), Some(provider), "{agent}");
-    let recorded = (json!(mc.cost_usd), json!(mc.cost_source));
-    assert_eq!(recorded, (cost.clone(), source.clone()), "{agent}");
-    // Chat-completions answers are canonical; the canonical request is what is recorded.
-    assert_eq!(mc.provider_response, None, "{agent}");
-    assert_eq!(mc.request.get("usage"), None, "{agent}");
-    let end = &payloads(b, "agent_end", agent)[0];
-    assert_eq!(
-        (&end["cost_usd"], &end["cost_source"]),
-        (&cost, &source),
-        "{agent}"
-    );
-}
-
-fn assert_recorded(b: &Value) {
-    assert_agent_record(b, "router", "openrouter", json!(0.001), json!("openrouter"));
-    assert_agent_record(b, "oai", "openai", Value::Null, Value::Null);
-    assert_agent_record(b, "plain", "local:plain", json!(0.0), json!(LOCAL_COST));
-    assert_agent_record(b, "keyed", "local:keyed", json!(0.0), json!(LOCAL_COST));
-    let start = &payloads(b, "agent_start", "oai")[0];
-    assert_eq!(start["provider"], "openai");
-    assert_eq!(
-        payloads(b, "agent_start", "router")[0].get("provider"),
-        None
-    );
-}
-
-#[test]
-fn each_agent_calls_its_own_provider() {
-    run(async {
-        let four = Four::start().await;
-        let fx = setup("route", four.providers()).await;
-        let b = fx.run_to_end(&Four::team()).await;
-        assert_ne!(b["status"], "infra_error", "{b}");
-        assert_requests(&four);
-        assert_recorded(&b);
-        // No key is in the record, nor in what Debug prints of the configuration.
-        let recorded = b.to_string();
-        let config = format!("{:?}", fx.state.config);
-        for key in [OR_KEY, OAI_KEY, LOCAL_KEY] {
-            assert!(!recorded.contains(key), "{key} recorded");
-            assert!(!config.contains(key), "{key} in Debug");
-        }
-    })
-}
-
 /// A test server on a free port, stopped when dropped.
 struct Server {
     base: String,
@@ -294,16 +138,6 @@ struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.task.abort();
-    }
-}
-
-/// Serves `app` until dropped.
-async fn serve(app: axum::Router) -> Server {
-    let (listener, base) = app_support::bind().await;
-    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server {
-        base,
-        task: task.abort_handle(),
     }
 }
 
@@ -329,48 +163,17 @@ async fn down_server() -> String {
     base
 }
 
-/// Providers to list, and the slow servers behind two of them.
-async fn listing_providers(up: &FakeUpstream) -> (ProviderConfig, [Server; 2]) {
-    let slow = [slow_server().await, slow_server().await];
-    let config = ProviderConfig {
-        openai: Endpoint::new(&up.base_url, Some(Secret::new(OAI_KEY))),
-        locals: vec![
-            local("up", &up.base_url, None),
-            local("slow1", &slow[0].base, None),
-            local("slow2", &slow[1].base, None),
-            local("down", &down_server().await, None),
-        ],
-        ..ProviderConfig::default()
-    };
-    (config, slow)
-}
-
 fn by_id<'a>(list: &'a Value, id: &str) -> &'a Value {
     let found = list.as_array().unwrap().iter().find(|p| p["id"] == id);
     found.unwrap_or_else(|| panic!("no {id} in {list}"))
-}
-
-fn assert_listing(list: &Value) {
-    let models = json!(["fake/model", "fake/other"]);
-    let up = by_id(list, "local:up");
-    assert_eq!(
-        (&up["available"], &up["models"], &up["kind"]),
-        (&json!(true), &models, &json!("local"))
-    );
-    assert_eq!(
-        (&up["checked"], &by_id(list, "openrouter")["checked"]),
-        (&json!(true), &json!(false))
-    );
-    assert_eq!(by_id(list, "openai")["models"], models);
-    assert_unavailable(list);
 }
 
 /// No key, or a server that didn't answer: each unavailable, with the reason.
 fn assert_unavailable(list: &Value) {
     let or = by_id(list, "openrouter");
     assert_eq!(
-        (&or["available"], &or["why"]),
-        (&json!(false), &json!("OPENROUTER_API_KEY is not set"))
+        (&or["available"], &or["why"], &or["checked"]),
+        (&json!(false), &json!("OPENROUTER_API_KEY is not set"), &json!(false))
     );
     let an = by_id(list, "anthropic");
     assert_eq!(
@@ -379,7 +182,7 @@ fn assert_unavailable(list: &Value) {
     );
     for id in ["local:slow1", "local:slow2"] {
         let s = by_id(list, id);
-        assert_eq!(s["available"], false, "{s}");
+        assert_eq!((&s["available"], &s["checked"]), (&json!(false), &json!(true)), "{s}");
         assert!(s["why"].as_str().unwrap().contains("within 3 s"), "{s}");
     }
     let down = by_id(list, "local:down");
@@ -390,11 +193,20 @@ fn assert_unavailable(list: &Value) {
     );
 }
 
+/// The providers list asks every server that lists its models at once, each within its bound,
+/// and says why one is unavailable; health answers from the configuration alone, at once.
 #[test]
-fn providers_route_reports_availability_and_models_within_the_bound() {
+fn providers_route_reports_availability_within_the_bound() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let (providers, _slow) = listing_providers(&up).await;
+        let slow = [slow_server().await, slow_server().await];
+        let providers = ProviderConfig {
+            locals: vec![
+                local("slow1", &slow[0].base, None),
+                local("slow2", &slow[1].base, None),
+                local("down", &down_server().await, None),
+            ],
+            ..ProviderConfig::default()
+        };
         let fx = setup("list", providers).await;
         let t = Instant::now();
         let (st, list) = fx.get("/api/providers").await;
@@ -402,16 +214,13 @@ fn providers_route_reports_availability_and_models_within_the_bound() {
         assert_eq!(st, 200, "{list}");
         // Two servers that never answer, asked at once, each cut off at 3 s.
         assert!(took < Duration::from_millis(5500), "took {took:?}");
-        assert_listing(&list);
-        // OpenAI's list was asked with its key, the keyless local server's without one.
-        assert_eq!(up.list_auth_headers(), vec![None, bearer(OAI_KEY)]);
-        // Health answers from the configuration alone, at once.
+        assert_unavailable(&list);
         let t = Instant::now();
         let (_, h) = fx.get("/api/health").await;
         assert!(t.elapsed() < Duration::from_secs(2));
-        assert_eq!(h["open_available"], true);
+        assert_eq!(h["open_available"], true, "a local server needs no key");
         // A local server it doesn't ask is not reported available.
-        let summary = by_id(&h["providers"], "local:up");
+        let summary = by_id(&h["providers"], "local:down");
         let seen = (&summary["available"], &summary["checked"], &summary["why"]);
         assert_eq!(seen, (&json!(false), &json!(false), &json!(NOT_CHECKED)));
         assert_eq!(summary.get("models"), None);
@@ -443,9 +252,8 @@ const REFUSED: [(Option<&str>, Option<&str>, &str); 5] = [
 #[test]
 fn runs_are_refused_on_providers_that_cannot_take_them() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
         let providers = ProviderConfig {
-            locals: vec![local("up", &up.base_url, None)],
+            locals: vec![local("up", app_support::NOWHERE, None)],
             ..ProviderConfig::default()
         };
         let fx = setup("refuse", providers).await;
@@ -459,96 +267,44 @@ fn runs_are_refused_on_providers_that_cannot_take_them() {
         assert_eq!(st, 400);
         let error = v["error"].as_str().unwrap();
         assert!(error.contains("unknown provider \"local:nope\""), "{v}");
-        assert!(up.requests().is_empty());
+        assert!(fx.state.store.runs().await.unwrap().is_empty());
     })
 }
 
-/// The seq of the first model call of a branch.
-fn first_model_call(b: &Value) -> i64 {
-    let evs = b["events"].as_array().unwrap();
-    let mc = evs.iter().find(|e| e["kind"] == "model_call").unwrap();
-    mc["seq"].as_i64().unwrap()
-}
-
-/// The fork of `branch` at `at` that `changes` asks for.
+/// The fork of a branch at `at` that `changes` asks for.
 fn fork_body(at: i64, changes: Value) -> Value {
     json!({"at_seq": at, "changes": {"solo": changes}})
 }
 
-/// Refused before anything starts, judged on the team the fork would run.
-async fn assert_fork_refusals(fx: &Fx, url: &str, at: i64) {
-    let no_default = |p: &str| format!("provider {p} has no default model: name one");
-    let refused = [
-        (
-            json!({"provider": "openai", "model": "x"}),
-            "open mode needs OPENAI_API_KEY".to_string(),
-        ),
-        (
-            json!({"provider": "openrouter"}),
-            "open mode needs OPENROUTER_API_KEY".to_string(),
-        ),
-        // A new provider drops the old model: the change must name one.
-        (json!({"provider": "local:box"}), no_default("local:box")),
-        // Clearing the model leaves the agent's own provider without one.
-        (json!({"model": " "}), no_default("local:custom")),
-    ];
-    for (change, why) in refused {
-        let (st, v) = fx.post(url, fork_body(at, change.clone())).await;
-        assert_eq!(
-            (st, v["error"].as_str()),
-            (400, Some(why.as_str())),
-            "{change}"
-        );
-    }
-}
-
-/// The child ran on `local:box` with model `m2`, from the fork point on.
-fn assert_child_on_box(child: &Value, other: &FakeUpstream) {
-    assert_ne!(child["status"], "infra_error", "{child}");
-    let spec = &child["team"]["agents"][0];
-    assert_eq!(
-        (&spec["provider"], &spec["model"]),
-        (&json!("local:box"), &json!("m2"))
-    );
-    let reqs = other.requests();
-    assert_eq!((reqs.len(), reqs[0]["model"].as_str()), (1, Some("m2")));
-    let calls = payloads(child, "model_call", "solo");
-    assert_eq!(calls.last().unwrap()["provider"], "local:box");
-}
-
+/// A fork is refused before anything starts, judged on the team it would run: a provider
+/// without its key, a new provider without a model, a model cleared on a provider that has no
+/// default. The branch is recorded by hand (no agent ran it); the refusals need only its team.
 #[test]
-fn a_fork_moves_an_agent_to_another_provider() {
+fn a_fork_is_refused_on_a_provider_that_cannot_take_it() {
     run(async {
-        let read = tool_msg("r1", "get_order_details", json!({"order_id": "#W7181492"}));
-        let first = FakeUpstream::start(vec![read, text_msg("Done.")]).await;
-        let other = FakeUpstream::start(vec![text_msg("Done again.")]).await;
-        let mut providers = ProviderConfig::with_upstream(&first.base_url);
-        providers.locals.push(local("box", &other.base_url, None));
-        let fx = setup("fork", providers).await;
-        let b = fx
-            .run_to_end(&team(vec![agent("solo", None, Some("m1"))]))
-            .await;
-        let (id, at) = (b["id"].as_str().unwrap(), first_model_call(&b));
-        let url = format!("/api/branches/{id}/fork");
-        assert_fork_refusals(&fx, &url, at).await;
-        let to_box = fork_body(at, json!({"provider": "local:box", "model": "m2"}));
-        let (st, v) = fx.post(&url, to_box).await;
-        assert_eq!(st, 200, "{v}");
-        // Like a model change: the open agent resumes from the model call at the fork point.
-        assert_eq!(
-            (v["start_seq"].as_i64(), &v["moved_from"]),
-            (Some(at), &Value::Null)
-        );
-        let child = fx.wait(v["branch_id"].as_str().unwrap()).await;
-        assert_child_on_box(&child, &other);
-        assert_eq!(first.requests().len(), 2, "the parent's calls only");
-        // Naming the agent's own provider is no change: its model stays, and it may fork.
-        let same = fork_body(at, json!({"provider": "local:custom", "prompt": "Again."}));
-        let (st, v) = fx.post(&url, same).await;
-        assert_eq!(st, 200, "{v}");
-        let child = fx.wait(v["branch_id"].as_str().unwrap()).await;
-        let spec = &child["team"]["agents"][0];
-        assert_eq!((spec.get("provider"), &spec["model"]), (None, &json!("m1")));
+        let mut providers = ProviderConfig::with_upstream(app_support::NOWHERE);
+        providers.locals.push(local("box", app_support::NOWHERE, None));
+        let fx = setup("forkrefuse", providers).await;
+        let t = team(vec![agent("solo", None, Some("m1"))]);
+        let run_id = fx.state.store.create_run("27", &t).await.unwrap();
+        let b = fx.state.store.create_branch(&run_id, None, &t, &json!([]), None).await.unwrap();
+        fx.state.store.set_status(&b, BranchStatus::Passed, None).await.unwrap();
+        let url = format!("/api/branches/{b}/fork");
+        let no_default = |p: &str| format!("provider {p} has no default model: name one");
+        let refused = [
+            (json!({"provider": "openai", "model": "x"}), "open mode needs OPENAI_API_KEY".to_string()),
+            (json!({"provider": "openrouter"}), "open mode needs OPENROUTER_API_KEY".to_string()),
+            // A new provider drops the old model: the change must name one.
+            (json!({"provider": "local:box"}), no_default("local:box")),
+            // Clearing the model leaves the agent's own provider without one.
+            (json!({"model": " "}), no_default("local:custom")),
+        ];
+        for (change, why) in refused {
+            let (st, v) = fx.post(&url, fork_body(1, change.clone())).await;
+            assert_eq!((st, v["error"].as_str()), (400, Some(why.as_str())), "{change}");
+        }
+        let runs = fx.state.store.runs().await.unwrap();
+        assert_eq!(runs[0].branches.len(), 1, "no branch was made");
     })
 }
 
@@ -584,258 +340,116 @@ fn records_and_teams_without_a_provider_mean_openrouter() {
     assert_eq!(change.provider, None);
 }
 
-const ANT_KEY: &str = "sk-ant-test-key";
+// ---------------------------------------------------------------- real providers
 
-fn on_claude(up: &FakeAnthropic) -> ProviderConfig {
-    ProviderConfig {
-        anthropic: Endpoint::new(&up.base_url, Some(Secret::new(ANT_KEY))),
-        ..ProviderConfig::default()
+/// The cost and its label a successful call on `provider` records: OpenRouter's own, nothing
+/// for OpenAI and Claude (no price table is kept), none charged on a local server.
+fn assert_cost(provider: &str, mc: &ModelCallPayload) {
+    match provider {
+        "openrouter" => {
+            assert!(mc.cost_usd.is_some(), "{:?}", mc.usage);
+            assert_eq!(mc.cost_source.as_deref(), Some("openrouter"));
+        }
+        p if p.starts_with("local:") => {
+            assert_eq!((mc.cost_usd, mc.cost_source.as_deref()), (Some(0.0), Some("local (no API charge)")));
+        }
+        _ => assert_eq!((mc.cost_usd, mc.cost_source.as_deref()), (None, None)),
     }
 }
 
-/// Claude's first turn: a thinking block, then a call of `get_order_details`.
-fn claude_reads() -> Value {
-    json!({"stop_reason": "tool_use", "content": [
-        {"type": "thinking", "thinking": "", "signature": "sig-1"},
-        {"type": "tool_use", "id": "toolu_1", "name": "get_order_details",
-         "input": {"order_id": "#W7181492"}},
-    ]})
-}
-
-fn claude_done() -> Value {
-    json!({"stop_reason": "end_turn", "content": [{"type": "text", "text": "Done."}]})
-}
-
-/// Both calls went with the key and API version (never a bearer token), as Messages API
-/// requests; the second sent Claude's first turn back unchanged, then the tool's result.
-fn assert_claude_requests(up: &FakeAnthropic) {
-    let reqs = up.requests();
-    assert_eq!(reqs.len(), 2, "{reqs:?}");
-    let want = [Some(ANT_KEY.to_string()), Some("2026-10-21".into()), None];
-    for (_, headers) in &reqs {
-        assert_eq!(headers, &want);
-    }
-    let first = &reqs[0].0;
-    assert_eq!(
-        (&first["model"], &first["max_tokens"]),
-        (&json!("claude-test"), &json!(16000))
-    );
-    assert_eq!(first["system"], "You are solo.");
-    let tool = first["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["name"] == "get_order_details");
-    assert!(tool.unwrap()["input_schema"].is_object(), "{first}");
-    let turns = reqs[1].0["messages"].as_array().unwrap().clone();
-    let n = turns.len();
-    assert_eq!(turns[n - 2]["content"], claude_reads()["content"]);
-    let result = &turns[n - 1]["content"][0];
-    assert_eq!(
-        (&result["type"], &result["tool_use_id"]),
-        (&json!("tool_result"), &json!("toolu_1"))
-    );
-}
-
-/// The record holds the canonical call and Claude's own answer beside it, with no cost.
-fn assert_claude_recorded(b: &Value) {
-    let calls = payloads(b, "model_call", "solo");
-    assert_eq!(calls.len(), 2);
-    let mc: ModelCallPayload = serde_json::from_value(calls[0].clone()).unwrap();
-    assert_eq!(mc.provider.as_deref(), Some("anthropic"));
-    let call = &mc.response["choices"][0]["message"]["tool_calls"][0];
-    assert_eq!(
-        (&call["id"], &call["function"]["name"]),
-        (&json!("toolu_1"), &json!("get_order_details"))
-    );
-    assert_eq!(mc.response["usage"]["prompt_tokens"], 12);
-    assert_eq!(mc.provider_response.unwrap()["stop_reason"], "tool_use");
-    assert_eq!((mc.cost_usd, mc.cost_source), (None, None));
-}
-
+/// An agent on the real provider whose key is set: each model call names the provider and
+/// carries its cost label; the canonical request is recorded (no provider-only fields), Claude's
+/// own answer beside it; the agent's end sums them; and no key is in the record or in what
+/// `Debug` prints of the configuration.
 #[test]
-fn a_claude_agent_completes_a_tool_use_turn() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_an_agent_calls_its_own_provider_and_records_its_cost() {
+    let Some(live) = Live::api("live_an_agent_calls_its_own_provider_and_records_its_cost") else {
+        return;
+    };
     run(async {
-        let up = FakeAnthropic::start(vec![claude_reads(), claude_done()]).await;
-        let fx = setup("claude", on_claude(&up)).await;
-        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
+        let providers = Config::new().providers;
+        let fx = setup("route", providers).await;
+        let solo = live.agent("solo", "You are a retail support agent. Look up order #W7181492 with get_order_details, then answer in one sentence.");
         let b = fx.run_to_end(&team(vec![solo])).await;
         assert_ne!(b["status"], "infra_error", "{b}");
-        assert_claude_requests(&up);
-        assert_claude_recorded(&b);
-        assert!(!b.to_string().contains(ANT_KEY), "key recorded");
+        let provider = live.provider().unwrap();
+        let calls = payloads(&b, "model_call", "solo");
+        assert!(!calls.is_empty());
+        for c in &calls {
+            let mc: ModelCallPayload = serde_json::from_value(c.clone()).unwrap();
+            assert_eq!(mc.provider.as_deref(), Some(provider));
+            assert_eq!(mc.request.get("usage"), None, "the canonical request is recorded");
+            assert_cost(provider, &mc);
+            let claude = provider == "anthropic";
+            assert_eq!(mc.provider_response.is_some(), claude, "{provider}");
+        }
+        let start = &payloads(&b, "agent_start", "solo")[0];
+        assert_eq!(start["provider"], provider);
+        let end = &payloads(&b, "agent_end", "solo")[0];
+        if provider != "openrouter" {
+            assert_eq!(end["cost_source"], calls[0]["cost_source"]);
+        }
+        let config = format!("{:?}", fx.state.config);
+        for k in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] {
+            if let Ok(key) = std::env::var(k) {
+                assert!(!b.to_string().contains(&key), "{k} recorded");
+                assert!(!config.contains(&key), "{k} in Debug");
+            }
+        }
     })
 }
 
+/// The real provider's model list is read with its key: available, with its models.
 #[test]
-fn claude_models_are_listed_with_the_key() {
+#[ignore = "live: calls a real provider (support/live.rs)"]
+fn live_a_providers_models_are_listed_with_its_key() {
+    let Some(live) = Live::api("live_a_providers_models_are_listed_with_its_key") else {
+        return;
+    };
     run(async {
-        let up = FakeAnthropic::start(vec![claude_done()]).await;
-        let fx = setup("claude-list", on_claude(&up)).await;
+        let fx = setup("models", Config::new().providers).await;
         let (st, list) = fx.get("/api/providers").await;
         assert_eq!(st, 200, "{list}");
-        let an = by_id(&list, "anthropic");
-        assert_eq!(
-            (&an["available"], &an["models"]),
-            (&json!(true), &json!(["claude-a", "claude-b"]))
-        );
-        let want = [Some(ANT_KEY.to_string()), Some("2026-10-21".into()), None];
-        assert_eq!(up.list_headers(), vec![want]);
+        let p = by_id(&list, live.provider().unwrap());
+        assert_eq!((&p["available"], &p["checked"]), (&json!(true), &json!(true)), "{p}");
+        let models = p["models"].as_array().unwrap();
+        assert!(!models.is_empty(), "{p}");
+        let mut sorted = models.clone();
+        sorted.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+        assert_eq!(models, &sorted);
     })
 }
 
-/// A server whose model list answers 401, and one whose list is over the 1 MB bound.
-async fn bad_list_servers() -> (Server, Server) {
-    use axum::{http::StatusCode, routing::get, Json};
-    let rejecting = axum::Router::new().route(
-        "/models",
-        get(|| async {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": {"message": "no"}})),
-            )
-        }),
-    );
-    let huge = axum::Router::new().route(
-        "/models",
-        get(|| async {
-            let ids: Vec<Value> = (0..40_000)
-                .map(|i| json!({"id": format!("model-{i:06}-with-a-long-padded-name")}))
-                .collect();
-            Json(json!({"data": ids}))
-        }),
-    );
-    (serve(rejecting).await, serve(huge).await)
-}
+const BAD_KEY: &str = "sk-arena-test-not-a-key";
 
+/// OpenAI and the Claude API turn a key down (no charge: no model answers): the providers list
+/// says so, and an agent's call on it is recorded with the answer's status but not its message,
+/// which may quote the key.
 #[test]
-fn a_rejected_key_or_an_oversized_list_is_reported() {
+#[ignore = "live: calls real providers over the network (no key needed)"]
+fn live_a_rejected_key_is_reported_and_its_message_not_recorded() {
     run(async {
-        let (rejecting, huge) = bad_list_servers().await;
         let providers = ProviderConfig {
-            openai: Endpoint::new(&rejecting.base, Some(Secret::new(OAI_KEY))),
-            locals: vec![local("huge", &huge.base, None)],
-            ..ProviderConfig::default()
-        };
-        let fx = setup("badlist", providers).await;
-        let (_, list) = fx.get("/api/providers").await;
-        let openai = by_id(&list, "openai");
-        assert_eq!(
-            (&openai["available"], &openai["why"]),
-            (&json!(false), &json!(KEY_REJECTED))
-        );
-        let huge = by_id(&list, "local:huge");
-        assert_eq!(
-            (&huge["available"], huge.get("models")),
-            (&json!(false), None)
-        );
-        assert!(
-            huge["why"].as_str().unwrap().contains("over 1024 KB"),
-            "{huge}"
-        );
-    })
-}
-
-#[test]
-fn a_claude_refusal_is_a_model_failure() {
-    run(async {
-        let refusal = json!({"stop_reason": "refusal", "content": [],
-                             "stop_details": {"type": "refusal", "category": "cyber"}});
-        let up = FakeAnthropic::start(vec![refusal]).await;
-        let fx = setup("refusal", on_claude(&up)).await;
-        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
-        let b = fx.run_to_end(&team(vec![solo])).await;
-        assert_eq!(b["status"], "failed", "{b}");
-        let end = &payloads(&b, "agent_end", "solo")[0];
-        let seen = (&end["ok"], &end["error"]);
-        assert_eq!(
-            seen,
-            (&json!(false), &json!("the model refused (category cyber)"))
-        );
-    })
-}
-
-#[test]
-fn a_rejected_keys_message_is_not_recorded() {
-    run(async {
-        let up = FakeUpstream::start(vec![json!({"_status": 401})]).await;
-        let providers = ProviderConfig {
-            locals: vec![local("keyed", &up.base_url, Some(LOCAL_KEY))],
+            openai: Endpoint::new(OPENAI_BASE, Some(Secret::new(BAD_KEY))),
+            anthropic: Endpoint::new(ANTHROPIC_BASE, Some(Secret::new(BAD_KEY))),
             ..ProviderConfig::default()
         };
         let fx = setup("reject", providers).await;
-        let a = agent("solo", Some("local:keyed"), Some("m"));
-        let b = fx.run_to_end(&team(vec![a])).await;
-        let call = &payloads(&b, "model_call", "solo")[0];
-        assert_eq!(call["response"]["status"], 401, "{call}");
-        assert_eq!(
-            call["response"]["body"]["error"]["message"],
-            REJECTED_MESSAGE
-        );
-    })
-}
-
-/// A Messages API error answer of `status`, its type, and its `retry-after` seconds.
-fn claude_error(status: u16, kind: &str, retry_after: Option<u64>) -> Value {
-    let mut e = json!({"_status": status, "error": {"type": kind, "message": "Overloaded"}});
-    if let Some(secs) = retry_after {
-        e["_retry_after"] = json!(secs);
-    }
-    e
-}
-
-/// The status and error type of each recorded model call of `solo`.
-fn call_statuses(b: &Value) -> Vec<(Value, Value)> {
-    let calls = payloads(b, "model_call", "solo");
-    let status = |c: &Value| {
-        (
-            c["response"]["status"].clone(),
-            c["response"]["body"]["error"]["type"].clone(),
-        )
-    };
-    calls.iter().map(status).collect()
-}
-
-#[test]
-fn a_claude_error_is_recorded_and_ends_the_agent_plainly() {
-    run(async {
-        let up = FakeAnthropic::start(vec![claude_error(529, "overloaded_error", None)]).await;
-        let fx = setup("claude-error", on_claude(&up)).await;
-        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
-        let b = fx.run_to_end(&team(vec![solo])).await;
-        // The first try and three retries, each recorded with the API's own error.
-        assert_eq!(up.requests().len(), 4);
-        let overloaded = (json!(529), json!("overloaded_error"));
-        assert_eq!(call_statuses(&b), vec![overloaded; 4]);
-        let end = &payloads(&b, "agent_end", "solo")[0];
-        assert_eq!(
-            (&end["ok"], &end["error"]),
-            (&json!(false), &json!("model call failed (529): Overloaded"))
-        );
-        assert!(!b.to_string().contains(ANT_KEY), "key recorded");
-    })
-}
-
-#[test]
-fn overloaded_and_rate_limited_calls_are_retried() {
-    run(async {
-        let script = vec![
-            claude_error(529, "overloaded_error", None),
-            claude_error(429, "rate_limit_error", Some(0)),
-            claude_done(),
-        ];
-        let up = FakeAnthropic::start(script).await;
-        let fx = setup("claude-retry", on_claude(&up)).await;
-        let solo = agent("solo", Some("anthropic"), Some("claude-test"));
-        let b = fx.run_to_end(&team(vec![solo])).await;
-        let end = &payloads(&b, "agent_end", "solo")[0];
-        assert_eq!(end["ok"], true, "{b}");
-        let statuses = call_statuses(&b);
-        assert_eq!(statuses.len(), 3);
-        assert_eq!(statuses[0], (json!(529), json!("overloaded_error")));
-        assert_eq!(statuses[1], (json!(429), json!("rate_limit_error")));
-        // Every try went out the same.
-        let reqs = up.requests();
-        assert!(reqs.iter().all(|(r, _)| r == &reqs[0].0));
+        let (_, list) = fx.get("/api/providers").await;
+        for id in ["openai", "anthropic"] {
+            let p = by_id(&list, id);
+            assert_eq!((&p["available"], &p["why"]), (&json!(false), &json!(KEY_REJECTED)), "{p}");
+        }
+        for (provider, model) in [("openai", "gpt-4.1-mini"), ("anthropic", "claude-haiku-4-5")] {
+            let a = agent("solo", Some(provider), Some(model));
+            let b = fx.run_to_end(&team(vec![a])).await;
+            let call = &payloads(&b, "model_call", "solo")[0];
+            assert_eq!(call["response"]["status"], 401, "{call}");
+            let message = &call["response"]["body"]["error"]["message"];
+            assert_eq!(message, REJECTED_MESSAGE, "{call}");
+            assert!(!b.to_string().contains(BAD_KEY), "the key is recorded");
+            assert_eq!(b["status"], "infra_error", "{provider}");
+        }
     })
 }

@@ -1,7 +1,7 @@
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -18,8 +18,8 @@ use arenad::{
     model::*,
     providers::ProviderConfig,
 };
-use fake_upstream::FakeUpstream;
-use packages::{gold_action_args, TestHub};
+use live::Live;
+use packages::TestHub;
 use pg::Cleanup;
 use serde_json::{json, Value};
 
@@ -35,7 +35,7 @@ fn agent(id: &str) -> AgentSpec {
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
-        model: Some("fake/model".into()),
+        model: Some("m".into()),
         prompt: format!("You are {id}."),
         provider: None,
         read_only: false,
@@ -58,23 +58,26 @@ struct Fx {
     http: reqwest::Client,
 }
 
-async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
-    setup_with(tag, upstream, |_| {}).await
+/// An app that runs no agent (open mode offered on a server nothing answers on).
+async fn setup(tag: &str) -> Fx {
+    setup_with(tag, |_| {}).await
 }
 
-async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
-    setup_on(tag, TestHub::new(&[]), upstream, tweak).await
+async fn setup_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Fx {
+    setup_on(tag, TestHub::new(&[]), false, tweak).await
 }
 
-async fn setup_on(
-    tag: &str,
-    hub: TestHub,
-    upstream: &FakeUpstream,
-    tweak: impl FnOnce(&mut Config),
-) -> Fx {
+/// An app on the configured providers and Claude Code, for live tests.
+async fn live_setup(tag: &str) -> Fx {
+    setup_on(tag, TestHub::new(&[]), true, |_| {}).await
+}
+
+async fn setup_on(tag: &str, hub: TestHub, live: bool, tweak: impl FnOnce(&mut Config)) -> Fx {
     let (store, clean) = app_support::meta_store("api", tag).await;
-    let (state, base) =
-        app_support::open_app(store, hub.hub.clone(), &upstream.base_url, tweak).await;
+    let (state, base) = match live {
+        true => app_support::app_for(store, hub.hub.clone(), Some("retail"), tweak).await,
+        false => app_support::idle_app(store, hub.hub.clone(), None, tweak).await,
+    };
     Fx {
         state,
         _hub: hub,
@@ -110,68 +113,14 @@ impl Fx {
         id
     }
 
+    /// The branch as the API shows it once it has ended (not for an infrastructure reason).
     async fn wait(&self, branch: &str) -> Value {
-        for _ in 0..600 {
-            let (_, b) = self.get(&format!("/api/branches/{branch}")).await;
-            if b["status"] != "running" {
-                return b;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("branch still running");
+        live::ended_ok(&self.state, branch).await;
+        self.get(&format!("/api/branches/{branch}")).await.1
     }
 }
 
-fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {
-    let tcs: Vec<Value> = calls
-        .into_iter()
-        .map(|(id, name, args)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}}))
-        .collect();
-    json!({"role": "assistant", "content": null, "tool_calls": tcs})
-}
-
-fn text_msg(t: &str) -> Value {
-    json!({"role": "assistant", "content": t})
-}
-
 const ORDER: &str = "#W7181492";
-const USER: &str = "isabella_johansson_2152";
-
-fn triage_script() -> Vec<Value> {
-    vec![
-        tool_msg(vec![(
-            "t1",
-            "find_user_id_by_name_zip",
-            json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}),
-        )]),
-        tool_msg(vec![(
-            "t2",
-            "get_order_details",
-            json!({"order_id": ORDER}),
-        )]),
-        tool_msg(vec![(
-            "t3",
-            "handoff",
-            json!({"note": "Isabella wants to exchange an item in #W7181492."}),
-        )]),
-    ]
-}
-
-fn read_order(id: &str) -> Value {
-    tool_msg(vec![(id, "get_order_details", json!({"order_id": ORDER}))])
-}
-
-fn gold_args() -> Value {
-    gold_action_args("27", "exchange_delivered_order_items")
-}
-
-fn gold_write() -> Value {
-    tool_msg(vec![("w1", "exchange_delivered_order_items", gold_args())])
-}
-
-fn wrong_args() -> Value {
-    json!({"user_id": USER, "address1": "1 Wrong St", "address2": "", "city": "Austin", "state": "TX", "country": "USA", "zip": "73301"})
-}
 
 /// Splits an SSE body into (event name, data) frames.
 fn frames(body: &str) -> Vec<(String, String)> {
@@ -213,7 +162,7 @@ async fn read_stream(fx: &Fx, branch: &str) -> Vec<(String, String)> {
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(60), read)
+    tokio::time::timeout(live::BRANCH_TIMEOUT, read)
         .await
         .expect("no status frame");
     frames(&body)
@@ -259,14 +208,15 @@ async fn assert_run_validation_errors(fx: &Fx) {
     assert_eq!(fx.get("/api/branches/nope").await.0, 404);
 }
 
-/// The branch's stream is ordered without gaps, ends with `check` and a passed status. Returns
-/// the number of frames and of events.
-async fn assert_stream_passed(fx: &Fx, branch: &str) -> (usize, usize) {
+/// The branch's stream is ordered without gaps, ends with `check` and a `status` frame of the
+/// branch's own status. Returns the number of frames and of events.
+async fn assert_stream_ended(fx: &Fx, branch: &str) -> (usize, usize) {
     let fr = read_stream(fx, branch).await;
     let last = fr.last().unwrap();
     assert_eq!(last.0, "status");
     let status: Value = serde_json::from_str(&last.1).unwrap();
-    assert_eq!(status["status"], "passed", "{status}");
+    let b = fx.state.store.branch(branch).await.unwrap();
+    assert_eq!(status["status"], json!(b.status), "{status}");
     let evs: Vec<Value> = fr
         .iter()
         .filter(|(n, _)| n == "event")
@@ -282,11 +232,10 @@ async fn assert_stream_passed(fx: &Fx, branch: &str) -> (usize, usize) {
     (fr.len(), seqs.len())
 }
 
-/// The branch endpoint has all `n_events` and the run list shows the branch as passed.
+/// The branch endpoint has all `n_events` and the run list shows the branch with its status.
 async fn assert_branch_and_run_listed(fx: &Fx, branch: &str, run_id: &str, n_events: usize) {
     let (_, b) = fx.get(&format!("/api/branches/{branch}")).await;
     assert_eq!(b["events"].as_array().unwrap().len(), n_events);
-    assert_eq!(b["status"], "passed");
     let (_, runs) = fx.get("/api/runs").await;
     let r = runs
         .as_array()
@@ -295,29 +244,40 @@ async fn assert_branch_and_run_listed(fx: &Fx, branch: &str, run_id: &str, n_eve
         .find(|r| r["id"] == run_id)
         .unwrap();
     assert_eq!(r["branches"][0]["id"], branch);
-    assert_eq!(r["branches"][0]["status"], "passed");
+    assert_eq!(r["branches"][0]["status"], b["status"]);
 }
 
 #[test]
-fn post_run_then_stream_until_status() {
+fn health_tasks_and_run_validation() {
     run(async {
-        let mut script = triage_script();
-        script.extend([read_order("r1"), gold_write(), text_msg("Exchanged.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("stream", &up).await;
-
+        let fx = setup("health").await;
         assert_health_and_tasks(&fx).await;
         assert_run_validation_errors(&fx).await;
+        assert!(fx.state.store.runs().await.unwrap().is_empty());
+    })
+}
 
+/// A run started over HTTP streams its events in order to its end, then its status; a stream
+/// opened after the end replays it all; the branch and the run list agree.
+#[test]
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_post_run_then_stream_until_status() {
+    let Some(live) = Live::any("live_post_run_then_stream_until_status") else {
+        return;
+    };
+    run(async {
+        let fx = live_setup("stream").await;
+        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+        let team = live.bench_team(bench.team.unwrap());
         let (st, v) = fx
-            .post("/api/runs", json!({"task_id": "27", "team": team()}))
+            .post("/api/runs", json!({"task_id": "27", "team": team}))
             .await;
         assert_eq!(st, 200, "{v}");
         let branch = v["branch_id"].as_str().unwrap().to_string();
         let run_id = v["run_id"].as_str().unwrap().to_string();
-
-        let (frames, seqs) = assert_stream_passed(&fx, &branch).await;
-        // After the end, a new stream replays everything and ends with status immediately.
+        let (frames, seqs) = assert_stream_ended(&fx, &branch).await;
+        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+        live::assert_recorded(&b, &evs, &live);
         let again = read_stream(&fx, &branch).await;
         assert_eq!(again.len(), frames);
         assert_branch_and_run_listed(&fx, &branch, &run_id, seqs).await;
@@ -325,45 +285,9 @@ fn post_run_then_stream_until_status() {
     })
 }
 
-fn wrong_write() -> Value {
-    tool_msg(vec![("w2", "modify_user_address", wrong_args())])
-}
-
-fn solo() -> Team {
-    Team {
-        agents: vec![agent("resolver")],
-        ..team()
-    }
-}
-
-/// Seq of the first tool call named `name` on `branch`.
-async fn seq_of(fx: &Fx, branch: &str, name: &str) -> i64 {
-    let evs = fx.state.store.events(branch).await.unwrap();
-    evs.iter().find(|e| e.payload["name"] == name).unwrap().seq
-}
-
-/// A passed solo run (the gold exchange) and a failed one (a wrong address): `(a, b)`.
-async fn passed_and_failed(fx: &Fx) -> (String, String) {
-    let a = fx.run_to_end("27", &solo()).await;
-    let b = fx.run_to_end("27", &solo()).await;
-    (a, b)
-}
-
-/// The differing rows of a passed and a failed branch: the order and the user, each side's doc.
-fn assert_passed_failed_rows(v: &Value) {
-    let rows = v["differing_rows"].as_array().unwrap();
-    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
-    assert_eq!(
-        keys,
-        vec![format!("orders/{ORDER}"), format!("users/{USER}")]
-    );
-    assert_eq!(
-        rows[0]["a"]["doc"]["status"], "exchange requested",
-        "{}",
-        rows[0]
-    );
-    assert_eq!(rows[0]["b"]["doc"]["status"], "delivered");
-    assert_eq!(rows[1]["b"]["doc"]["address"]["address1"], "1 Wrong St");
+fn solo(live: &Live) -> Team {
+    let prompt = "You are a retail support agent. Read the order with get_order_details, then do what the ticket asks.";
+    live.team(vec![live.agent("resolver", prompt)])
 }
 
 /// A branch compared with itself has no divergence and no differing rows; an unknown branch is
@@ -376,30 +300,49 @@ async fn compare_edge_cases(fx: &Fx, a: &str) {
     assert_eq!(fx.get(&format!("/api/compare?a={a}")).await.0, 400);
 }
 
-/// Differing rows come from the parts' `diff` of both branches' final saves; the shape is
-/// unchanged (`[{key, a, b}]`, keys without a part prefix in a one-part world).
+/// The final save of part `retail` of a finished branch.
+async fn final_save(fx: &Fx, branch: &str) -> String {
+    let evs = fx.state.store.events(branch).await.unwrap();
+    let check = live::check_of(&evs).expect("a check");
+    check.final_saves.unwrap()["retail"].clone()
+}
+
+/// Two runs compared: their statuses and tokens, and differing rows that are exactly what the
+/// part's `diff` of their final saves finds, each side's doc read from its save (keys without a
+/// part prefix in a one-part world).
 #[test]
-fn compare_differing_rows_unchanged_shape() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_compare_diffs_the_final_saves_of_two_runs() {
+    let Some(live) = Live::any("live_compare_diffs_the_final_saves_of_two_runs") else {
+        return;
+    };
     run(async {
-        let script = vec![
-            gold_write(),
-            text_msg("Exchanged."),
-            wrong_write(),
-            text_msg("Moved."),
-        ];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("compare", &up).await;
-        let (a, b) = passed_and_failed(&fx).await;
+        let fx = live_setup("compare").await;
+        let a = fx.run_to_end("27", &solo(&live)).await;
+        let b = fx.run_to_end("27", &solo(&live)).await;
         let (st, v) = fx.get(&format!("/api/compare?a={a}&b={b}")).await;
         assert_eq!(st, 200, "{v}");
-        let statuses = (v["a"]["status"].as_str(), v["b"]["status"].as_str());
-        assert_eq!(statuses, (Some("passed"), Some("failed")));
-        assert!(
-            v["a"]["tokens"].as_i64().unwrap() > 0 && v["a"]["seconds"].as_f64().unwrap() >= 0.0
-        );
-        let first_write = seq_of(&fx, &a, "exchange_delivered_order_items").await;
-        assert_eq!(v["first_divergent_seq"], first_write);
-        assert_passed_failed_rows(&v);
+        for (side, id) in [("a", &a), ("b", &b)] {
+            let br = fx.state.store.branch(id).await.unwrap();
+            assert_eq!(v[side]["status"], json!(br.status), "{v}");
+            assert!(v[side]["tokens"].as_i64().unwrap() > 0, "{v}");
+            assert!(v[side]["seconds"].as_f64().unwrap() >= 0.0, "{v}");
+        }
+        let (sa, sb) = (final_save(&fx, &a).await, final_save(&fx, &b).await);
+        let mut want = fx._hub.diff(json!({"save": sa}), json!({"save": sb})).await;
+        want.sort();
+        let rows = v["differing_rows"].as_array().unwrap();
+        let mut keys: Vec<String> = rows.iter().map(|r| r["key"].as_str().unwrap().to_string()).collect();
+        keys.sort();
+        assert_eq!(keys, want);
+        for r in rows {
+            let key = r["key"].as_str().unwrap();
+            let doc_a = &fx._hub.inspect_save(&sa, &[key]).await[key];
+            let doc_b = &fx._hub.inspect_save(&sb, &[key]).await[key];
+            assert_eq!((&r["a"], &r["b"]), (doc_a, doc_b), "{key}");
+        }
+        let first = &v["first_divergent_seq"];
+        assert!(first.is_null() || first.as_i64().unwrap() >= 1, "{first}");
         compare_edge_cases(&fx, &a).await;
         teardown(fx, &[&a, &b]).await;
     })
@@ -424,39 +367,38 @@ async fn bad_rows_requests(fx: &Fx, b: &str, seq: i64) {
     }
 }
 
-/// The order and the user just before the gold write, after it, and after the wrong write.
-async fn assert_rows_at_steps(fx: &Fx, b: &str, [s_gold, s_wrong]: [i64; 2]) {
-    let keys = format!("orders/%23W7181492,users/{USER},users/nobody");
-    let at = async |seq: i64, extra: &str| fx.get(&rows_path(b, seq, &keys, extra)).await;
-    let doc = |v: &Value, key: &str, field: &str| v["rows"][key]["doc"][field].clone();
-    let (order, user) = (format!("orders/{ORDER}"), format!("users/{USER}"));
-    let (st, v) = at(s_gold - 1, "").await;
-    assert_eq!((st, &v["seq"]), (200, &json!(s_gold - 1)), "{v}");
-    assert_eq!(doc(&v, &order, "status"), "delivered", "{v}");
-    assert!(v["rows"]["users/nobody"].is_null());
-    let addr_before = doc(&v, &user, "address")["address1"].clone();
-    assert!(addr_before.is_string(), "{v}");
-    let (_, v) = at(s_gold, "").await;
-    assert_eq!(doc(&v, &order, "status"), "exchange requested");
-    assert_eq!(doc(&v, &user, "address")["address1"], addr_before);
-    let (st, v) = at(s_wrong, "&part=retail").await;
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(doc(&v, &user, "address")["address1"], "1 Wrong St");
-    assert_eq!(doc(&v, &order, "status"), "exchange requested");
-}
-
-/// Rows are read with `inspect` from the save holding the part's state after the step.
+/// Rows are read with `inspect` from the save holding the part's state after the step: at the
+/// run's start the base save, and after each step that saved, that save, whatever the agent
+/// wrote; a key the part doesn't have is null.
 #[test]
-fn rows_via_inspect_before_after() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_rows_read_each_steps_save() {
+    let Some(live) = Live::any("live_rows_read_each_steps_save") else {
+        return;
+    };
     run(async {
-        let script = vec![gold_write(), wrong_write(), text_msg("Done.")];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("rows", &up).await;
-        let b = fx.run_to_end("27", &solo()).await;
-        let s_gold = seq_of(&fx, &b, "exchange_delivered_order_items").await;
-        let s_wrong = seq_of(&fx, &b, "modify_user_address").await;
-        assert_rows_at_steps(&fx, &b, [s_gold, s_wrong]).await;
-        bad_rows_requests(&fx, &b, s_gold).await;
+        let fx = live_setup("rows").await;
+        let b = fx.run_to_end("27", &solo(&live)).await;
+        let evs = fx.state.store.events(&b).await.unwrap();
+        let order = format!("orders/{ORDER}");
+        let keys = format!("orders/%23W7181492,users/nobody");
+        let (st, v) = fx.get(&rows_path(&b, 1, &keys, "")).await;
+        assert_eq!((st, &v["seq"]), (200, &json!(1)), "{v}");
+        let base = fx._hub.inspect_save("base_retail_0_1_0_retail", &[&order]).await;
+        assert_eq!(v["rows"][&order], base[&order], "{v}");
+        assert!(v["rows"]["users/nobody"].is_null());
+        for e in evs.iter().filter(|e| e.payload["saves"]["retail"].is_string()) {
+            let save = e.payload["saves"]["retail"].as_str().unwrap();
+            let written: Vec<String> = serde_json::from_value(e.payload["writes"].clone()).unwrap_or_default();
+            for key in written.iter().filter(|k| k.contains('/')) {
+                let q = key.replace('#', "%23");
+                let (st, v) = fx.get(&rows_path(&b, e.seq, &q, "&part=retail")).await;
+                assert_eq!(st, 200, "{v}");
+                let saved = fx._hub.inspect_save(save, &[key]).await;
+                assert_eq!(v["rows"][key], saved[key], "{key} at {}", e.seq);
+            }
+        }
+        bad_rows_requests(&fx, &b, 1).await;
         teardown(fx, &[&b]).await;
     })
 }
@@ -483,35 +425,34 @@ async fn assert_fork_errors(fx: &Fx, url: &str, at: i64) {
     );
 }
 
+/// A fork over HTTP: bad requests are mapped to 400 and 404, and a good one starts a child of
+/// the branch in the same run that runs to its end.
 #[test]
-fn fork_over_http_maps_errors_and_starts_a_branch() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_fork_over_http_maps_errors_and_starts_a_branch() {
+    let Some(live) = Live::any("live_fork_over_http_maps_errors_and_starts_a_branch") else {
+        return;
+    };
     run(async {
-        let mut script = triage_script();
-        script.extend([read_order("r1"), gold_write(), text_msg("Exchanged.")]);
-        script.extend([read_order("f1"), gold_write(), text_msg("Again.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("fork", &up).await;
-        let b = fx.run_to_end("27", &team()).await;
+        let fx = live_setup("fork").await;
+        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+        let team = live.bench_team(bench.team.unwrap());
+        let b = fx.run_to_end("27", &team).await;
         let evs = fx.state.store.events(&b).await.unwrap();
-        let at = evs
-            .iter()
-            .find(|e| {
-                e.kind == EventKind::ModelCall
-                    && e.payload["response"]["choices"][0]["message"]["tool_calls"][0]["function"]
-                        ["name"]
-                        == "exchange_delivered_order_items"
-            })
-            .unwrap()
-            .seq;
+        let at = live::first_of(&evs, EventKind::AgentStart, "resolver").unwrap();
         let url = format!("/api/branches/{b}/fork");
         assert_fork_errors(&fx, &url, at).await;
         let (st, v) = fx.post(&url, json!({"at_seq": at})).await;
         assert_eq!(st, 200, "{v}");
         let child = v["branch_id"].as_str().unwrap().to_string();
-        assert_eq!(v["start_seq"], at);
+        assert_eq!(v["start_seq"], at, "{v}");
         let done = fx.wait(&child).await;
-        assert_eq!(done["status"], "passed", "{done}");
         assert_eq!(done["parent_id"], b.as_str());
+        let parent = fx.state.store.branch(&b).await.unwrap();
+        let c = fx.state.store.branch(&child).await.unwrap();
+        assert_eq!(c.run_id, parent.run_id);
+        let cevs = fx.state.store.events(&child).await.unwrap();
+        live::assert_recorded(&c, &cevs, &live);
         teardown(fx, &[&b, &child]).await;
     })
 }
@@ -519,8 +460,7 @@ fn fork_over_http_maps_errors_and_starts_a_branch() {
 #[test]
 fn open_mode_is_rejected_without_a_key() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup_with("nokey", &up, |c| {
+        let fx = setup_with("nokey", |c| {
             c.providers = ProviderConfig::default();
         })
         .await;
@@ -553,9 +493,8 @@ fn open_mode_is_rejected_without_a_key() {
 #[test]
 fn stream_ends_when_shutdown_fires() {
     run(async {
-        // A branch that stays running: a run row + running branch with no driver activity.
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup("shutdown", &up).await;
+        // A branch that stays running: a run row and a running branch, no agent.
+        let fx = setup("shutdown").await;
         let t = team();
         let run_id = fx.state.store.create_run("27", &t).await.unwrap();
         let b = fx
@@ -584,8 +523,7 @@ fn stream_ends_when_shutdown_fires() {
 #[test]
 fn compare_of_branch_without_final_state_is_409() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup("nodb", &up).await;
+        let fx = setup("nodb").await;
         let t = team();
         let run_id = fx.state.store.create_run("27", &t).await.unwrap();
         let ghost = fx
@@ -613,8 +551,7 @@ fn compare_of_branch_without_final_state_is_409() {
 #[test]
 fn api_rejects_foreign_host_headers() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup("host", &up).await;
+        let fx = setup("host").await;
         let port = fx.base.rsplit(':').next().unwrap().to_string();
         for (host, want) in [
             ("evil.example", 403),
@@ -640,7 +577,8 @@ fn api_rejects_foreign_host_headers() {
 
 // ---------------------------------------------------------------- hand-made toy worlds
 
-/// An app whose hub also has the toy integration `toy-<tag>`, for branches recorded by hand.
+/// An app whose hub also has the toy integration `toy-<tag>`, for branches recorded by hand (no
+/// agent ran them: their events are written to the store as data, to read back).
 struct Toy {
     fx: Fx,
     part: String,
@@ -653,10 +591,9 @@ async fn toy(tag: &str) -> Toy {
 
 /// `toy` with the toy integration started with `part_args`.
 async fn toy_with(tag: &str, part_args: &[&str]) -> Toy {
-    let up = FakeUpstream::start(vec![]).await;
     let root = packages::toy_world(tag, part_args, &[]);
     let hub = TestHub::new(std::slice::from_ref(&root.0));
-    let fx = setup_on(tag, hub, &up, |_| {}).await;
+    let fx = setup_on(tag, hub, false, |_| {}).await;
     let part = format!("toy-{tag}");
     Toy {
         fx,
@@ -809,8 +746,7 @@ fn delete_treats_an_unknown_save_as_gone() {
 #[test]
 fn run_names_are_optional_validated_metadata() {
     run(async {
-        let upstream = FakeUpstream::start(vec![]).await;
-        let fx = setup("names", &upstream).await;
+        let fx = setup("names").await;
         let id = fx
             .state
             .store
@@ -823,13 +759,13 @@ fn run_names_are_optional_validated_metadata() {
         let response = fx
             .http
             .post(&url)
-            .json(&json!({"name": " Demo: scripted "}))
+            .json(&json!({"name": " Demo: retail "}))
             .send()
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
         let after = fx.state.store.runs().await.unwrap();
-        assert_eq!(after[0].name.as_deref(), Some("Demo: scripted"));
+        assert_eq!(after[0].name.as_deref(), Some("Demo: retail"));
         assert_eq!(after[0].task_id, "original-task");
         invalid_run_names(&fx, &url).await;
     });

@@ -63,6 +63,29 @@ mod tests {
         }
     }
 
+    /// The headers of a request `p` builds.
+    fn headers_of(p: &Provider) -> reqwest::header::HeaderMap {
+        let http = reqwest::Client::new();
+        let req = request(p, &http, reqwest::Method::POST, "chat/completions");
+        req.build().unwrap().headers().clone()
+    }
+
+    /// A provider's own key is its request's only credential, as a bearer token; a keyless
+    /// local server gets none (nothing an agent sent the gateway is passed on).
+    #[test]
+    fn a_request_carries_only_its_providers_own_key() {
+        use super::super::{Endpoint, ProviderConfig, Secret};
+        let config = ProviderConfig {
+            openrouter: Endpoint::new("https://openrouter.ai/api/v1", Some(Secret::new("k-or"))),
+            ..ProviderConfig::with_upstream("http://127.0.0.1:9")
+        };
+        let keyed = config.resolve(Some("openrouter")).unwrap();
+        assert_eq!(headers_of(&keyed)["authorization"], "Bearer k-or");
+        let local = config.resolve(None).unwrap();
+        assert_eq!(local.kind, ProviderKind::Local);
+        assert!(headers_of(&local).get("authorization").is_none());
+    }
+
     #[test]
     fn claude_content_is_not_sent_to_other_providers() {
         let msg = json!({"role": "assistant", "content": "hi"});
