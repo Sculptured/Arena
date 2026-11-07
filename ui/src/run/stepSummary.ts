@@ -1,7 +1,7 @@
 // A step in one or two plain sentences, for the step drawer: who did what, on which system, and
 // how it went (refused or failed, and why). The raw record stays behind "Details".
 import { type Action, actionWord, classify, kindWord, worldInfo } from '../control/actions';
-import { formatDuration } from '../control/lanes';
+import { formatDuration, isWorldActor } from '../control/lanes';
 import type { Event, Team } from '../types';
 import { clockText } from './flow';
 
@@ -17,7 +17,7 @@ const clip = (s: string, n = 180) => (s.length > n ? `${s.slice(0, n - 1).trimEn
 const quote = (s: unknown) => `“${clip(String(s ?? '').replace(/\s+/g, ' ').trim())}”`;
 
 function nameIn(team: Team, id: string | null): string {
-  if (id == null || id === 'link') return 'The world';
+  if (isWorldActor(id)) return 'The world';
   return team.agents.find((a) => a.id === id)?.name ?? id;
 }
 

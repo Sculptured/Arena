@@ -57,8 +57,8 @@ export function restoringLine(parts: string[]): string {
   return parts.length ? `Restoring the world: ${parts.map(partWord).join(', ')}…` : 'Restoring the world…';
 }
 
-/** The world's name: the twin's own title up to its first " · " (its organisation), else the benchmark's name. */
+/** The world's name: the twin's own title up to its first " · " or ": " (its organisation), else the benchmark's name. */
 export function worldName(benchmark: string, twinTitle?: string | null): string {
-  const org = twinTitle?.split(' · ')[0]?.trim();
+  const org = twinTitle?.split(/ · |: /)[0]?.trim();
   return org || capital(benchmark.replace(/[-_]+/g, ' '));
 }

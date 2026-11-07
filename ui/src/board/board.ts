@@ -2,7 +2,7 @@
 // groups, with "hands work to" arrows. A team from Sculptured keeps its own places; any other is
 // laid out from how it runs (in order: left to right in rows, with an arrow to the next; at once:
 // one row). Each card says, in a line, what the agent does and what it runs on.
-import { MODE_LABEL, providerName, providerOf } from '../providers';
+import { MODE_LABEL, agentModelLine, providerName, providerOf } from '../providers';
 import type { AgentSpec, Runner, Team } from '../types';
 
 export const CARD_W = 216;
@@ -62,8 +62,8 @@ export function modelOf(a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>): stri
   return modelWord(m);
 }
 
-/** "Claude Code · Sonnet": where an agent runs and on which model. */
-export const modelBadge = (a: AgentSpec) => (a.kind === 'open' ? modelOf(a) : `${MODE_LABEL[a.kind]} · ${modelOf(a)}`);
+/** "Claude Code · Sonnet", "llama3.3 · ollama (local)": where an agent runs and on which model. */
+export const modelBadge = (a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>) => (a.kind === 'open' ? agentModelLine(a) : `${MODE_LABEL[a.kind]} · ${modelOf(a)}`);
 
 /** What an agent does, in one line: its prompt's first sentence that isn't "You are …", without a leading "Name:". */
 export function jobLine(a: Pick<AgentSpec, 'name' | 'prompt'>, max = 96): string {

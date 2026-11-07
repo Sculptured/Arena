@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { cn } from '@/lib/cn';
-import { agentModelLine } from '../providers';
+import { modelBadge } from '../board/board';
 import type { Team } from '../types';
 import type { Pause } from './flow';
 import { LANE_H, type Layout, type Placed, type Shape, layoutTimeline, shapeOf, shortLabel } from './timelineLayout';
@@ -100,11 +100,11 @@ function LaneLabels({ lanes, team, width }: { lanes: LaneRow[]; team: Team; widt
       <div className="border-b border-line px-2 text-2xs leading-[21px] font-medium text-muted" style={{ height: RULER_H }}>Agent</div>
       {lanes.map((l) => {
         const agent = team.agents.find((a) => a.id === l.id);
-        const model = agent ? agentModelLine(agent) : l.id === WORLD_LANE ? 'links and world events' : l.id === CHECK_LANE ? 'scoring' : '';
+        const model = agent ? modelBadge(agent) : l.id === WORLD_LANE ? 'Links and world events' : l.id === CHECK_LANE ? 'Scoring' : '';
         return (
           <div key={l.id} className="flex flex-col justify-center border-b border-line/60 px-2 last:border-b-0" style={{ height: LANE_H }} title={model ? `${l.id} · ${model}` : l.id}>
             <span className="truncate text-xs font-medium">{agent?.name ?? l.name}</span>
-            {model && <span className="truncate font-mono text-2xs text-faint">{model}</span>}
+            {model && <span className="truncate text-2xs text-faint">{model}</span>}
           </div>
         );
       })}
@@ -149,6 +149,8 @@ function useTrackView(el: HTMLDivElement | null, viewW: number, minW: number, li
   // While following, the end of the track (the newest step) stays in view.
   const scroll = following ? endScroll(trackW, viewW) : clampScroll(view.scroll, trackW, viewW);
   useLayoutEffect(() => { if (el && Math.abs(el.scrollLeft - scroll) > 0.5) el.scrollLeft = scroll; });
+  // Kept in step while following, so the view stays where it was when the run ends.
+  useLayoutEffect(() => { if (following && view.scroll !== scroll) setView((v) => ({ ...v, scroll })); }, [following, scroll, view.scroll]);
   const latest = useRef({ view: { ...view, scroll }, viewW, minW });
   latest.current = { view: { ...view, scroll }, viewW, minW };
   /** A move the user made: it stops following. */

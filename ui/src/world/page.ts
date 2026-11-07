@@ -1,4 +1,5 @@
 // The world view's words: who drove the agents, and what the step on screen was.
+import { isWorldActor } from '../control/lanes';
 import type { Event, Team } from '../types';
 import { type Happening, type Track, buildTrack, happenings, rewindLink, rewindSeq } from './scrub';
 import { type ViewChanges, diffViews, viewIndexAt } from './twin';
@@ -15,7 +16,7 @@ export function drivenLine(events: Event[]): string {
 export function stepHeadline(events: Event[], team: Team, seq: number | null): string {
   const e = events.find((x) => x.seq === seq);
   if (seq == null || !e) return 'No step';
-  const name = (id: string | null) => (id == null || id === 'link' ? 'World' : team.agents.find((a) => a.id === id)?.name ?? id);
+  const name = (id: string | null) => (isWorldActor(id) ? 'World' : team.agents.find((a) => a.id === id)?.name ?? id);
   const p = obj(e.payload);
   if (e.kind === 'run_start') return `Step ${seq} · after setup`;
   if (e.kind === 'tool_call') return `Step ${seq} · ${name(e.agent)} · ${String(p.name ?? 'tool')}`;

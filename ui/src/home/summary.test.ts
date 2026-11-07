@@ -27,6 +27,7 @@ describe('run screen words', () => {
     expect(taskName({ reason: 'the same incident, but the courier has no capacity' })).toBe('The same incident, but the courier has no capacity');
     expect(ticketTitle('# CVX-2611: Grade A excursion\n\nLarchmont…')).toBe('CVX-2611: Grade A excursion');
     expect(worldName('pharma', 'Larchmont Biologics · Corvexa 40 mg PFS')).toBe('Larchmont Biologics');
+    expect(worldName('pharma', 'Larchmont Biologics: CVX-2611 on hold')).toBe('Larchmont Biologics');
     expect(worldName('pharma-plant')).toBe('Pharma plant');
     expect([partWord('erp'), partWord('lims'), partWord('logistics')]).toEqual(['ERP', 'LIMS', 'Logistics']);
     expect(restoringLine(['erp', 'crm'])).toBe('Restoring the world: ERP, CRM…');

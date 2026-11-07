@@ -36,6 +36,9 @@ export interface LaneRow {
 }
 
 export const WORLD_LANE = 'world';
+
+/** Steps the world makes itself: its links (`link`) and a task's setup (`setup`), and events no agent made. */
+export const isWorldActor = (agent: string | null) => agent == null || agent === 'link' || agent === 'setup';
 export const CHECK_LANE = 'check';
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
@@ -86,7 +89,7 @@ function stepMark(e: Event, inherited: boolean): Mark | null {
 
 function laneOf(e: Event): string {
   if (e.kind === 'check') return CHECK_LANE;
-  if (e.kind === 'world_event' || e.agent == null || e.agent === 'link') return WORLD_LANE;
+  if (e.kind === 'world_event' || isWorldActor(e.agent)) return WORLD_LANE;
   return e.agent;
 }
 

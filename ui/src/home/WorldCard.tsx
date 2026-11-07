@@ -10,7 +10,7 @@ import { partWord, taskName, ticketTitle, worldName } from './summary';
 import type { Task } from './useHome';
 
 /** The width the twin is drawn at before it is shrunk into the card. */
-const TWIN_W = 1180;
+const TWIN_W = 1400;
 const THUMB_H = 150;
 
 /** The digital twin, shrunk to a thumbnail; the world's parts when it draws none yet. */
