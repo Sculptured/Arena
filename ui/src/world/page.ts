@@ -6,11 +6,20 @@ import type { BranchView, TwinView } from './types';
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 
-/** "Scripted agents · no model calls" for a run driven from outside that made no model call; else empty. */
+/** True for a model call its client reported for a scripted stand-in (its model says "scripted"). */
+const scriptedCall = (e: Event) => e.kind === 'model_call' && /scripted/i.test(String(obj(e.payload).model ?? ''));
+
+/**
+ * What drove the agents, when no model did: "Scripted agents, illustrative usage · no model calls"
+ * for a run driven from outside whose only model calls are scripted usage reports (or none);
+ * "No model calls" for any other run without one; else empty.
+ */
 export function drivenLine(events: Event[]): string {
   const rs = events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined;
-  if (events.some((e) => e.kind === 'model_call')) return '';
-  return rs?.runner === 'external' ? 'Scripted agents · no model calls' : 'No model calls';
+  const calls = events.filter((e) => e.kind === 'model_call');
+  const scripted = calls.every(scriptedCall);
+  if (rs?.runner === 'external' && scripted) return calls.length ? 'Scripted agents, illustrative usage · no model calls' : 'Scripted agents · no model calls';
+  return calls.length ? '' : 'No model calls';
 }
 
 /** "Step 21 · Logistics · book_shipment": the step a view shows. */

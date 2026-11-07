@@ -26,6 +26,8 @@ import { useStepKeys } from '../run/useStepKeys';
 import { useStepParam, withStep } from '../run/useStepParam';
 import { type ForkChoice, forkChoiceOf } from '../run/architecture';
 import { recordedLine } from '../scenario/scenario';
+import { drivenLine } from '../world/page';
+import { Tag } from '../components/ui/status';
 import Waterfall from '../run/Waterfall';
 import { branchTree } from '../runs/tree';
 import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
@@ -105,9 +107,10 @@ function Header({ runId, detail, siblings, step }: { runId: string; detail: Bran
   const scenario = recordedLine((detail.events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined)?.scenario);
   const world = worldLine(detail.events);
   const runner = runnerLine(detail.events);
+  const driven = drivenLine(detail.events);
   return (
     <PageHeader mono title={task ? `task ${task}` : 'Run'}
-      status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} /><span className="font-mono text-xs text-faint">{detail.id.slice(0, 8)}</span></>}
+      status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} />{driven && <Tag>{driven}</Tag>}<span className="font-mono text-xs text-faint">{detail.id.slice(0, 8)}</span></>}
       actions={<>
         <Button size="sm" variant="primary" asChild><Link to={withStep(`/world/${runId}/${detail.id}`, step)}><Factory />World</Link></Button>
         <Button size="sm" asChild><Link to={withStep(`/control/${runId}/${detail.id}`, step)}><Workflow />Process view</Link></Button>
