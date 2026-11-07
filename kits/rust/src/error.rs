@@ -23,6 +23,10 @@ impl PartError {
     pub fn unknown(message: impl Into<String>) -> Self {
         Self::new(-32002, message)
     }
+    /// -32002 for an instance id the part does not run.
+    pub fn unknown_instance(id: &str) -> Self {
+        Self::unknown(format!("unknown instance {id}"))
+    }
     /// -32003: fingerprint mismatch.
     pub fn fingerprint(message: impl Into<String>) -> Self {
         Self::new(-32003, message)

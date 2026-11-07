@@ -40,7 +40,7 @@ impl Erpnext {
     pub(crate) fn instance(&self, id: &str) -> Result<Instance, PartError> {
         let live = self.live.lock().expect("instances lock");
         let found = live.get(id).cloned();
-        found.ok_or_else(|| PartError::unknown(format!("unknown instance {id}")))
+        found.ok_or_else(|| PartError::unknown_instance(id))
     }
 
     pub(crate) async fn start_instance(&self, p: StartParams) -> Result<(), PartError> {

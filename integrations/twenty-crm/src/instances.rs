@@ -84,7 +84,7 @@ fn live_ids(root: &Path) -> Vec<String> {
 pub fn port_of(root: &Path, id: &str) -> R<u16> {
     read_record(root, id)
         .map(|r| r.port)
-        .ok_or_else(|| PartError::unknown(format!("unknown instance {id}")))
+        .ok_or_else(|| PartError::unknown_instance(id))
 }
 
 /// The server a running instance is on, if one runs.
