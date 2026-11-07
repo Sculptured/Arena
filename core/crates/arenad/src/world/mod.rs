@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use parts::{
     proto::{
         BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Gate, Link, Mode,
@@ -198,6 +198,73 @@ struct Track {
     stopped: bool,
 }
 
+/// What starting one part came to: the part when it started (with its save and connection info),
+/// and the error when starting or connecting it failed.
+struct StartedPart {
+    part: Option<Part>,
+    save: Option<String>,
+    connection: Option<Value>,
+    error: Option<anyhow::Error>,
+}
+
+impl StartedPart {
+    fn failed(part: Option<Part>, save: Option<String>, e: anyhow::Error) -> StartedPart {
+        StartedPart {
+            part,
+            save,
+            connection: None,
+            error: Some(e),
+        }
+    }
+}
+
+/// Starts `p`'s instance for `branch_id` (from its save in `from`, if any) and connects it when a
+/// benchmark may reach it.
+async fn start_part(
+    hub: &Hub,
+    p: PlannedPart,
+    branch_id: &str,
+    seed: u64,
+    from: Option<&StartSaves>,
+) -> StartedPart {
+    let (part, save) = match begin_part(hub, p, branch_id, seed, from).await {
+        Ok(begun) => begun,
+        Err(e) => return StartedPart::failed(None, None, e),
+    };
+    match connect(&part).await {
+        Ok(connection) => StartedPart {
+            part: Some(part),
+            save,
+            connection,
+            error: None,
+        },
+        Err(e) => StartedPart::failed(Some(part), save, e),
+    }
+}
+
+/// The part's instance started: the part, and the save it started from.
+async fn begin_part(
+    hub: &Hub,
+    p: PlannedPart,
+    branch_id: &str,
+    seed: u64,
+    from: Option<&StartSaves>,
+) -> Result<(Part, Option<String>)> {
+    let instance = instance_id(branch_id, &p.part.part);
+    let (params, save) = start_params(&p, &instance, seed, from)?;
+    let part = Part {
+        client: hub.client(&p.part.integration).await?,
+        name: p.part.part,
+        integration: p.part.integration,
+        instance,
+        describe: p.describe,
+    };
+    let started: Result<Value, WorldError> =
+        call(&part.client, &part.label(), "start", params).await;
+    started.map_err(|e| anyhow::Error::from(e).context(StartingPart(part.name.clone())))?;
+    Ok((part, save))
+}
+
 pub struct World {
     hub: Arc<Hub>,
     bench: String,
@@ -286,8 +353,9 @@ impl World {
         }
     }
 
-    /// Starts every part (from `from`, or empty when None) and connects the ones that can be.
-    /// On a failure the parts already started are stopped.
+    /// Starts every part (from `from`, or empty when None) at once and connects the ones that
+    /// can be: a world restores in the time of its slowest part. On a failure the parts that
+    /// started are stopped.
     async fn start_parts(
         hub: Arc<Hub>,
         bench: &BenchDescribe,
@@ -299,54 +367,37 @@ impl World {
         let mut planned = planned;
         let parts = std::mem::take(&mut planned.parts);
         let bench_client = hub.client(&bench.name).await?;
+        let starts = (parts.into_iter()).map(|p| start_part(&hub, p, branch_id, seed, from));
+        let started = futures_util::future::join_all(starts).await;
         let mut world = World::new(hub, &bench.name, Some(bench_client), planned);
-        for p in parts {
-            if let Err(e) = world.add_part(p, branch_id, seed, from).await {
-                world.stop().await;
-                return Err(e);
+        let mut failed = None;
+        for s in started {
+            if let Some(e) = world.take_started(s) {
+                failed.get_or_insert(e);
             }
+        }
+        if let Some(e) = failed {
+            world.stop().await;
+            return Err(e);
         }
         Ok(world)
     }
 
-    async fn add_part(
-        &mut self,
-        p: PlannedPart,
-        branch_id: &str,
-        seed: u64,
-        from: Option<&StartSaves>,
-    ) -> Result<()> {
-        let instance = instance_id(branch_id, &p.part.part);
-        let (params, save) = start_params(&p, &instance, seed, from)?;
-        let part = Part {
-            client: self.hub.client(&p.part.integration).await?,
-            name: p.part.part,
-            integration: p.part.integration,
-            instance,
-            describe: p.describe,
-        };
-        let _: Value = call(&part.client, &part.label(), "start", params)
-            .await
-            .with_context(|| StartingPart(part.name.clone()))?;
-        if let Some(save) = save {
-            self.track
-                .get_mut()
-                .unwrap()
-                .last
-                .insert(part.name.clone(), save);
+    /// Adds a part that started (in world order) with its save and connection; the error of one
+    /// that failed. A part that started and then failed to connect is added too, so it is stopped
+    /// with the world.
+    fn take_started(&mut self, s: StartedPart) -> Option<anyhow::Error> {
+        if let Some(part) = s.part {
+            let track = self.track.get_mut().unwrap();
+            if let Some(save) = s.save {
+                track.last.insert(part.name.clone(), save);
+            }
+            if let Some(info) = s.connection {
+                self.connections.insert(part.name.clone(), info);
+            }
+            self.parts.push(part);
         }
-        // Pushed first: a part that started is stopped with the world even if connecting fails.
-        self.parts.push(part);
-        self.connect_last().await
-    }
-
-    /// Connects the part added last, when a benchmark may reach it.
-    async fn connect_last(&mut self) -> Result<()> {
-        let part = self.parts.last().expect("a part was just added");
-        if let Some(info) = connect(part).await? {
-            self.connections.insert(part.name.clone(), info);
-        }
-        Ok(())
+        s.error
     }
 
     pub fn bench(&self) -> &str {

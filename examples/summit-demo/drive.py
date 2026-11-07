@@ -9,6 +9,7 @@
   duplicate  the duplicate-shipment preset: an escalated order, two desks (v1 books it twice)
   batch      a suite of seeded incidents (tasks x disruption params x repeats) for one deployment
   reset      delete the rehearsal runs (the batch suites stay) and check the demo is ready
+  world      record the reference run the World beat opens (Team v2, no disruption) and print its URL
 """
 import argparse
 import json
@@ -28,6 +29,7 @@ URL = "http://127.0.0.1:4513"
 STATE = Path("/home/alexsky2/sculptured-work-local/summit-demo")
 CLAIMS = STATE / "claims"
 LIVE_PREFIX = "Summit live"
+WORLD_PREFIX = "Summit world"
 # The batch: every task, in each of these disruption scenarios, twice (v1's mistake differs by repeat).
 BATCH_SCENARIOS = [
     {"disruptions": [{"id": "lane-unavailable", "params": {"carrier": "Tundra Medical Courier", "after": 2}}]},
@@ -217,7 +219,7 @@ def reset(api, args):
                  for r in api.request(f"/api/suites/{s['id']}")["runs"] if r["run_id"]}
     for run in api.request("/api/runs"):
         name = run.get("name") or ""
-        rehearsal = name.startswith((LIVE_PREFIX, "Summit duplicate")) or (
+        rehearsal = name.startswith((LIVE_PREFIX, WORLD_PREFIX, "Summit duplicate")) or (
             not name and run["id"] not in in_suites and run["branches"][0]["team"]["agents"][0]["kind"] == "external")
         if rehearsal and run["id"] not in in_suites:
             print(f"deleting {run['id']} {name or '(UI rehearsal)'}: {delete(api, '/api/runs/' + run['id'])}")
@@ -229,9 +231,19 @@ def reset(api, args):
     print(f"ready: {api.url}/  (benchmark {api.request('/api/benchmark')['name']})")
 
 
+def world(api, args):
+    """The World beat's reference: Larchmont as every run starts, then a correct response to it."""
+    started = start_run(api, TASKS[0], "v2", None)
+    claim(started["branch_id"])
+    name_run(api, started["run_id"], f"{WORLD_PREFIX}: Larchmont Biologics, CVX-2611 on hold · {DISCLOSURE}")
+    drive(api, DemoCalls(api, started, behaviour("v2", "live"), paced=False), TASKS[0])
+    print(f"World beat: {api.url}/world/{started['run_id']}/{started['branch_id']}?step=1")
+    return started
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=("live", "watch", "fork", "duplicate", "batch", "reset"))
+    p.add_argument("command", choices=("live", "watch", "fork", "duplicate", "batch", "reset", "world"))
     p.add_argument("--url", default=URL)
     p.add_argument("--task", choices=TASKS, default=TASKS[0])
     p.add_argument("--deployment", choices=DEPLOYMENTS, default="v1")
@@ -247,7 +259,7 @@ def main():
     disk_guard()
     api = API(args.url)
     {"live": live, "watch": watch, "fork": fork, "duplicate": duplicate, "batch": batch,
-     "reset": reset}[args.command](api, args)
+     "reset": reset, "world": world}[args.command](api, args)
 
 
 if __name__ == "__main__":
