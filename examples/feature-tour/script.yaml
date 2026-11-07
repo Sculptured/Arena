@@ -1,0 +1,49 @@
+# Feature-tour narration. Demo data from scripted agents (no AI models); every frame says so.
+# `text` is the caption; `say`, when present, is what the voice reads (spelled-out acronyms).
+# Scene ids match edit.yaml. Voice: Kokoro (narrate_kokoro.py).
+voice: af_heart
+scenes:
+  - id: intro
+    text: "Most agent demos show one good run. Production needs something harder: knowing how a team of agents behaves under the same conditions, every time, before it touches a real order. This is a short tour of how Sculptured and Arena do that. The agents here are scripted, so treat every number as an illustration."
+  - id: board
+    text: "It starts in Sculptured, where you design the team like an org chart: an incident desk, plant and quality, supply and delivery. Each card is one agent, with its own tools and its own decision rights."
+  - id: agent
+    text: "Open an agent and its job is written in plain words. The records analyst is the only one that queries the ERP and the CRM directly. Everyone else works from the compact facts it hands off, and asks when they need more."
+    say: "Open an agent, and its job is written in plain words. The records analyst is the only one that queries the E R P and the C R M directly. Everyone else works from the compact facts it hands off, and asks when they need more."
+  - id: run-in-arena
+    text: "From the board, Run in Arena sends this exact team into a staging world. Sculptured drives its agents the way it would in production, and Arena records every action they take."
+  - id: world
+    text: "That world is built from real software, or clearly labelled stand-ins. ERPNext stands in for an ERP like SAP. Twenty stands in for Salesforce. The lab system and the cold-chain carriers are simulated, and say so. Arena can save, restore and score the whole world at any step."
+    say: "That world is built from real software, or clearly labelled stand-ins. E R P Next stands in for an E R P like S A P. Twenty stands in for Salesforce. The lab system and the cold-chain carriers are simulated, and say so. Arena can save, restore, and score the whole world, at any step."
+  - id: process
+    text: "Arena shows a run the way a control room shows a plant. Agents are units, the systems they touch are equipment, and every action is a flow between them. Writes draw heavier. A refused action turns red, the moment it happens."
+  - id: timeline
+    text: "Underneath is a sequence-of-events recorder: one lane per agent, every step in order. Each mark says which system was touched, and whether it was a read or a write."
+  - id: trace
+    text: "Open any step to see the full record. Here, the logistics agent tried to book a shipment before its change was approved. The exact request is on top, and below it, the reason it was refused."
+  - id: interlocks
+    text: "That is an interlock. An agent can propose a release or a shipment, but nothing moves until the right person approves it. Arena enforces it at the boundary, and keeps the evidence."
+  - id: trends
+    text: "Trends show the load on each system, how much context each agent carries per call, and how tokens build up across the run."
+  - id: alarms
+    text: "Sculptured Control watches a live deployment the same way. Failures raise prioritised alarms, and the master caution stays lit until someone acknowledges them. From here an operator can pause every agent, or trip an emergency stop, which asks first and says exactly how many agents it will stop."
+  - id: suite
+    text: "But one good run proves very little. A test suite runs the same team across the incident and its variants, several times each, on the same seeded world, scored by the same checks. The world is deterministic. The agents are not, and that is exactly what the suite measures."
+  - id: suite-grid
+    text: "Each cell is one run. At a glance you see which scenarios pass, which fail, and where an agent did something unsafe. Safety is counted apart from the score, because shipping a short-dated lot is not a missed goal. It is a violation."
+  - id: spread
+    text: "Below that, the spread across repeats: checks passed, run time, tokens, and peak context. A team that passes once and fails the next time is not ready for production."
+  - id: tune
+    text: "Then you tune. Change one thing, an instruction, a decision right, or the model, and run the suite again. In this demo the change is scripted: version two books a shipment only after approval, and checks shelf life before it allocates a lot."
+  - id: suite-compare
+    text: "Arena compares the two suites check by check, and marks what improved, what regressed, and what stayed the same. Here the pass rate goes from ninety to one hundred percent, and unsafe runs drop to zero. This is the regression test before any change reaches production."
+  - id: estimates
+    text: "Arena also times its own work, like saving and restoring the world, and takes it out. So the time and cost it reports are estimates for production, not for staging."
+  - id: control-room
+    text: "Back in Sculptured, the control room shows every deployment at once: its state, its alarms, its actions per minute, and its latest results from Arena."
+  - id: compare
+    text: "Any two runs can be compared side by side. These two first diverge at step thirty-three, and every record that ended up different is listed."
+  - id: fork
+    text: "And when a run goes wrong, you do not start over. Pick a step, change an agent's instructions or its model, and rerun from there, against exactly the same world."
+  - id: outro
+    text: "Design the team. Test it until its behaviour is known. Then deploy it, and watch it like a plant. That is how agent systems earn their place in production."

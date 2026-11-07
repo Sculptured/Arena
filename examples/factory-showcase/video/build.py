@@ -31,8 +31,8 @@ def scene_length(sc, narr):
 
 
 def motion_filter(kind, frames):
-    z = {"zoom_in": f"1+0.10*on/{frames}", "zoom_out": f"1.10-0.10*on/{frames}",
-         "pan_left": "1.10", "pan_right": "1.10", "none": "1"}[kind]
+    z = {"zoom_in": f"1+0.05*on/{frames}", "zoom_out": f"1.05-0.05*on/{frames}",
+         "pan_left": "1.05", "pan_right": "1.05", "none": "1"}[kind]
     x = {"pan_left": f"(iw-iw/zoom)*(1-on/{frames})",
          "pan_right": f"(iw-iw/zoom)*on/{frames}"}.get(kind, "iw/2-(iw/zoom/2)")
     return (f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={FPS}")
