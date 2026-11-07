@@ -239,20 +239,42 @@ fn parsed<P: serde::de::DeserializeOwned>(e: &Event) -> Option<P> {
     serde_json::from_value(e.payload.clone()).ok()
 }
 
-/// The agent runs of `events`, each with what it used.
-fn agent_uses(events: &[&Event], table: &Prices) -> Vec<AgentUse> {
+/// The run an agent's event `e` belongs to: its latest in `runs`, else, for a model call or an
+/// end, one carried over from its `AgentStart` in `inherited` (a fork's agent resumed without
+/// starting again).
+fn run_of<'r>(
+    runs: &'r mut Vec<(AgentUse, Tally)>,
+    inherited: &[&Event],
+    e: &Event,
+) -> Option<&'r mut Tally> {
+    let agent = e.agent.as_deref();
+    let i = match runs
+        .iter()
+        .rposition(|(u, _)| Some(u.agent.as_str()) == agent)
+    {
+        Some(i) => i,
+        None => {
+            matches!(e.kind, EventKind::AgentEnd | EventKind::ModelCall).then_some(())?;
+            let start = (inherited.iter().rev())
+                .find(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == agent)?;
+            runs.push((agent_use(start), Tally::default()));
+            runs.len() - 1
+        }
+    };
+    Some(&mut runs[i].1)
+}
+
+/// The agent runs of `events`, each with what it used. `inherited` are the events before them
+/// (a fork's prefix): an agent that goes on in `events` without starting again counts from its
+/// start there.
+fn agent_uses(events: &[&Event], inherited: &[&Event], table: &Prices) -> Vec<AgentUse> {
     let mut runs: Vec<(AgentUse, Tally)> = vec![];
     for e in events {
         if e.kind == EventKind::AgentStart {
             runs.push((agent_use(e), Tally::default()));
             continue;
         }
-        let agent = e.agent.as_deref();
-        let run = runs
-            .iter_mut()
-            .rev()
-            .find(|(u, _)| Some(u.agent.as_str()) == agent);
-        let Some((_, t)) = run else {
+        let Some(t) = run_of(&mut runs, inherited, e) else {
             continue;
         };
         t.overhead_ms += event_overhead(e);
@@ -327,12 +349,12 @@ fn overhead_of(events: &[&Event]) -> (Overhead, bool) {
 /// The metrics of `branch` from its `events`, at `now` while it runs, priced with `table`.
 pub fn metrics(branch: &Branch, events: &[Event], table: &Prices, now: DateTime<Utc>) -> Metrics {
     let from = branch.start_seq.unwrap_or(0);
-    let own: Vec<&Event> = events.iter().filter(|e| e.seq >= from).collect();
+    let (own, inherited): (Vec<&Event>, Vec<&Event>) = events.iter().partition(|e| e.seq >= from);
     let end = branch.ended_at.unwrap_or(now);
     let measured_s = ((end - branch.created_at).num_milliseconds() as f64 / 1000.0).max(0.0);
     let (overhead_ms, overhead_recorded) = overhead_of(&own);
     let overhead_s = overhead_ms.total() / 1000.0;
-    let agents = agent_uses(&own, table);
+    let agents = agent_uses(&own, &inherited, table);
     Metrics {
         measured_s,
         overhead_s,
@@ -460,6 +482,13 @@ as_of = "2026-11-04""#,
         );
         let fork = metrics(&branch(Some(3), 4), &evs, &table(), Utc::now());
         assert_eq!((fork.tokens, fork.agents.len()), (100, 1));
+        // A fork whose agent goes on without starting again: its end still counts.
+        let resumed = metrics(&branch(Some(4), 4), &evs, &table(), Utc::now());
+        let a = &resumed.agents[0];
+        assert_eq!(
+            (a.agent.as_str(), a.tokens, a.cost.usd),
+            ("b", 100, Some(0.25))
+        );
     }
 
     #[test]
