@@ -29,6 +29,12 @@ and everything else under Advanced. It stays calm and readable at a glance.
   deployment estimate, branches) and process view; suites; compare two runs or suites; a run's world
   view; the team editor. Nothing was removed; it just isn't on the first screen.
 
+**Which core.** The UI talks to the Arena core (arenad) it is served from. A build can name another
+with `VITE_ARENA_URL=<url>`, and the address can switch with `?core=<url>` (this browser remembers it;
+`?core=` with nothing goes back to the serving core); every `/api` request and the event stream go
+there (`src/core.ts`), and the Advanced menu says which core is in use. A UI served from another
+origin needs the core started with `ARENA_CORS_ORIGIN=<the UI's origin>`.
+
 Pause and Stop are arenad's (`POST /api/branches/{id}/pause`, `/resume`, `/stop`): while paused, the
 branch's tool calls and gateway model calls wait and the world clock stops; `pause` and `resume` are
 events, drawn on the timeline as a shaded band.

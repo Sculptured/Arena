@@ -1,3 +1,4 @@
+import { api } from './core';
 import type { ScenarioChoice } from './scenario/types';
 import type { BranchView } from './world/types';
 import type {
@@ -11,8 +12,9 @@ export class ApiError extends Error {
   }
 }
 
+/** `path` (`/api/…`) on the Arena core this page talks to (`core.ts`). */
 export async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await fetch(api(path), init);
   const text = await res.text();
   let body: unknown = null;
   try {
@@ -68,7 +70,7 @@ export function stream(
   onEvent: (e: Event) => void,
   onStatus: (s: StatusEvent) => void,
 ): () => void {
-  const es = new EventSource(`/api/branches/${encodeURIComponent(id)}/stream`);
+  const es = new EventSource(api(`/api/branches/${encodeURIComponent(id)}/stream`));
   const listen = <T>(name: string, fn: (v: T) => void) =>
     es.addEventListener(name, (m) => {
       try {
