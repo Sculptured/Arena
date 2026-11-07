@@ -120,7 +120,11 @@ def _crown(p):
     for x in (-1.8, 1.8):
         for y in (-2.4, 2.4):
             p.cyl("frame", "dark", (x, y, CROWN_TOP + 0.08), 0.14, 0.16, segments=6)
-    # top deck with handrails
+    _crown_deck(p)
+
+
+def _crown_deck(p):
+    """The top deck with its handrails."""
     p.box("frame", "dark", (0, 0, CROWN_TOP + 0.02), (3.5, 4.9, 0.04), 0.0)
     for x in (-1.72, 1.72):
         p.cyl("frame", "trim", (x, 0, CROWN_TOP + 1.05), 0.022, 4.9, "Y", 8)

@@ -21,7 +21,7 @@ from isaac_part.part import IsaacSim  # noqa: E402
 CHUNK_MS = 500
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=95.0, help="arena seconds to run")
     ap.add_argument("--out", default="showcase.mp4")
@@ -32,7 +32,11 @@ def main() -> None:
     ap.add_argument("--scene", default="showcase")
     ap.add_argument("--stills", default="", help="comma-separated shots: no video, one image of each")
     ap.add_argument("--stills-dir", default="stills")
-    args = ap.parse_args()
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
     part = IsaacSim(BACKENDS["isaac"])
     config = {"scene": args.scene, "record": args.out, "camera": args.camera, "record_fps": args.fps,
               "record_height": args.height}
