@@ -5,6 +5,7 @@ import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
 import { Checkbox, Field, Input, NativeSelect } from '../components/ui/input';
 import { ErrorState } from '../components/ui/state';
 import { createSuite } from '../control/api';
+import ScenarioBuilder, { useScenario } from '../scenario/ScenarioBuilder';
 import { loadTeam, teamForRun } from '../team';
 import type { Runner, TaskSummary } from '../types';
 
@@ -27,9 +28,11 @@ function Scenarios({ tasks, picked, toggle, busy }: { tasks: TaskSummary[] | nul
   );
 }
 
-function useNewSuite(tasks: TaskSummary[] | null) {
+function useNewSuite(tasks: TaskSummary[] | null, open: boolean) {
   const nav = useNavigate();
   const [picked, setPicked] = useState<string[]>([]);
+  const all = (tasks ?? []).map((t) => t.id);
+  const scenario = useScenario(open, picked.length ? picked : all);
   const [repeats, setRepeats] = useState(2);
   const [runner, setRunner] = useState<Runner>('chain');
   const [name, setName] = useState('');
@@ -39,20 +42,20 @@ function useNewSuite(tasks: TaskSummary[] | null) {
   const start = async () => {
     setBusy(true); setError(null);
     try {
-      const chosen = (tasks ?? []).map((t) => t.id).filter((t) => picked.includes(t));
-      const r = await createSuite({ name: name.trim() || undefined, team: teamForRun(await loadTeam()), tasks: chosen, repeats, runner });
+      const chosen = all.filter((t) => picked.includes(t));
+      const r = await createSuite({ name: name.trim() || undefined, team: teamForRun(await loadTeam()), tasks: chosen, repeats, runner, scenario: scenario.scenario });
       nav(`/suites/${r.id}`);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
-  return { picked, toggle, repeats, setRepeats, runner, setRunner, name, setName, busy, error, start };
+  return { picked, toggle, repeats, setRepeats, runner, setRunner, name, setName, busy, error, start, scenario };
 }
 
 /** Run your team over each scenario, repeated, on the same seeded world. */
 export default function NewSuiteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const [tasks, setTasks] = useState<TaskSummary[] | null>(null);
   useEffect(() => { if (open) fetchTasks().then(setTasks).catch(() => setTasks([])); }, [open]);
-  const f = useNewSuite(tasks);
+  const f = useNewSuite(tasks, open);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="New suite" description={<>Runs your <Link to="/team" className="text-accent hover:underline">team</Link> over each scenario on the same seeded world, so suites compare fairly.</>}>
@@ -67,9 +70,10 @@ export default function NewSuiteDialog({ open, onOpenChange }: { open: boolean; 
             </Field>
           </div>
           <Scenarios tasks={tasks} picked={f.picked} toggle={f.toggle} busy={f.busy} />
+          <ScenarioBuilder s={f.scenario} busy={f.busy} />
           {f.error && <ErrorState error={f.error} hint="Nothing was started. Fix the cause and start again." />}
         </div>
-        <DialogActions onCancel={() => onOpenChange(false)} onGo={f.start} disabled={f.busy || !tasks?.length} label={f.busy ? 'Starting…' : 'Start suite'} />
+        <DialogActions onCancel={() => onOpenChange(false)} onGo={f.start} disabled={f.busy || !tasks?.length || !!f.scenario.problem} label={f.busy ? 'Starting…' : 'Start suite'} />
       </DialogContent>
     </Dialog>
   );

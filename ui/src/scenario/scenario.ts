@@ -109,3 +109,12 @@ export function recordedLine(s: RecordedScenario | undefined): string {
   if (!texts.length) return '';
   return `${texts.map((t) => (/[.!?]$/.test(t) ? t : `${t}.`)).join(' ')} ${NOT_TOLD}`;
 }
+
+/** Why the run or suite can't start with this scenario on these tasks, or null. */
+export function scenarioProblem(options: ScenarioOptions | null, sel: Selection, tasks: string[]): string | null {
+  const bad = selectionProblem(options, sel);
+  if (bad) return bad;
+  const outside = scenarioOf(options, sel) ? outsideBase(options, tasks) : [];
+  if (!outside.length) return null;
+  return `The disruptions don't apply to ${outside.join(', ')}. Pick ${options!.base.join(', ')}, or turn the disruptions off.`;
+}

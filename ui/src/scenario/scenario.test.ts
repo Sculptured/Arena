@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { scenarioOptions as opts } from './fixtures';
 import {
-  chosen, disruptionText, fill, initialSelection, outsideBase, paramProblem, previewText, recordedLine, scenarioOf,
+  chosen, disruptionText, scenarioProblem, fill, initialSelection, outsideBase, paramProblem, previewText, recordedLine, scenarioOf,
   selectionProblem, toggled, withParam,
 } from './scenario';
 
@@ -53,6 +53,13 @@ describe('scenario builder', () => {
     const bad = withParam(toggled(initialSelection(opts), 'retest-fails', true), 'retest-fails', after, '');
     expect(selectionProblem(opts, withParam(bad, 'retest-fails', after, '99'))).toBe("A lot's retest fails mid-run: After agent calls: at most 20");
     expect(selectionProblem(opts, initialSelection(opts))).toBeNull();
+  });
+
+  it('says why a run cannot start with the scenario', () => {
+    const sel = initialSelection(opts);
+    expect(scenarioProblem(opts, sel, ['cvx-2611-em-excursion'])).toBeNull();
+    expect(scenarioProblem(opts, sel, ['carrier-no-capacity'])).toBe("The disruptions don't apply to carrier-no-capacity. Pick cvx-2611-em-excursion, short-dated-alternate, reallocation-rejected, or turn the disruptions off.");
+    expect(scenarioProblem(opts, toggled(sel, 'courier-capacity', false), ['carrier-no-capacity'])).toBeNull();
   });
 
   it('names picked tasks the disruptions do not apply to', () => {
