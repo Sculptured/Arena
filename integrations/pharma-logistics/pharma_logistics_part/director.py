@@ -39,6 +39,8 @@ def _lane_problem(config, state, payload):
     lane = network.lane_of(config, quote["carrier"], quote["origin"])
     if not lane["qualified"]:
         return f"Rejected: {lane['carrier']}'s lane from {lane['origin']} is not qualified for 2-8 C."
+    if not network.available(state, lane):
+        return f"Rejected: {lane['carrier']}'s lane from {lane['origin']} is unavailable."
     return None
 
 
@@ -59,6 +61,10 @@ def _shipment(config, state, payload):
 
 
 def _decision(config, state, action, payload):
+    """(approved, note); a scheduled rejection of the action (a disruption) comes first, once."""
+    scheduled = state.get("reject_next", {}).pop(action, None)
+    if scheduled:
+        return False, scheduled
     if not isinstance(payload, dict):
         return False, "Rejected: the payload must be an object."
     if action == REALLOCATION:

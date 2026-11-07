@@ -159,6 +159,21 @@ class JsonStatePart(Part):
         return saves.gc(self.NAME, keep)
 
 
+def set_scenario(config, state, args, known, overlay, kinds, tools) -> Done:
+    """A scenario tool's work: sets `state["scenario"]` to `args["name"]` (one of `known`) and arms
+    the disruptions the scenario's data lists (`overlay(config, state)["disruptions"]`), then those
+    in `args["disruptions"]`, as `disruptions.arm` does with `kinds` and the part's `tools`."""
+    if args["name"] not in known:
+        raise Refusal(f"unknown scenario {args['name']} (known: {', '.join(known)})")
+    state["scenario"] = args["name"]
+    given = [*overlay(config, state).get("disruptions", []), *(args.get("disruptions") or [])]
+    if not given:
+        return Done({"scenario": args["name"]}, writes=["scenario/current"])
+    fired = disruptions.arm(config, state, kinds, list(tools), given)
+    result = {"scenario": args["name"], "disruptions": [d["id"] for d in given]}
+    return Done(result, writes=["scenario/current", *fired.writes], events=fired.events)
+
+
 def _with(out: dict, before: disruptions.Fired) -> dict:
     """A call's answer with what its disruptions wrote and gave put first."""
     if not before.writes and not before.events:

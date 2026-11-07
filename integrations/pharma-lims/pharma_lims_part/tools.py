@@ -1,9 +1,9 @@
 """The LIMS's tools: reads of the lab's records for agents, the scenario a task's setup sets, and the QA
 head's review that a benchmark's link calls."""
-from arena_part.jsonstate import Done, Tool
-from arena_part.params import Param, Refusal
+from arena_part.jsonstate import Done, Tool, set_scenario
+from arena_part.params import Param
 
-from . import lab, qa
+from . import disrupt, lab, qa
 
 
 def _em_results(config, state, args):
@@ -26,10 +26,7 @@ def _get_document(config, state, args):
 
 
 def _scenario(config, state, args):
-    if args["name"] not in lab.scenarios(config):
-        raise Refusal(f"unknown scenario {args['name']} (known: {', '.join(lab.scenarios(config))})")
-    state["scenario"] = args["name"]
-    return Done({"scenario": args["name"]}, writes=["scenario/current"])
+    return set_scenario(config, state, args, lab.scenarios(config), lab.overlay, disrupt.KINDS, TOOLS)
 
 
 TOOLS = {t.name: t for t in [
@@ -42,8 +39,9 @@ TOOLS = {t.name: t for t in [
     Tool("lims_documents", "The lab's documents (SOPs, memos): id, title and kind.", "read", (), _documents),
     Tool("lims_get_document", "One document of the lab, with its text.", "read", (Param("id", "string"),),
          _get_document),
-    Tool("lims_scenario", "Sets the lab's scenario (a task's setup calls it; agents don't get it).", "write",
-         (Param("name", "string"),), _scenario),
+    Tool("lims_scenario", "Sets the lab's scenario and schedules its disruptions (a task's setup calls it; "
+         "agents don't get it).", "write", (Param("name", "string"), Param("disruptions", "array", None)),
+         _scenario),
     Tool("qa_review", "The QA head reviews a proposed change (a benchmark's link calls it; agents don't get it).",
          "write", (Param("id", "string"), Param("action", "string"), Param("payload", "object", None),
                    Param("summary", "string", None)), qa.review),

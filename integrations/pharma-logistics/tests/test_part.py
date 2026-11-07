@@ -149,3 +149,79 @@ def test_conformance(tmp_path):
     run = subprocess.run([str(check), str(PACKAGE), "--config", str(config)], capture_output=True, text=True,
                          env=env, timeout=300)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+TUNDRA_US = {"carrier": "Tundra Medical Courier", "origin": "US", "destination": "US"}
+
+
+def disrupted(*given, scenario="base"):
+    part = PharmaLogistics()
+    part.start("i1", logistics_config(), 0, 0)
+    out = call(part, "logistics_scenario", {"name": scenario, "disruptions": list(given)})
+    assert "error" not in out, out
+    return part, out
+
+
+def after(n, do, tool=None, did="d1"):
+    when = {"after_calls": n, **({"tool": tool} if tool else {})}
+    return {"id": did, "when": when, "do": do, "text": f"{do['kind']} happens"}
+
+
+def test_tundra_loses_capacity_after_its_first_quote():
+    part, _ = disrupted(after(1, {"kind": "lane_capacity", **TUNDRA_US, "capacity": 0}, "cold_chain_quotes"))
+    call(part, "qualified_lanes", {})
+    first = quote(part, "US", SBMC, 400, "Tundra Medical Courier")
+    assert first["capacity_left"] == 10
+    out = call(part, "cold_chain_quotes", {"origin": "US", "customer": SBMC, "qty": 400})
+    assert out["events"] == [{"kind": "disruption", "text": "lane_capacity happens",
+                              "data": {"id": "d1", "kind": "lane_capacity", **TUNDRA_US, "capacity": 0}}]
+    assert out["result"]["quotes"][0]["capacity_left"] == 0, "the crossing call sees the change"
+    booked = call(part, "book_shipment", {"proposal_id": "c", **shipment_of(first, "PO-SBMC-4471", "CVX-2604")})
+    assert "no capacity" in booked["error"]
+
+
+def test_an_unavailable_lane_gives_no_quote_and_the_director_rejects_it():
+    part, _ = disrupted(after(1, {"kind": "lane_unavailable", **TUNDRA_US}))
+    tundra = quote(part, "US", SBMC, 400, "Tundra Medical Courier")
+    quotes = call(part, "cold_chain_quotes", {"origin": "US", "customer": SBMC, "qty": 400})["result"]["quotes"]
+    assert "Tundra Medical Courier" not in [q["carrier"] for q in quotes]
+    _, no = review(part, "cold_chain_shipment", shipment_of(tundra, "PO-SBMC-4471", "CVX-2604"))
+    assert not no["approved"] and "unavailable" in no["note"]
+    lanes = call(part, "qualified_lanes", {})["result"]["lanes"]
+    assert lanes[0]["available"] is False and "available" not in lanes[1]
+
+
+def test_a_transit_delay_moves_later_quotes_and_booked_shipments():
+    part, _ = disrupted(after(2, {"kind": "transit_delay", **TUNDRA_US, "extra_days": 2}))
+    q = quote(part, "US", SBMC, 400, "Tundra Medical Courier")
+    booked = call(part, "book_shipment", {"proposal_id": "c", **shipment_of(q, "PO-SBMC-4471", "CVX-2604")})
+    assert booked["result"]["arrives"] == "2026-11-10"
+    out = call(part, "shipments", {})
+    assert out["result"]["shipments"][0]["arrives"] == "2026-11-12" and "shipment/SHP-0001" in out["writes"]
+    later = quote(part, "US", SBMC, 100, "Tundra Medical Courier")
+    assert (later["transit_days"], later["arrives"]) == (3, "2026-11-12")
+
+
+def test_the_director_rejects_the_next_decision_on_an_action_once():
+    note = "Not yet: show the EU commitments."
+    part, armed = disrupted(after(0, {"kind": "reject_next", "action": "stock_reallocation", "note": note}))
+    assert armed["events"][0]["data"]["action"] == "stock_reallocation", "after 0 calls: fires at setup"
+    _, first = review(part, "stock_reallocation", {"batch": "CVX-2598", "qty": 1800})
+    assert (first["approved"], first["note"]) == (False, note)
+    assert review(part, "stock_reallocation", {"batch": "CVX-2598", "qty": 1800})[1]["approved"]
+
+
+def test_a_bad_disruption_is_refused_and_the_schedule_survives_a_save(tmp_path):
+    part = started()
+    bad = after(1, {"kind": "lane_capacity", "carrier": "Nobody", "origin": "US", "destination": "US",
+                    "capacity": 0})
+    assert "no lane of Nobody" in call(part, "logistics_scenario", {"name": "base", "disruptions": [bad]})["error"]
+    part, _ = disrupted(after(2, {"kind": "lane_capacity", **TUNDRA_US, "capacity": 0}))
+    call(part, "qualified_lanes", {})
+    part.save("i1", "s1", str(tmp_path / "saves" / "pharma-logistics" / "s1"))
+    again = PharmaLogistics()
+    again.start("i2", logistics_config(), 0, 0, {"save": "s1", "mode": "exact"})
+    assert again.call_tool("i2", "qualified_lanes", {}, 0)["result"]["lanes"][0]["capacity_left"] == 10
+    fired = again.call_tool("i2", "qualified_lanes", {}, 0)
+    assert fired["result"]["lanes"][0]["capacity_left"] == 0 and fired["events"][0]["kind"] == "disruption"
+    assert again.inspect({"instance": "i2"}, ["disruption/d1"])["docs"]["disruption/d1"]["fired"] is True

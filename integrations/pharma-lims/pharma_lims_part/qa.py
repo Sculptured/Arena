@@ -21,6 +21,8 @@ def _release(config, state, payload):
     if results["em_excursions"]:
         ids = ", ".join(results["em_excursions"])
         return False, f"Rejected: {ids} exceeded the Grade A action limit; {batch} stays on hold until the investigation closes."
+    if results.get("failed"):
+        return False, f"Rejected: {batch} failed {', '.join(results['failed'])}; it can't be released."
     if not results["all_passed"]:
         open_tests = [t["test"] for t in results["tests"] if t["status"] != "pass"]
         return False, f"Rejected: {batch}'s release testing is not complete ({', '.join(open_tests)})."

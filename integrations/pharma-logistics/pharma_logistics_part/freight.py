@@ -18,7 +18,7 @@ def quotes(config, state, args) -> Done:
     who = network.customer(config, args["customer"])
     if args["qty"] <= 0:
         raise Refusal("qty must be positive")
-    found = network.lanes(config, origin, who["region"])
+    found = network.lanes(config, state, origin, who["region"])
     if not found:
         raise Refusal(f"no carrier lane from {origin} to {who['name']} ({who['region']}) in the register")
     made = [_quote(config, state, lane, who["name"], args["qty"]) for lane in found]
@@ -28,8 +28,8 @@ def quotes(config, state, args) -> Done:
 def _quote(config, state, lane, customer, qty) -> dict:
     q = {"quote_id": _next_id(state, "quote", "Q"), "carrier": lane["carrier"], "service": lane["service"],
          "temperature": lane["temperature"], "origin": lane["origin"], "customer": customer, "qty": qty,
-         "transit_days": lane["transit_days"], "ship_date": config["today"],
-         "arrives": network.days_after(config, lane["transit_days"]), "price": lane["price"],
+         "transit_days": network.transit_days(state, lane), "ship_date": config["today"],
+         "arrives": network.days_after(config, network.transit_days(state, lane)), "price": lane["price"],
          "capacity_left": network.capacity_left(config, state, lane)}
     state["quotes"][q["quote_id"]] = q
     return q
@@ -47,6 +47,8 @@ def _bookable(config, state, args) -> dict:
     if args["qty"] != quote["qty"]:
         raise Refusal(f"quote {args['quote_id']} is for {quote['qty']}, not {args['qty']}")
     lane = network.lane_of(config, quote["carrier"], quote["origin"])
+    if not network.available(state, lane):
+        raise Refusal(f"{quote['carrier']}'s lane from {quote['origin']} is unavailable")
     if network.capacity_left(config, state, lane) == 0:
         raise Refusal(f"{quote['carrier']} has no capacity left this week from {quote['origin']}")
     return quote
@@ -58,6 +60,8 @@ def book(config, state, args) -> Done:
     keep = ("quote_id", "carrier", "service", "temperature", "origin", "customer", "qty", "ship_date", "arrives")
     shipment = {"id": sid, **{k: quote[k] for k in keep}, "order": args["order"], "batch": args["batch"],
                 "proposal_id": args["proposal_id"]}
+    lane = network.lane_of(config, quote["carrier"], quote["origin"])
+    shipment["arrives"] = network.days_after(config, network.transit_days(state, lane))
     state["shipments"][sid] = shipment
     quote["shipment"] = sid
     return Done(shipment, writes=[f"shipment/{sid}", f"quote/{quote['quote_id']}"])

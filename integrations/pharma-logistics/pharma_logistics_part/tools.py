@@ -1,13 +1,13 @@
 """The logistics tools: the qualified-lanes register, quotes, bookings and notices for agents, the scenario a
 task's setup sets, and the supply chain director's review that a benchmark's link calls."""
-from arena_part.jsonstate import Done, Tool
-from arena_part.params import Param, Refusal
+from arena_part.jsonstate import Done, Tool, set_scenario
+from arena_part.params import Param
 
-from . import director, freight, network
+from . import director, disrupt, freight, network
 
 
 def _lanes(config, state, args):
-    register = [{**l, "capacity_left": network.capacity_left(config, state, l)} for l in config["logistics"]["lanes"]]
+    register = network.register(config, state)
     return Done({"origins": config["logistics"]["origins"], "lanes": register}, reads=["register/lanes"])
 
 
@@ -19,10 +19,7 @@ def _listed(kind, field):
 
 
 def _scenario(config, state, args):
-    if args["name"] not in network.scenarios(config):
-        raise Refusal(f"unknown scenario {args['name']} (known: {', '.join(network.scenarios(config))})")
-    state["scenario"] = args["name"]
-    return Done({"scenario": args["name"]}, writes=["scenario/current"])
+    return set_scenario(config, state, args, network.scenarios(config), network.overlay, disrupt.KINDS, TOOLS)
 
 
 TOOLS = {t.name: t for t in [
@@ -42,8 +39,9 @@ TOOLS = {t.name: t for t in [
          (Param("customer", "string"), Param("order", "string"), Param("new_date", "string"),
           Param("message", "string")), freight.notify),
     Tool("customer_notices", "The notices sent to customers so far.", "read", (), _listed("notice", "notices")),
-    Tool("logistics_scenario", "Sets the carriers' scenario (a task's setup calls it; agents don't get it).",
-         "write", (Param("name", "string"),), _scenario),
+    Tool("logistics_scenario", "Sets the carriers' scenario and schedules its disruptions (a task's setup "
+         "calls it; agents don't get it).", "write",
+         (Param("name", "string"), Param("disruptions", "array", None)), _scenario),
     Tool("supply_review", "The supply chain director reviews a proposed change (a benchmark's link calls it; "
          "agents don't get it).", "write",
          (Param("id", "string"), Param("action", "string"), Param("payload", "object", None),
