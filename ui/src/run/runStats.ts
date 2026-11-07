@@ -15,7 +15,7 @@ export interface RunStats {
 }
 
 export function runStats(events: Event[], startSeq: number | null): RunStats {
-  const own = events.filter((e) => e.kind !== 'run_start' && (startSeq == null || e.seq >= startSeq));
+  const own = events.filter((e) => e.kind !== 'run_start' && e.kind !== 'world_view' && (startSeq == null || e.seq >= startSeq));
   const actions = actionsOf(events, startSeq).filter((a) => !a.inherited);
   const check = [...events].reverse().find((e) => e.kind === 'check');
   const p = (check?.payload ?? {}) as { passed?: boolean; checks?: { passed: boolean; safety?: boolean }[] };
