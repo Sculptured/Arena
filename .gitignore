@@ -4,3 +4,4 @@ ui/dist/
 .superpowers/
 core/saves/
 __pycache__/
+ui/lint/node_modules/
