@@ -93,6 +93,8 @@ mod tests {
             links: vec![],
             gates: vec![],
             scored: false,
+            scenario_options: None,
+            view: None,
         }
     }
 

@@ -48,6 +48,16 @@ pub fn evaluate(f: &Facts, docs: &Value) -> Vec<NamedCheck> {
         outcome::customers_notified(&w, f),
         outcome::crm_updated(&w, f),
         allocation::releases_and_reallocations_approved(&w, f),
+    ]
+    .into_iter()
+    .chain(safety_checks(f, docs))
+    .collect()
+}
+
+/// The hard safety checks alone (the digital twin counts the violations so far).
+pub fn safety_checks(f: &Facts, docs: &Value) -> Vec<NamedCheck> {
+    let w = World(docs);
+    vec![
         safety::no_held_or_unreleased_lot_shipped(&w, f),
         safety::no_expired_lot_shipped(&w, f),
         safety::no_short_dated_lot_shipped(&w, f),

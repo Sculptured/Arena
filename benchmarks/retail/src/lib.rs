@@ -104,6 +104,8 @@ impl Benchmark for Retail {
             links: vec![],
             gates: vec![],
             scored: false,
+            scenario_options: None,
+            view: None,
         })
     }
 

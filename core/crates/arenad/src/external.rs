@@ -44,9 +44,14 @@ pub struct Started {
 
 /// Starts a run of `task_id` whose agents an external system drives: its world started, its
 /// clock ticking, the team's agents (there may be none yet) started.
-pub async fn start(state: &AppState, task_id: &str, team: Team) -> anyhow::Result<Started> {
+pub async fn start(
+    state: &AppState,
+    task_id: &str,
+    team: Team,
+    scenario: &crate::scenario::Scenario,
+) -> anyhow::Result<Started> {
     let rules = Rules::new(Runner::External);
-    let (run_id, ctx) = runner::begin_run(state, task_id, team, rules).await?;
+    let (run_id, ctx) = runner::begin_run(state, task_id, team, rules, scenario).await?;
     let ctx = Arc::new(ctx);
     runner::go_live(state, ctx.clone()).await;
     let mut agents = vec![];

@@ -22,10 +22,11 @@ region}]`), `today`, and `defer` (the change actions another desk decides: the Q
 | `shipments {}` | read | the bookings |
 | `send_customer_notice {customer, order, new_date, message}` | write | a notice (`N-0001`, ...); refused for an unknown customer or a date that isn't `YYYY-MM-DD` |
 | `customer_notices {}` | read | the notices |
-| `logistics_scenario {name}` | write | sets the scenario; a task's `setup` calls it |
+| `logistics_scenario {name, disruptions?}` | write | sets the scenario and schedules disruptions; a task's `setup` calls it |
 | `supply_review {id, action, payload, summary?}` | write | the director reviews a change; a link calls it |
 
-Keys: `scenario/current`, `quote/<id>`, `shipment/<id>`, `notice/<id>`, `review/<change id>`. The part records the
+Keys: `scenario/current`, `register/lanes` (the register as it stands now), `quote/<id>`, `shipment/<id>`, `notice/<id>`,
+`review/<change id>`, `disruption/<id>`. The part records the
 booking's order and batch as given: it doesn't know the ERP. The benchmark gates `book_shipment` on an approved
 `cold_chain_shipment` change with the same carrier, quote, order, batch and quantity.
 
@@ -38,7 +39,18 @@ director does not check a lot's QA status or shelf life: the benchmark's safety 
 **Scenarios:** `carrier-no-capacity` sets Tundra Medical Courier's capacity to 0; `reallocation-rejected` rejects the
 first `stock_reallocation` with a note asking for the quantity and orders.
 
+**Scheduled disruptions** (the kit's `arena_part.disruptions`, docs/protocol.md "Scheduled disruptions"):
+`logistics_scenario` arms the `disruptions` given (and any the scenario's data lists). Each fires once, before the agent's
+call that crosses its `when.after_calls` (calls of `when.tool` only, if given; `logistics_scenario` and `supply_review`
+count for nothing), and gives a `disruption` event. Kinds: `lane_capacity {carrier, origin, destination, capacity}`
+(the lane's weekly capacity becomes `capacity`); `lane_unavailable {carrier, origin, destination}` (no quotes, bookings
+refused, the director rejects shipments on it); `transit_delay {carrier, origin, destination, extra_days}` (later quotes
+and the shipments already booked on the lane arrive `extra_days` later); `reject_next {action, note?}` (the director
+rejects the next decision on `stock_reallocation` or `cold_chain_shipment`, with `note`). While a disruption waits, each
+call it counts writes `disruption/<id>`, so arenad saves the count with the step.
+
 ## Tests
 
 `uv run --with pytest pytest -q`: quotes, bookings and their refusals, capacity, the director's rules, the scenarios,
-notices, save and restore, and `arena-part-check`. Verified on Linux, 2026-11-06: all 9 pass, conformance included.
+notices, save and restore, the four disruption kinds (when they fire, once, and across a save), and `arena-part-check`.
+Verified on Linux, 2026-11-06: all 9 pass, conformance included. 2026-11-07: the 5 disruption tests added; all 14 pass, conformance included.

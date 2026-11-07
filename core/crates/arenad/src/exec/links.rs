@@ -77,7 +77,7 @@ pub(super) async fn call_part(
         Err(e) => return step_not_made(tool, args, failure(branch, e), clock_ms),
     };
     let outcome = outcome_of(&output);
-    if outcome.is_ok() && !output.writes.is_empty() {
+    if !output.writes.is_empty() {
         world.mark_written(part);
     }
     let facts = CallFacts {
@@ -139,35 +139,46 @@ async fn save_on_last(branch: &BranchCtx, log: &mut [Reported]) {
 
 impl ToolExec {
     /// Records `events` and makes the calls the world's links ask for at their time, each a step
-    /// of its own.
+    /// of its own. The seq of the last of those steps that wrote, if any did.
     pub(super) async fn report(
         &self,
         branch: &BranchCtx,
         events: Vec<PartEvent>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<i64>, String> {
         let since = std::time::Instant::now();
         let mut log = run_links(branch, events).await;
         if log.iter().any(|r| matches!(r, Reported::Link(_))) {
             overhead::add_since(&branch.branch_id, Cat::Link, since);
         }
         save_on_last(branch, &mut log).await;
+        let mut wrote = None;
         for entry in log {
-            self.record_reported(branch, entry).await?;
+            let seq = self.record_reported(branch, entry).await?;
+            wrote = seq.or(wrote);
         }
-        Ok(())
+        Ok(wrote)
     }
 
-    async fn record_reported(&self, branch: &BranchCtx, entry: Reported) -> Result<(), String> {
+    /// Records one reported entry; the seq of a link's step that wrote.
+    async fn record_reported(
+        &self,
+        branch: &BranchCtx,
+        entry: Reported,
+    ) -> Result<Option<i64>, String> {
         match entry {
             Reported::Event(e) => {
                 let payload = world_event_payload(e);
                 self.record(branch, None, EventKind::WorldEvent, &payload)
                     .await
+                    .map(|_| None)
             }
             Reported::Link(s) => {
+                let wrote = s.facts.part.is_some() && !s.facts.writes.is_empty();
                 let payload = tool_call_payload(&s.tool, s.args, &s.outcome, None, s.facts);
-                self.record(branch, Some(LINK_ACTOR), EventKind::ToolCall, &payload)
-                    .await
+                let seq =
+                    (self.record_seq(branch, Some(LINK_ACTOR), EventKind::ToolCall, &payload))
+                        .await?;
+                Ok(wrote.then_some(seq))
             }
         }
     }

@@ -72,9 +72,20 @@ def batch_results(config, state, batch) -> dict:
     rows = [{"test": name, "status": status, "date": when} for name in config["lims"]["test_names"]]
     if note:
         rows[0] = {**rows[0], "note": note}
-    return {"batch": batch, "manufactured": the_lot["manufactured"], "expiry": the_lot["expiry"],
-            "tests": rows, "complete": status != "pending", "all_passed": status == "pass",
-            "em_excursions": excursions(config, state, batch)}
+    out = {"batch": batch, "manufactured": the_lot["manufactured"], "expiry": the_lot["expiry"],
+           "tests": rows, "complete": status != "pending", "all_passed": status == "pass",
+           "em_excursions": excursions(config, state, batch)}
+    failed = state.get("failed", {}).get(batch)
+    return _failed(config, out, failed) if failed else out
+
+
+def _failed(config, results, test) -> dict:
+    """`results` once a disruption failed `test`: that result is out of specification."""
+    for i, row in enumerate(results["tests"]):
+        if row["test"] == test:
+            results["tests"][i] = {"test": test, "status": "fail", "date": config["today"],
+                                   "note": "Retest out of specification"}
+    return {**results, "complete": True, "all_passed": False, "failed": [test]}
 
 
 def documents(config, state) -> list:

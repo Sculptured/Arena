@@ -118,3 +118,33 @@ def test_conformance(tmp_path):
     run = subprocess.run([str(check), str(PACKAGE), "--config", str(config)], capture_output=True, text=True,
                          env=env, timeout=300)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+STERILITY = "Sterility (USP <71>)"
+
+
+def retest_fails(n, lot="CVX-2608", test=STERILITY):
+    return {"id": "retest", "when": {"after_calls": n}, "do": {"kind": "result_fails", "lot": lot, "test": test},
+            "text": f"{lot}'s {test} retest fails"}
+
+
+def test_a_lots_retest_fails_after_n_lims_calls_and_qa_then_refuses_it():
+    part = PharmaLims()
+    part.start("i1", lims_config(), 0, 0)
+    assert "error" not in call(part, "lims_scenario", {"name": "base", "disruptions": [retest_fails(2)]})
+    assert call(part, "lims_batch_results", {"batch": "CVX-2608"})["result"]["all_passed"]
+    call(part, "lims_documents", {})
+    out = call(part, "lims_batch_results", {"batch": "CVX-2608"})
+    assert out["events"][0]["data"] == {"id": "retest", "kind": "result_fails", "lot": "CVX-2608",
+                                        "test": STERILITY}
+    r = out["result"]
+    assert (r["complete"], r["all_passed"], r["failed"], r["tests"][0]["status"]) == (True, False, [STERILITY], "fail")
+    refused = review(part, "batch_release", {"batch": "CVX-2608"})["result"]
+    assert not refused["approved"] and "failed Sterility" in refused["note"]
+    assert part.inspect({"instance": "i1"}, ["batch/CVX-2608"])["docs"]["batch/CVX-2608"]["all_passed"] is False
+
+
+def test_a_disruption_on_an_unknown_lot_or_test_is_refused():
+    for bad, text in [(retest_fails(1, lot="CVX-9"), "no batch CVX-9"), (retest_fails(1, test="Smell"), "no test")]:
+        out = call(started(), "lims_scenario", {"name": "base", "disruptions": [bad]})
+        assert text in out["error"] and out["writes"] == []

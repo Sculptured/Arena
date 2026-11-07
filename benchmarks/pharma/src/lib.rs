@@ -9,10 +9,12 @@ pub mod days;
 pub mod erp;
 pub mod erp_docs;
 pub mod facts;
+pub mod options;
 pub mod reports;
 pub mod scenario;
 pub mod seed;
 pub mod team;
+pub mod twin;
 pub mod world;
 
 use arena_part::proto::*;
@@ -60,6 +62,10 @@ impl Benchmark for Pharma {
             links: world::links(),
             gates: world::gates(),
             scored: true,
+            scenario_options: Some(options::scenario_options(d)),
+            view: Some(ViewInfo {
+                docs: twin::DOC_PARTS.map(String::from).to_vec(),
+            }),
         })
     }
 
@@ -98,12 +104,20 @@ impl Benchmark for Pharma {
         Ok(GoldActions::default())
     }
 
+    /// The digital twin: the ERP read through its connection, the other parts from their docs.
+    async fn view(&self, p: ViewParams) -> R<ViewResult> {
+        let view = twin::view(&p, data::data()).await;
+        let view = view.map_err(|e| PartError::internal(format!("the twin: {e:#}")))?;
+        Ok(ViewResult { view })
+    }
+
     async fn score(&self, p: ScoreParams) -> R<Score> {
         let s = scenario::of_task(&p.task)
             .ok_or_else(|| PartError::invalid(format!("unknown task {}", p.task)))?;
-        let f = facts::Facts::new(data::data(), s.name);
+        let docs = json!(p.docs);
+        let f = facts::Facts::new(data::data(), s.name).with_disruptions(&docs);
         Ok(Score {
-            checks: checks::evaluate(&f, &json!(p.docs)),
+            checks: checks::evaluate(&f, &docs),
         })
     }
 }

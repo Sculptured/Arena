@@ -5,6 +5,10 @@ state or refuse and change nothing.
 Subclass `JsonStatePart` and give it `NAME` (the package name, which names its save folders), `TOOLS`
 (`{name: Tool}`), `describe_fields()` (`version`, `fingerprint`, optionally `system`), `new_state(config)`
 (a fresh state; validate the config there) and `docs(config, state)` (`{key: doc}`).
+
+A part with scheduled disruptions (`disruptions`) also gives `DISRUPTIONS` (`{do.kind: Kind}`) and
+`WORLD_TOOLS` (the tools a task's setup or a link calls: they are not agents' calls, so they count
+for no disruption). Its scenario tool arms them with `disruptions.arm`.
 """
 import copy
 import json
@@ -12,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import errors, saves
+from . import disruptions, errors, saves
 from .params import Refusal, input_schema, normalize, refused
 from .serve import Part
 
@@ -55,6 +59,8 @@ def event(kind: str, text: str, data: dict) -> dict:
 class JsonStatePart(Part):
     NAME = ""
     TOOLS: dict = {}
+    DISRUPTIONS: dict = {}
+    WORLD_TOOLS: frozenset = frozenset()
 
     def __init__(self):
         self.instances: dict[str, Instance] = {}
@@ -89,21 +95,32 @@ class JsonStatePart(Part):
         self.instances[instance] = Instance(config, state)
 
     def call_tool(self, instance, name, args, clock_ms):
-        """Runs the tool on a copy of the state and keeps the copy only when the tool did not refuse."""
+        """Runs the tool on a copy of the state and keeps the copy only when the tool did not refuse.
+        The disruptions an agent's call sets off fire first and stay, even when the tool refuses."""
         inst = self._instance(instance)
         tool = self.TOOLS.get(name)
         if tool is None:
             raise errors.invalid(f"unknown tool {name}")
+        before = self._scheduled(inst, name)
         work = copy.deepcopy(inst.state)
         try:
             done = tool.run(inst.config, work, normalize(name, tool.params, args))
         except (Refusal, ValueError) as e:
-            return refused(str(e))
+            return _with(refused(str(e)), before)
         inst.state = work
         out = {"result": done.result, "reads": done.reads, "writes": done.writes}
         if done.events:
             out["events"] = done.events
-        return out
+        return _with(out, before)
+
+    def _scheduled(self, inst, name) -> disruptions.Fired:
+        """Fires and counts the disruptions an agent's call of `name` sets off, on the state itself."""
+        if name in self.WORLD_TOOLS or not disruptions.pending(inst.state, name):
+            return disruptions.Fired()
+        state = copy.deepcopy(inst.state)
+        fired = disruptions.before_call(inst.config, state, self.DISRUPTIONS, name)
+        inst.state = state
+        return fired
 
     def save(self, instance, save, dir):
         inst = self._instance(instance)
@@ -140,6 +157,32 @@ class JsonStatePart(Part):
 
     def gc(self, keep):
         return saves.gc(self.NAME, keep)
+
+
+def set_scenario(config, state, args, known, overlay, kinds, tools) -> Done:
+    """A scenario tool's work: sets `state["scenario"]` to `args["name"]` (one of `known`) and arms
+    the disruptions the scenario's data lists (`overlay(config, state)["disruptions"]`), then those
+    in `args["disruptions"]`, as `disruptions.arm` does with `kinds` and the part's `tools`."""
+    if args["name"] not in known:
+        raise Refusal(f"unknown scenario {args['name']} (known: {', '.join(known)})")
+    state["scenario"] = args["name"]
+    given = [*overlay(config, state).get("disruptions", []), *(args.get("disruptions") or [])]
+    if not given:
+        return Done({"scenario": args["name"]}, writes=["scenario/current"])
+    fired = disruptions.arm(config, state, kinds, list(tools), given)
+    result = {"scenario": args["name"], "disruptions": [d["id"] for d in given]}
+    return Done(result, writes=["scenario/current", *fired.writes], events=fired.events)
+
+
+def _with(out: dict, before: disruptions.Fired) -> dict:
+    """A call's answer with what its disruptions wrote and gave put first."""
+    if not before.writes and not before.events:
+        return out
+    out["writes"] = before.writes + [k for k in out["writes"] if k not in before.writes]
+    events = before.events + out.get("events", [])
+    if events:
+        out["events"] = events
+    return out
 
 
 def _read(save_dir) -> dict:

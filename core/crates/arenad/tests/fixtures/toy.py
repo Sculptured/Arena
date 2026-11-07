@@ -20,13 +20,16 @@
   toy.py bench --integration NAME [--part NAME=INTEGRATION ...] [--gold TOOL [--gold-args JSON]]
                [--config PART=JSON ...] [--clash] [--bench-tool [--tool-part PART]] [--link JSON ...]
                [--gate JSON ...] [--setup JSON ...] [--scored [--two-tasks] [--safety]]
+               [--view PART [--view-fails]] [--scenario-options JSON]
       A benchmark with one task `t1` whose world is one part `box` of integration NAME, or the
       --part list; each part's config is `{}` or the --config given for it. Tools: none; with --clash a `poke`; with --bench-tool a `ring` that reports it
       ran on PART (default `box`). --link adds a link to the world, --gate a gate, --setup a call to `t1`'s setup. With --scored,
       `score` has one check `poked`: the first part's box/n is at least 1. Gold: one TOOL with JSON args (default `poke` with `{}`).
       --two-tasks adds task t2, which needs two pokes (`poked`: box/n is at least the task's number).
       --safety adds the safety check `not_overpoked`: box/n is at most the task's number. --system
-      makes the part's `describe` say what kind of system it is (JSON).
+      makes the part's `describe` say what kind of system it is (JSON). --view PART draws the world's
+      view from PART's docs: one area `box` with one item `n` whose status is box/n (abnormal above 1);
+      --view-fails makes `view` an error. --scenario-options puts JSON in `describe.scenario_options`.
 """
 import json
 import os
@@ -199,7 +202,16 @@ class Bench:
                 "tasks": tasks(),
                 "instructions": "Be kind to the box.", "tools": tools,
                 "links": [json.loads(link) for link in opts("--link")],
-                "gates": [json.loads(gate) for gate in opts("--gate")], "scored": "--scored" in ARGS}
+                "gates": [json.loads(gate) for gate in opts("--gate")], "scored": "--scored" in ARGS,
+                **view_and_scenario()}
+
+    def view(self, p):
+        if "--view-fails" in ARGS:
+            raise RpcError(-32000, "the toy cannot draw today")
+        n = p["docs"][opt("--view", "box")]["box/n"]["n"]
+        item = {"id": "n", "label": "n", "status": str(n), "abnormal": n > 1}
+        return {"view": {"title": "Box", "areas": [{"id": "box", "label": "Box", "kind": "plant", "items": [item]}],
+                         "flows": [], "kpis": [{"id": "n", "label": "n", "value": str(n), "abnormal": False}]}}
 
     def seed(self, p):
         return {}
@@ -218,6 +230,13 @@ class Bench:
 
     def gold_actions(self, p):
         return {"actions": [{"name": opt("--gold", "poke"), "args": json.loads(opt("--gold-args", "{}"))}]}
+
+
+def view_and_scenario():
+    out = {"view": {"docs": [opt("--view", "")]}} if "--view" in ARGS else {}
+    if "--scenario-options" in ARGS:
+        out["scenario_options"] = json.loads(opt("--scenario-options", "{}"))
+    return out
 
 
 def tasks():

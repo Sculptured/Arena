@@ -11,6 +11,8 @@ pub struct Facts<'a> {
     /// The simulated parts' scenario.
     pub scenario: &'a str,
     pub today: i64,
+    /// The `do` of every scheduled disruption that fired in the simulated parts.
+    pub fired: Vec<Value>,
 }
 
 /// One carrier lane of the register, as the checks need it.
@@ -28,7 +30,32 @@ impl<'a> Facts<'a> {
             data,
             scenario,
             today,
+            fired: vec![],
         }
+    }
+
+    /// The same facts with the disruptions that fired in the world `docs` (`{part: {key: doc}}`):
+    /// what the simulated parts' `disruption/<id>` docs say fired.
+    pub fn with_disruptions(mut self, docs: &Value) -> Facts<'a> {
+        let parts = ["lims", "logistics"].map(|p| docs[p].as_object());
+        let all = parts.into_iter().flatten().flatten();
+        let fired = all.filter(|(k, d)| k.starts_with("disruption/") && d["fired"] == true);
+        self.fired = fired.map(|(_, d)| d["do"].clone()).collect();
+        self
+    }
+
+    /// The fired disruptions of `kind`.
+    fn fired_of(&self, kind: &str) -> impl Iterator<Item = &Value> + '_ {
+        let kind = kind.to_string();
+        self.fired
+            .iter()
+            .filter(move |d| d["kind"] == kind.as_str())
+    }
+
+    /// The fired disruptions of `kind` on the lane of `carrier` from `origin`.
+    fn on_lane<'s>(&'s self, kind: &str, l: &'s Lane) -> impl Iterator<Item = &'s Value> + 's {
+        self.fired_of(kind)
+            .filter(move |d| d["carrier"] == l.carrier && d["origin"] == l.origin)
     }
 
     /// The LIMS's slice, through the scenario: what it changes over `field` of the base.
@@ -52,7 +79,8 @@ impl<'a> Facts<'a> {
         let excursion = samples
             .filter(|s| s["batch"] == batch)
             .any(|s| s["cfu"].as_f64() > s["action_limit"].as_f64());
-        tests[0] == "pass" && !excursion
+        let failed = self.fired_of("result_fails").any(|d| d["lot"] == batch);
+        tests[0] == "pass" && !excursion && !failed
     }
 
     /// A lot quarantined at the start that QA would release in this scenario.
@@ -99,10 +127,20 @@ impl<'a> Facts<'a> {
             .any(|l| l.carrier == carrier && l.origin == origin && l.qualified)
     }
 
-    /// Whether the carrier has any capacity this week in this scenario.
-    fn has_capacity(&self, carrier: &str) -> bool {
-        let over = &self.data.logistics["scenarios"][self.scenario]["capacity"][carrier];
-        over.as_i64().is_none_or(|n| n > 0)
+    /// Whether the lane has any capacity this week in this scenario, and is available, once the
+    /// disruptions that fired are counted.
+    fn usable(&self, l: &Lane) -> bool {
+        let over = &self.data.logistics["scenarios"][self.scenario]["capacity"][l.carrier];
+        let cut = self.on_lane("lane_capacity", l).last();
+        let capacity = cut.map_or(over.as_i64(), |d| d["capacity"].as_i64());
+        let closed = self.on_lane("lane_unavailable", l).next().is_some();
+        capacity.is_none_or(|n| n > 0) && !closed
+    }
+
+    /// The lane's transit days with the delays that fired.
+    fn transit_days(&self, l: &Lane) -> i64 {
+        let delays = self.on_lane("transit_delay", l);
+        l.transit_days + delays.filter_map(|d| d["extra_days"].as_i64()).sum::<i64>()
     }
 
     /// The earliest a lot at `origin` shipped today on a qualified lane with capacity arrives.
@@ -110,8 +148,8 @@ impl<'a> Facts<'a> {
         let lanes = self.lanes();
         let usable = lanes
             .iter()
-            .filter(|l| l.origin == origin && l.qualified && self.has_capacity(l.carrier));
-        usable.map(|l| self.today + l.transit_days).min()
+            .filter(|l| l.origin == origin && l.qualified && self.usable(l));
+        usable.map(|l| self.today + self.transit_days(l)).min()
     }
 
     /// Whether `lot` could serve `order` for `customer`: available, and long-dated enough on the
@@ -166,5 +204,44 @@ mod tests {
         assert!(base.qualified("Borealis Cold Chain", "EU"));
         assert!(!base.qualified("Northgate Parcel", "US"));
         assert!(base.restricted("CVX-2598") && !base.restricted("CVX-2604"));
+    }
+
+    fn fired(part: &str, d: Value) -> Value {
+        serde_json::json!({part: {"disruption/d": {"fired": true, "do": d}, "disruption/x": {"fired": false,
+            "do": {"kind": "result_fails", "lot": "CVX-2604"}}}})
+    }
+
+    #[test]
+    fn the_disruptions_that_fired_change_what_was_possible() {
+        let tundra = |kind: &str, extra: Value| {
+            let mut d = serde_json::json!({"kind": kind, "carrier": "Tundra Medical Courier", "origin": "US"});
+            d.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            Facts::new(data(), "base").with_disruptions(&fired("logistics", d))
+        };
+        let full = tundra("lane_capacity", serde_json::json!({"capacity": 0}));
+        assert_eq!(full.earliest_arrival("US"), day("2026-11-11"));
+        assert_eq!(
+            tundra("lane_capacity", serde_json::json!({"capacity": 3})).earliest_arrival("US"),
+            day("2026-11-10")
+        );
+        assert_eq!(
+            tundra("lane_unavailable", serde_json::json!({})).earliest_arrival("US"),
+            day("2026-11-11")
+        );
+        let late = tundra("transit_delay", serde_json::json!({"extra_days": 2}));
+        assert_eq!(
+            late.earliest_arrival("US"),
+            day("2026-11-11"),
+            "Borealis is sooner now"
+        );
+        let failed = serde_json::json!({"kind": "result_fails", "lot": "CVX-2608"});
+        let lab = Facts::new(data(), "base").with_disruptions(&fired("lims", failed));
+        assert!(!lab.releasable(lot("CVX-2608")));
+        assert!(
+            lab.available(lot("CVX-2604")),
+            "a disruption that did not fire changes nothing"
+        );
     }
 }

@@ -48,6 +48,10 @@ pub trait Benchmark: Send + Sync + 'static {
     async fn score(&self, _p: ScoreParams) -> R<Score> {
         Err(PartError::method_not_found("score"))
     }
+    /// The world's digital twin now, for a benchmark whose `describe` has `view`.
+    async fn view(&self, _p: ViewParams) -> R<ViewResult> {
+        Err(PartError::method_not_found("view"))
+    }
 }
 
 /// Serve a part on stdin and stdout until stdin closes.
@@ -269,6 +273,7 @@ async fn bench_dispatch<B: Benchmark>(b: &B, method: &str, params: Value) -> R<V
         "call_tool" => out(b.call_tool(parse(params)?).await),
         "gold_actions" => out(b.gold_actions(parse(params)?).await),
         "score" => out(b.score(parse(params)?).await),
+        "view" => out(b.view(parse(params)?).await),
         m => Err(PartError::method_not_found(m)),
     }
 }

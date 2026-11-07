@@ -30,12 +30,13 @@ pub(super) async fn create_run(
     cleanup: OwnedRwLockReadGuard<()>,
     task_id: String,
     team: Team,
+    scenario: crate::scenario::Scenario,
 ) -> ApiResult<Value> {
     validate_agents(&state, &team.agents)?;
     check_disk(&state).await?;
     detached(async move {
         let _cleanup = cleanup;
-        let started = external::start(&state, &task_id, team).await?;
+        let started = external::start(&state, &task_id, team, &scenario).await?;
         Ok(Json(
             serde_json::to_value(started).map_err(anyhow::Error::from)?,
         ))

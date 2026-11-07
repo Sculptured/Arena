@@ -186,6 +186,8 @@ pub enum EventKind {
     AgentEnd,
     Check,
     WorldEvent,
+    /// The world's view after a step (`{seq_of, view}`), when the benchmark draws one.
+    WorldView,
 }
 
 impl EventKind {
@@ -200,6 +202,7 @@ impl EventKind {
             EventKind::AgentEnd => "agent_end",
             EventKind::Check => "check",
             EventKind::WorldEvent => "world_event",
+            EventKind::WorldView => "world_view",
         }
     }
 
@@ -214,6 +217,7 @@ impl EventKind {
             "agent_end" => EventKind::AgentEnd,
             "check" => EventKind::Check,
             "world_event" => EventKind::WorldEvent,
+            "world_view" => EventKind::WorldView,
             _ => return None,
         })
     }

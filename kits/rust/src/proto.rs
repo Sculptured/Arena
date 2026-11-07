@@ -4,6 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+mod scenario;
+mod view;
+
+pub use scenario::*;
+pub use view::*;
+
 pub const PROTOCOL: u32 = 1;
 
 fn all(s: &str, ok: impl Fn(u8) -> bool, max: usize) -> bool {
@@ -351,7 +357,7 @@ pub struct BenchTeam {
     pub agents: Vec<TeamRole>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BenchDescribe {
     pub name: String,
     pub version: String,
@@ -376,6 +382,12 @@ pub struct BenchDescribe {
     /// world is made.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scored: bool,
+    /// The disruptions a run's scenario builder may add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_options: Option<ScenarioOptions>,
+    /// Present when the benchmark answers `view` (the world's digital twin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ViewInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

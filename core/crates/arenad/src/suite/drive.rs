@@ -71,7 +71,7 @@ async fn start_builtin(
         return Err(anyhow!(why));
     }
     let (task, team) = (&slot.task_id, suite.team.clone());
-    match runner::start_run_with(state, task, team, suite.runner).await {
+    match runner::start_run_in(state, task, team, suite.runner, &suite.scenario).await {
         Ok((run, branch)) => {
             state
                 .store
@@ -113,7 +113,7 @@ pub async fn claim_external(state: &AppState, suite: &Suite) -> Result<Option<Ex
     let Some(slot) = state.store.claim_slot(&suite.id).await? else {
         return Ok(None);
     };
-    match external::start(state, &slot.task_id, suite.team.clone()).await {
+    match external::start(state, &slot.task_id, suite.team.clone(), &suite.scenario).await {
         Ok(started) => {
             let (run, branch) = (&started.run_id, &started.branch_id);
             state

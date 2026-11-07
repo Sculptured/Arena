@@ -42,6 +42,7 @@ use crate::{
 mod external;
 mod names;
 mod suites;
+mod twin;
 mod world;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -73,6 +74,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/usage", get(world::usage))
         .route("/api/gc", post(world::gc))
         .merge(suites::router())
+        .merge(twin::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
 
@@ -380,21 +382,25 @@ struct NewRun {
     /// `chain` (default), `concurrent`, or `external` (see `api::external`).
     #[serde(default)]
     runner: Runner,
+    /// The disruptions to add to the task (`{disruptions: [{id, params}]}`).
+    #[serde(default)]
+    scenario: Option<parts::proto::ScenarioRequest>,
 }
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let cleanup = not_cleaning(&state)?;
     let mut req: NewRun = parse_body(&body)?;
     settle_providers(&mut req.team);
+    let scenario = twin::scenario_of(&state, req.scenario.as_ref()).await?;
     if req.runner == Runner::External {
-        return external::create_run(state, cleanup, req.task_id, req.team).await;
+        return external::create_run(state, cleanup, req.task_id, req.team, scenario).await;
     }
     validate_builtin_team(&state, &req.team)?;
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
         let _cleanup = cleanup;
         let (task, team) = (&req.task_id, req.team);
-        Ok(runner::start_run_with(&state, task, team, req.runner).await?)
+        Ok(runner::start_run_in(&state, task, team, req.runner, &scenario).await?)
     })
     .await?;
     Ok(Json(json!({"run_id": run_id, "branch_id": branch_id})))

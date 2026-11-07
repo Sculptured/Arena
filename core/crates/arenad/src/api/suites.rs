@@ -48,6 +48,9 @@ struct NewSuiteReq {
     repeats: i32,
     #[serde(default)]
     runner: Runner,
+    /// The disruptions every run adds to its task (`{disruptions: [{id, params}]}`).
+    #[serde(default)]
+    scenario: Option<parts::proto::ScenarioRequest>,
 }
 
 /// The tasks a suite runs: the ones asked for (each once, each the benchmark's), or all.
@@ -92,6 +95,7 @@ async fn create(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Su
     let mut req: NewSuiteReq = parse_body(&body)?;
     settle_providers(&mut req.team);
     validate_suite(&state, &req)?;
+    let scenario = super::twin::scenario_of(&state, req.scenario.as_ref()).await?;
     let tasks = suite_tasks(&state, std::mem::take(&mut req.tasks)).await?;
     if req.runner != Runner::External {
         check_disk(&state).await?;
@@ -108,6 +112,7 @@ async fn create(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Su
         repeats: req.repeats,
         runner: req.runner,
         benchmark: &state.benchmark,
+        scenario: &scenario,
     };
     let stored = state.store.create_suite(new).await?;
     if stored.runner != Runner::External {

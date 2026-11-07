@@ -47,24 +47,69 @@ def customer(config, name: str) -> dict:
     return found
 
 
-def lanes(config, origin: str, region: str) -> list:
-    return [l for l in config["logistics"]["lanes"] if l["origin"] == origin and l["destination"] == region]
+def lanes(config, state, origin: str, region: str) -> list:
+    """The lanes from `origin` to `region` that are available now."""
+    return [l for l in config["logistics"]["lanes"]
+            if l["origin"] == origin and l["destination"] == region and available(state, l)]
 
 
 def lane_of(config, carrier: str, origin: str):
     return next((l for l in config["logistics"]["lanes"] if l["carrier"] == carrier and l["origin"] == origin), None)
 
 
+def lane_key(lane) -> str:
+    return f"{lane['carrier']}|{lane['origin']}|{lane['destination']}"
+
+
+def find_lane(config, carrier: str, origin: str, destination: str):
+    return next((l for l in config["logistics"]["lanes"]
+                 if (l["carrier"], l["origin"], l["destination"]) == (carrier, origin, destination)), None)
+
+
+def changes(state, lane) -> dict:
+    """What fired disruptions changed on the lane: `capacity`, `unavailable`, `extra_days`."""
+    return state.get("lane_changes", {}).get(lane_key(lane), {})
+
+
+def available(state, lane) -> bool:
+    return not changes(state, lane).get("unavailable", False)
+
+
+def transit_days(state, lane) -> int:
+    return lane["transit_days"] + changes(state, lane).get("extra_days", 0)
+
+
 def capacity_left(config, state, lane) -> int:
-    """The lane's shipments left this week: its capacity (or the scenario's) less what is booked on it."""
+    """The lane's shipments left this week: its capacity (the scenario's, or what a disruption left
+    it) less what is booked on it."""
     capacity = overlay(config, state).get("capacity", {}).get(lane["carrier"], lane["capacity"])
+    capacity = changes(state, lane).get("capacity", capacity)
     booked = [s for s in state["shipments"].values()
               if s["carrier"] == lane["carrier"] and s["origin"] == lane["origin"]]
     return max(capacity - len(booked), 0)
 
 
+def register(config, state) -> list:
+    """Every lane as it stands now: with its shipments left, whether it is available and its
+    transit days (and the days a disruption added, if any)."""
+    out = []
+    for l in config["logistics"]["lanes"]:
+        row = {**l, "capacity_left": capacity_left(config, state, l)}
+        extra = changes(state, l).get("extra_days", 0)
+        if not available(state, l):
+            row["available"] = False
+        if extra:
+            row.update(transit_days=transit_days(state, l), delayed_days=extra)
+        out.append(row)
+    return out
+
+
 def days_after(config, days: int) -> str:
     return (date.fromisoformat(config["today"]) + timedelta(days=days)).isoformat()
+
+
+def days_after_date(day: str, days: int) -> str:
+    return (date.fromisoformat(day) + timedelta(days=days)).isoformat()
 
 
 def iso_date(text: str) -> str:

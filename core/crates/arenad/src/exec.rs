@@ -1,6 +1,7 @@
 mod links;
 mod setup;
 mod talk;
+mod view;
 
 use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
@@ -369,7 +370,7 @@ impl ToolExec {
             .advance_all(clock_ms)
             .await
             .map_err(|e| failure(branch, e))?;
-        self.report(branch, events).await
+        self.report(branch, events).await.map(drop)
     }
 
     /// Runs a tool call on the branch's world at the branch clock (the clock parts advanced to
@@ -400,7 +401,8 @@ impl ToolExec {
         overhead::add(&branch.branch_id, Cat::Gate, gate_ms);
         let outcome = outcome_of(&called.output);
         facts.take(called, clock);
-        let wrote = outcome.is_ok() && !facts.writes.is_empty();
+        // A refused call may have changed its part anyway (a disruption fired): saved too.
+        let wrote = !facts.writes.is_empty();
         let written = facts.part.clone().filter(|_| wrote);
         save_step(branch, written.as_deref(), &mut facts).await;
         (outcome, facts)
@@ -421,10 +423,15 @@ impl ToolExec {
         }
         let (outcome, mut facts) = self.execute(branch, agent, name, &args).await;
         let events = std::mem::take(&mut facts.events);
+        let wrote = facts.part.is_some() && !facts.writes.is_empty();
         let payload = tool_call_payload(name, args, &outcome, tool_call_id, facts);
-        self.record(branch, Some(agent), EventKind::ToolCall, &payload)
+        let seq = self
+            .record_seq(branch, Some(agent), EventKind::ToolCall, &payload)
             .await?;
-        self.report(branch, events).await?;
+        let linked = self.report(branch, events).await?;
+        if let Some(seq_of) = linked.or(wrote.then_some(seq)) {
+            self.record_view(branch, seq_of).await;
+        }
         outcome
     }
 
@@ -435,11 +442,24 @@ impl ToolExec {
         kind: EventKind,
         payload: &T,
     ) -> Result<(), String> {
+        self.record_seq(branch, agent, kind, payload)
+            .await
+            .map(drop)
+    }
+
+    /// Records an event; its seq.
+    async fn record_seq<T: serde::Serialize>(
+        &self,
+        branch: &BranchCtx,
+        agent: Option<&str>,
+        kind: EventKind,
+        payload: &T,
+    ) -> Result<i64, String> {
         let v = serde_json::to_value(payload).map_err(|e| format!("internal error: {e}"))?;
-        branch
+        let e = branch
             .append(&self.store, agent, kind, v)
             .await
             .map_err(|e| format!("internal error: recording event: {e:#}"))?;
-        Ok(())
+        Ok(e.seq)
     }
 }
