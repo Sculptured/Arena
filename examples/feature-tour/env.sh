@@ -7,6 +7,8 @@ export ARENA_SAVES=/home/alexsky2/sculptured-work-local/saves-demo
 export ARENA_PG_URL=postgres://arena:arena@127.0.0.1:5593/postgres
 export ARENA_BENCHMARK=pharma
 export ARENA_PORT=4513
+# Retain all 25 suite recordings plus the paced run; the driver also enforces free space.
+export ARENA_MAX_DB_BYTES=12884901888
 export ARENA_SCULPTURED_BINARY=/home/alexsky2/sculptured-work-local/sculptured-bin/sculptured
 export PATH=/home/alexsky2/sculptured-work-local/sculptured-bin:$PATH
 export UV_CACHE_DIR=/home/alexsky2/sculptured-work-local/uv-cache-demo

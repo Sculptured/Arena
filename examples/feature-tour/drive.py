@@ -41,14 +41,26 @@ def audit_branch(detail):
             "messages": sum(e["kind"] == "message" for e in events)}
 
 
-def suites(api, pace, output):
-    record = {"disclosure": DISCLOSURE, "suites": {}}
+def suite_id(api, record, deployment, label, repeats):
+    if deployment in record["suites"]:
+        sid = record["suites"][deployment]["id"]
+        report = api.request(f"/api/suites/{sid}")
+        if any(r["status"] not in ("pending", "passed", "failed") for r in report["runs"]):
+            raise RuntimeError(f"Cannot resume {sid}: a run is active, missing, or errored")
+        return sid
+    suite = api.request("/api/suites", {"name": f"Demo: {label} — {DISCLOSURE}",
+        "team": deployment_team(deployment), "tasks": TASKS, "repeats": repeats, "runner": "external"})
+    sid = suite["id"]
+    record["suites"][deployment] = {"id": sid, "runs": []}
+    return sid
+
+
+def suites(api, pace, output, resume=False):
+    record = (json.loads(output.read_text()) if resume else
+              {"disclosure": DISCLOSURE, "suites": {}})
     for deployment, label, repeats in (("v1", "team v1", 2), ("v2", "team v2 (tuned)", 2),
                                         ("single", "single agent", 1)):
-        suite = api.request("/api/suites", {"name": f"Demo: {label} — {DISCLOSURE}",
-            "team": deployment_team(deployment), "tasks": TASKS, "repeats": repeats, "runner": "external"})
-        sid = suite["id"]
-        record["suites"][deployment] = {"id": sid, "runs": []}
+        sid = suite_id(api, record, deployment, label, repeats)
         save(output, record)
         while True:
             started = api.request(f"/api/suites/{sid}/claim", {})
@@ -57,6 +69,7 @@ def suites(api, pace, output):
             record["suites"][deployment]["runs"].append(started)
             save(output, record)
             run(api, started, deployment, started["task_id"], started["repeat"], pace)
+            save(output, record)
         record["suites"][deployment]["report"] = api.request(f"/api/suites/{sid}")
         save(output, record)
     a, b = (record["suites"][key]["id"] for key in ("v1", "v2"))
@@ -92,13 +105,17 @@ def main():
     parser.add_argument("--deployment", choices=NAMES, default="v1")
     parser.add_argument("--task", choices=TASKS, default=TASKS[0])
     parser.add_argument("--output", type=Path, default=Path("demo-results.json"))
+    parser.add_argument("--resume", action="store_true",
+                        help="resume pending suite slots from --output; refuses active or errored runs")
     args = parser.parse_args()
     if args.pace < 0:
         parser.error("--pace must be nonnegative")
+    if args.resume and args.command != "suites":
+        parser.error("--resume is only supported for suites")
     disk_guard()
     api = API(args.url)
     if args.command == "suites":
-        suites(api, args.pace, args.output)
+        suites(api, args.pace, args.output, args.resume)
     else:
         started = api.request("/api/runs", {"task_id": args.task, "runner": "external",
                                            "team": deployment_team(args.deployment)})

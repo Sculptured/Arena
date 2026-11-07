@@ -1,10 +1,10 @@
 """Transport contract and role isolation, without a server or model."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from behaviour import TASKS, behaviour
 from client import Calls, deployment_team
-from drive import audit_branch
+from drive import audit_branch, suite_id
 
 
 class RecordingAPI:
@@ -17,6 +17,23 @@ class RecordingAPI:
 
 
 class ClientTest(unittest.TestCase):
+    def test_resume_reuses_suite_and_leaves_completed_runs_alone(self):
+        api = Mock()
+        api.request.return_value = {"runs": [{"status": s} for s in ("passed", "failed", "pending")]}
+        record = {"suites": {"v1": {"id": "existing", "runs": [{"branch_id": "kept"}]}}}
+        self.assertEqual(suite_id(api, record, "v1", "team v1", 2), "existing")
+        api.request.assert_called_once_with("/api/suites/existing")
+        self.assertEqual(record["suites"]["v1"]["runs"], [{"branch_id": "kept"}])
+
+    def test_resume_refuses_unfinished_or_lost_runs(self):
+        for status in ("starting", "running", "error", "missing", "stopped"):
+            with self.subTest(status=status):
+                api = Mock()
+                api.request.return_value = {"runs": [{"status": status}]}
+                with self.assertRaisesRegex(RuntimeError, "Cannot resume"):
+                    suite_id(api, {"suites": {"v1": {"id": "existing"}}}, "v1", "team v1", 2)
+                api.request.assert_called_once_with("/api/suites/existing")
+
     def calls(self, deployment="v2"):
         api = RecordingAPI()
         return api, Calls(api, {"branch_id": "branch"}, deployment, 0,
