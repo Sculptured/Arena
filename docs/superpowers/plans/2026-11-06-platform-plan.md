@@ -60,6 +60,65 @@ clobbered. **Done when** both platform branches are green.
 **Done when:** the lint rules are on in CI with zero violations, the duplication budget is set from the new
 baseline, and all tests are green.
 
+## System 1b: UI foundation, so it looks like a real tool (user, 2026-11-06)
+
+User: "Start using some fancy libraries or components or something to make it look like a real tool not
+some AI slop, please look online for really good designs, quality, clear, understandable, yet highly
+functional and utility".
+
+**Design references** (researched 2026-11-06):
+- **Honeycomb's Agent Timeline:**
+  - the whole multi-agent conversation as one chronological sequence;
+  - horizontal swim lanes for parallel agents and handoffs;
+  - click a step for its model calls, tool calls, tokens and prompt;
+  - expand to the full trace waterfall (API calls, database queries).
+
+  This is the model for our action timeline.
+- **Trace waterfalls** (Grafana, Elastic APM, OpenTelemetry):
+  - time on the x axis;
+  - nested spans;
+  - gaps mean waiting or unseen work;
+  - each service a consistent hue.
+
+  This is the model for one run's L4 view: the run as a root span, agents' turns as children, tool calls as
+  leaves.
+- **High-performance HMI** (ISA-101; Ignition's guidance):
+  - muted, low-contrast grey background;
+  - simple shapes for equipment;
+  - colour only for alarms, always paired with text and a distinct shape;
+  - sparklines and moving analog indicators instead of big numbers.
+
+  This is the model for the process view and the control room.
+- **Product polish** (developer tools such as Linear and Vercel):
+  - dense, calm typography;
+  - a command palette;
+  - keyboard navigation;
+  - consistent spacing;
+  - empty states that say what to do next.
+
+**Stack:**
+- **Arena UI** (small, so worth rebuilding): Tailwind CSS v4 plus shadcn/ui components. These are owned code
+  on Radix primitives: dialogs, tabs, menus, popovers, tooltips, command palette (cmdk), toasts (sonner).
+  Plus lucide icons, `@xyflow/react` for graphs (process view, scenario timeline, team), TanStack Table for
+  grids (runs, suites, leaderboards, events), and uPlot for dense time series.
+- **Sculptured web** (large, with its own design system in DESIGN.md): keep its tokens and add the same
+  libraries without Tailwind. That means Radix primitives styled with its tokens, `@xyflow/react`,
+  TanStack Table, uPlot, cmdk and lucide.
+- **The same visual language in both:** spacing, type scale, status glyphs and the HMI palette.
+
+**Plan of action:**
+1. A short `docs/ui.md` in each repo: references, tokens, components, patterns (timeline, waterfall,
+   process view, data table, empty, loading and error states).
+2. The libraries and base components, each with a vitest render test.
+3. Rebuild Arena's pages on them: runs list, run view (timeline, waterfall, inspector), compare, suites, the
+   control form.
+4. Rebuild Sculptured Control's new panes on them: control room, process view, action timeline, trends,
+   alarms.
+5. Screenshots of every page at desktop and phone widths, checked against the references.
+
+**Done when:** every page uses the shared components, nothing has ad-hoc styles, and the screenshots are
+reviewed.
+
 ## System 2: the same conditions for every architecture (causal determinism)
 
 **Problem:** a shared seed isn't enough. Two architectures that act differently consume random numbers in
@@ -186,5 +245,5 @@ narration and the edit. It is updated as systems land; the first cut covers what
 
 ## Order
 
-**0 → 1 → 2 → 3 → 4 → 5 → 6 → 7**, with the video in parallel. Each system ends with a short report to the
+**0 → 1 → 1b → 2 → 3 → 4 → 5 → 6 → 7**, with the video in parallel: a first cut on today's UI, then refreshed after 1b. Each system ends with a short report to the
 user: what was built, test results, and screenshots of the UI.
