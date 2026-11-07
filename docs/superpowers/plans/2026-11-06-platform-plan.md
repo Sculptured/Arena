@@ -247,3 +247,15 @@ narration and the edit. It is updated as systems land; the first cut covers what
 
 **0 → 1 → 1b → 2 → 3 → 4 → 5 → 6 → 7**, with the video in parallel: a first cut on today's UI, then refreshed after 1b. Each system ends with a short report to the
 user: what was built, test results, and screenshots of the UI.
+
+## Later: a self-improving lab demo (inspiration from the user, 2026-11-06)
+
+The user liked [Rocky](https://www.sundai.club/projects/259652bb-5a3a-42c0-8eb2-e3a980bbf4c9)
+([repo](https://github.com/RandyHaddad/rocky)) as an inspiration for a later demo: "a recursively
+self-improving manufacturing lab". Agents pursue a manufacturing goal, notice capabilities they lack, design
+tools to add them (CAD, control software, build instructions) and test the designs in NVIDIA Isaac Sim; it
+compares agent teams with solo agents (Rocky's count was 260 agent-authored verification checks against 150).
+
+In Arena it would be an Isaac Sim world where agents may add tools to the world, with suites comparing solo,
+centralised and decentralised teams, and every design step recorded and replayable. Not before the systems
+above.
