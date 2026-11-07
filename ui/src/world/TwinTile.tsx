@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { StatusMark } from '../components/ui/status';
 import { cn } from '@/lib/cn';
-import { itemFacts, statusMark } from './twin';
+import { isIdLike, itemFactParts, itemFacts, statusMark } from './twin';
 import type { AreaKind, TwinItem } from './types';
 
 /** A simple equipment shape per kind of area, in the process view's style. */
@@ -26,14 +26,19 @@ export function ZoneGlyph({ kind }: { kind: AreaKind }) {
  */
 export function TwinTile({ item, change, style, className }: { item: TwinItem; change?: string; style?: CSSProperties; className?: string }) {
   const facts = itemFacts(item);
+  const parts = itemFactParts(item);
   return (
     <div style={style} title={[item.label, item.status, facts, change && `changed: ${change}`].filter(Boolean).join('\n')}
-      className={cn('flex min-w-0 flex-col justify-center gap-px overflow-hidden rounded-md border bg-raised px-2 py-1 shadow-panel',
+      className={cn('flex min-w-0 flex-col justify-start gap-0 overflow-hidden rounded-md border bg-raised px-2 py-1 shadow-panel',
         item.abnormal ? 'border-alarm border-l-[3px]' : 'border-line-strong', change && 'ring-2 ring-accent', className)}>
-      <span className="truncate font-mono text-xs font-semibold">{item.label}</span>
+      <span className={cn('truncate text-xs font-semibold', isIdLike(item.label) && 'font-mono')}>{item.label}</span>
       <span className="flex min-w-0 items-center gap-1"><StatusMark className="-ml-1 min-w-0" mark={statusMark(item)} /></span>
-      {facts && <span className="truncate text-2xs text-muted">{facts}</span>}
-      {change && <span className="-mx-2 -mb-1 mt-0.5 truncate bg-accent-soft px-2 py-px text-2xs font-medium text-accent">▸ {change}</span>}
+      {parts.length > 0 && (
+        <span className="line-clamp-2 text-2xs leading-[14px] text-muted">
+          {parts.map((p, i) => <span key={i}>{i > 0 && ' · '}<span className="whitespace-nowrap">{p}</span></span>)}
+        </span>
+      )}
+      {change && <span className="-mx-2 mt-auto -mb-1 truncate bg-accent-soft px-2 py-px text-2xs font-medium text-accent">▸ {change}</span>}
     </div>
   );
 }

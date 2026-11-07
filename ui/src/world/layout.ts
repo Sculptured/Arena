@@ -8,9 +8,13 @@ export const RAIL_KINDS: AreaKind[] = ['approvals'];
 
 export const ZONE_HEAD = 30;
 export const ZONE_PAD = 8;
-export const TILE_H = 58;
+export const TILE_H = 68;
 /** A changed tile carries one more line: what changed. */
-export const TILE_H_CHANGED = 76;
+export const TILE_H_CHANGED = 86;
+/** Room for each flow on the bus that runs under the zones between its ends. */
+export const BUS_LANE = 15;
+/** Room between the tiles above and the bus's first lane, for its label. */
+export const BUS_GAP = 8;
 export const TILE_GAP = 6;
 /** Room between zones, where arrows run. */
 export const ZONE_GAP = 20;
@@ -23,7 +27,8 @@ const RAIL_WEIGHT = 1.15;
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface ZoneBox extends Rect { area: TwinArea; cols: number; rail: boolean }
 export interface TileBox extends Rect { id: string; zone: string }
-export interface Arrow { flow: TwinFlow; d: string; x1: number; y1: number; x2: number; y2: number }
+/** A flow drawn: its path, its ends, and where its label sits when it runs along the bus. */
+export interface Arrow { flow: TwinFlow; d: string; x1: number; y1: number; x2: number; y2: number; label?: { x: number; y: number } }
 export interface TwinLayout { zones: ZoneBox[]; tiles: TileBox[]; arrows: Arrow[]; width: number; height: number }
 
 const rank = (kind: AreaKind) => {
@@ -88,6 +93,64 @@ export function arrowBetween(flow: TwinFlow, from: Rect, to: Rect): Arrow {
   return { flow, x1, y1, x2, y2, d: `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}` };
 }
 
+/** An orthogonal path through `pts` with its corners rounded by up to `r`. */
+export function roundedPath(pts: [number, number][], r = 5): string {
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1];
+    const [x, y] = pts[i];
+    const [nx, ny] = pts[i + 1];
+    const k = Math.min(r, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+    const ax = x - Math.sign(x - px) * k, ay = y - Math.sign(y - py) * k;
+    const bx = x + Math.sign(nx - x) * k, by = y + Math.sign(ny - y) * k;
+    d += ` L${ax},${ay} Q${x},${y} ${bx},${by}`;
+  }
+  const [lx, ly] = pts[pts.length - 1];
+  return `${d} L${lx},${ly}`;
+}
+
+interface Route { flow: TwinFlow; from: TileBox; to: TileBox; zones: ZoneBox[] }
+
+/**
+ * Flows whose ends have zones between them (a lot to an order, past the carriers) run as pipes:
+ * out into the gutter, down to a bus under the zones between, across, and up into the target.
+ * Each has its own lane, so none overlap, and its label sits on the bus.
+ */
+function busArrows(routes: Route[], busTop: number): Arrow[] {
+  const spread = Math.min(4, (ZONE_GAP - 6) / Math.max(1, routes.length));
+  return routes.map((r, i) => {
+    const off = (i - (routes.length - 1) / 2) * spread;
+    const first = r.zones[0], last = r.zones[r.zones.length - 1];
+    const g1 = first.x - ZONE_GAP / 2 + off, g2 = last.x + last.w + ZONE_GAP / 2 + off;
+    const y = busTop + BUS_GAP + i * BUS_LANE + BUS_LANE / 2;
+    const x1 = r.from.x + r.from.w, y1 = r.from.y + r.from.h / 2, x2 = r.to.x, y2 = r.to.y + r.to.h / 2;
+    const d = roundedPath([[x1, y1], [g1, y1], [g1, y], [g2, y], [g2, y2], [x2, y2]]);
+    return { flow: r.flow, d, x1, y1, x2, y2, label: { x: first.x + ZONE_PAD, y: y - 3 } };
+  });
+}
+
+/** The zones strictly between two tiles' zones, left to right. */
+function between(zones: ZoneBox[], a: TileBox, b: TileBox): ZoneBox[] {
+  const ia = zones.findIndex((z) => z.area.id === a.zone), ib = zones.findIndex((z) => z.area.id === b.zone);
+  return ia >= 0 && ib > ia + 1 ? zones.slice(ia + 1, ib) : [];
+}
+
+/** Each flow whose ends are drawn: routed along the bus, or a curve between neighbours. */
+function flowRoutes(view: TwinView, zones: ZoneBox[], tiles: TileBox[]): { direct: Arrow[]; routes: Route[] } {
+  const at = new Map(tiles.map((t) => [t.id, t]));
+  const direct: Arrow[] = [];
+  const routes: Route[] = [];
+  for (const f of view.flows) {
+    const a = at.get(f.from), b = at.get(f.to);
+    if (!a || !b) continue;
+    const mid = between(zones, a, b);
+    if (mid.length) routes.push({ flow: f, from: a, to: b, zones: mid });
+    else direct.push(arrowBetween(f, a, b));
+  }
+  routes.sort((x, y) => x.from.y - y.from.y || x.to.y - y.to.y);
+  return { direct, routes };
+}
+
 /** The whole overview at `width`: zones of one height, their tiles, and an arrow per flow whose ends are drawn. */
 export function twinLayout(view: TwinView, width: number, changed: Set<string> = new Set()): TwinLayout {
   const columns = columnsOf(view);
@@ -99,14 +162,16 @@ export function twinLayout(view: TwinView, width: number, changed: Set<string> =
     return z;
   });
   const placed = zones.map((z) => placeTiles(z, changed));
-  const height = Math.max(ZONE_HEAD + ZONE_PAD * 2 + TILE_H, ...placed.map((p) => p.bottom));
-  zones.forEach((z) => { z.h = height; });
   const tiles = placed.flatMap((p) => p.tiles);
-  const at = new Map(tiles.map((t) => [t.id, t]));
-  const arrows = view.flows.flatMap((f) => {
-    const a = at.get(f.from);
-    const b = at.get(f.to);
-    return a && b ? [arrowBetween(f, a, b)] : [];
-  });
-  return { zones, tiles, arrows, width, height };
+  const { direct, routes } = flowRoutes(view, zones, tiles);
+  const crossed = new Set(routes.flatMap((r) => r.zones.map((z) => z.area.id)));
+  const busTop = Math.max(0, ...placed.filter((_, i) => crossed.has(zones[i].area.id)).map((p) => p.bottom));
+  const height = Math.max(ZONE_HEAD + ZONE_PAD * 2 + TILE_H, ...placed.map((p) => p.bottom), routes.length ? busTop + BUS_GAP + routes.length * BUS_LANE + ZONE_PAD : 0);
+  zones.forEach((z) => { z.h = height; });
+  return { zones, tiles, arrows: [...direct, ...busArrows(routes, busTop)], width, height };
+}
+
+/** The tallest the overview gets over all the views, so scrubbing never makes it jump; a changed row's extra line included. */
+export function stableHeight(views: TwinView[], width: number): number {
+  return Math.max(0, ...views.map((v) => twinLayout(v, width).height + (TILE_H_CHANGED - TILE_H)));
 }

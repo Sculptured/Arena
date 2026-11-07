@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { StatusMark } from '../components/ui/status';
 import { cn } from '@/lib/cn';
-import { type TwinLayout, type ZoneBox, fitsSideBySide, splitAreas, twinLayout } from './layout';
+import { type TwinLayout, type ZoneBox, fitsSideBySide, splitAreas, stableHeight, twinLayout } from './layout';
 import { TwinTile, ZoneGlyph } from './TwinTile';
 import { type ViewChanges, itemsById, statusMark } from './twin';
 import type { TwinArea, TwinFlow, TwinView } from './types';
@@ -19,9 +19,9 @@ function ZoneHead({ area, className }: { area: TwinArea; className?: string }) {
   );
 }
 
-function Zone({ z }: { z: ZoneBox }) {
+function Zone({ z, height }: { z: ZoneBox; height: number }) {
   return (
-    <div className={cn('absolute rounded-md border', z.rail ? 'border-dashed border-line-strong bg-surface' : 'border-line bg-sunken')} style={{ left: z.x, top: z.y, width: z.w, height: z.h }}>
+    <div className={cn('absolute rounded-md border', z.rail ? 'border-dashed border-line-strong bg-surface' : 'border-line bg-sunken')} style={{ left: z.x, top: z.y, width: z.w, height }}>
       <ZoneHead area={z.area} />
       {z.area.items.length === 0 && <p className="px-2 pt-1 text-2xs text-faint">{z.rail ? 'No changes proposed yet.' : 'Nothing here.'}</p>}
     </div>
@@ -40,24 +40,28 @@ function Arrows({ l, fresh }: { l: TwinLayout; fresh: Set<string> }) {
         ))}
       </defs>
       {l.arrows.map((a) => (
-        <path key={a.flow.id} d={a.d} fill="none" stroke={color(a.flow)} strokeWidth={a.flow.abnormal || fresh.has(a.flow.id) ? 2.25 : 1.5}
+        <g key={a.flow.id}>
+        <path d={a.d} fill="none" stroke={color(a.flow)} strokeWidth={a.flow.abnormal || fresh.has(a.flow.id) ? 2.25 : 1.5}
           strokeDasharray={a.flow.abnormal ? '6 3' : undefined} markerEnd={`url(#twin-head-${a.flow.abnormal ? 'alarm' : fresh.has(a.flow.id) ? 'accent' : 'flow'})`}>
           <title>{`${a.flow.label}: ${a.flow.status}`}</title>
         </path>
+        {a.label && <text x={a.label.x} y={a.label.y} className={cn('text-[10px]', a.flow.abnormal ? 'fill-alarm font-semibold' : fresh.has(a.flow.id) ? 'fill-accent font-semibold' : 'fill-muted')}>{a.flow.abnormal ? `⚠ ${a.flow.id} · ${a.flow.status}` : `${a.flow.label} · ${a.flow.id}`}</text>}
+        </g>
       ))}
     </svg>
   );
 }
 
 /** Areas side by side in process order, the rail on the right, flows as arrows between tiles. */
-function Wide({ view, changes, width }: { view: TwinView; changes: ViewChanges; width: number }) {
+function Wide({ view, changes, width, all }: { view: TwinView; changes: ViewChanges; width: number; all: TwinView[] }) {
   const changed = useMemo(() => new Map(changes.items.filter((c) => c.kind !== 'removed').map((c) => [c.id, c.short])), [changes]);
   const l = useMemo(() => twinLayout(view, width, new Set(changed.keys())), [view, width, changed]);
   const items = useMemo(() => itemsById(view), [view]);
   const fresh = useMemo(() => new Set(changes.flows.map((f) => f.id)), [changes]);
+  const height = useMemo(() => Math.max(l.height, stableHeight(all, width)), [l.height, all, width]);
   return (
-    <div className="relative" style={{ height: l.height }}>
-      {l.zones.map((z) => <Zone key={z.area.id} z={z} />)}
+    <div className="relative" style={{ height }}>
+      {l.zones.map((z) => <Zone key={z.area.id} z={z} height={height} />)}
       <Arrows l={l} fresh={fresh} />
       {l.tiles.map((t) => {
         const it = items.get(t.id);
@@ -104,12 +108,12 @@ function Stacked({ view, changes }: { view: TwinView; changes: ViewChanges }) {
 }
 
 /** The twin as an HMI overview: wide screens side by side with arrows, narrow ones stacked. */
-export default function TwinCanvas({ view, changes }: { view: TwinView; changes: ViewChanges }) {
+export default function TwinCanvas({ view, changes, all = [view] }: { view: TwinView; changes: ViewChanges; all?: TwinView[] }) {
   const { ref, width } = useWidth<HTMLDivElement>();
   const wide = width > 0 && fitsSideBySide(view, width);
   return (
     <div ref={ref} className="min-w-0">
-      {width > 0 && (wide ? <Wide view={view} changes={changes} width={width} /> : <Stacked view={view} changes={changes} />)}
+      {width > 0 && (wide ? <Wide view={view} changes={changes} width={width} all={all} /> : <Stacked view={view} changes={changes} />)}
     </div>
   );
 }

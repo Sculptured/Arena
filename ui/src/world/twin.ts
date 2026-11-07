@@ -151,8 +151,14 @@ export function statusMark(x: { status: string; abnormal: boolean }): Mark {
   return { glyph: statusGlyph(x.status, x.abnormal), word: x.status, abnormal: x.abnormal };
 }
 
-/** The line under a tile: its quantity, due date and detail, whichever it has. */
-export function itemFacts(it: TwinItem): string {
-  const bits = [it.qty != null ? fmtQty(it) : '', it.due ? `due ${it.due}` : '', it.detail ?? ''].filter(Boolean);
-  return bits.join(' · ');
+/** The facts under a tile, each kept whole when it wraps: its quantity, due date and the parts of its detail. */
+export function itemFactParts(it: TwinItem): string[] {
+  const detail = (it.detail ?? '').split(' · ').map((d) => d.trim());
+  return [it.qty != null ? fmtQty(it) : '', it.due ? `due ${it.due}` : '', ...detail].filter(Boolean);
 }
+
+/** The line under a tile, as one string. */
+export const itemFacts = (it: TwinItem): string => itemFactParts(it).join(' · ');
+
+/** True for a label that is an id ("CVX-2611", "EM-26-11873"): set in mono; names and sentences are not. */
+export const isIdLike = (label: string) => /^[A-Z0-9][A-Z0-9._/-]*$/.test(label.trim());

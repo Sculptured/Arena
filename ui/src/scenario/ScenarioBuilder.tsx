@@ -32,7 +32,7 @@ export type ScenarioState = ReturnType<typeof useScenario>;
 function ParamInput({ spec, value, onChange, disabled }: { spec: ParamSpec; value: ParamValue | undefined; onChange: (raw: string) => void; disabled: boolean }) {
   const bad = paramProblem(spec, value);
   return (
-    <Field label={spec.label} className={spec.kind === 'int' ? 'w-28' : 'w-52'}>
+    <Field label={spec.label} className={spec.kind === 'int' ? 'w-36' : 'w-52'}>
       {spec.kind === 'choice'
         ? <NativeSelect value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} disabled={disabled}>{spec.choices?.map((c) => <option key={String(c)} value={String(c)}>{String(c)}</option>)}</NativeSelect>
         : <Input type="number" min={spec.min} max={spec.max} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} disabled={disabled} aria-invalid={!!bad} className={cn(bad && 'border-alarm')} />}

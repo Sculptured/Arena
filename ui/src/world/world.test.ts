@@ -4,9 +4,9 @@ import { drivenLine, stepHeadline, worldState } from './page';
 import { swapChanges, withRules, forkChoiceOf, ARCHITECTURES } from '../run/architecture';
 import type { Event } from '../types';
 import { FORK_SEQ, RUN_ID, V1, baseView, team, v1Detail, v2Detail, views } from './fixtures';
-import { MIN_TILE_W, PROCESS_ORDER, TILE_H, TILE_H_CHANGED, arrowBetween, fitsSideBySide, splitAreas, twinLayout } from './layout';
+import { BUS_LANE, roundedPath, MIN_TILE_W, PROCESS_ORDER, TILE_H, TILE_H_CHANGED, arrowBetween, fitsSideBySide, splitAreas, twinLayout } from './layout';
 import { buildTrack, happenings, moveStop, nearestStop, rewindLink, rewindSeq, snapStop, trackAt, trackMarks } from './scrub';
-import { diffViews, itemFacts, itemShort, normalizeViews, statusGlyph, statusMark, viewIndexAt, viewsFromEvents } from './twin';
+import { isIdLike, diffViews, itemFacts, itemShort, normalizeViews, statusGlyph, statusMark, viewIndexAt, viewsFromEvents } from './twin';
 
 const v1Views = views[V1];
 
@@ -108,8 +108,30 @@ describe('twin layout', () => {
     const from = l.tiles.find((t) => t.id === 'CVX-2604')!;
     expect(l.arrows[0].x1).toBe(from.x + from.w);
     expect(l.arrows[0].d.startsWith(`M${from.x + from.w},`)).toBe(true);
+    expect(l.arrows[0].label).toBeDefined();
     const back = arrowBetween(v.flows[0], { x: 500, y: 0, w: 100, h: 50 }, { x: 0, y: 0, w: 100, h: 50 });
     expect([back.x1, back.x2]).toEqual([500, 100]);
+  });
+});
+
+describe('flow routing', () => {
+  it('runs lot-to-order flows along a bus under the carriers, one lane each, and makes room for it', () => {
+    const v = v1Views.at(-1)!.view;
+    const l = twinLayout(v, 1400);
+    const carriers = l.zones.find((z) => z.area.kind === 'carriers')!;
+    const carrierBottom = Math.max(...l.tiles.filter((t) => t.zone === carriers.area.id).map((t) => t.y + t.h));
+    const ys = l.arrows.map((a) => a.label!.y);
+    expect(l.arrows).toHaveLength(4);
+    expect(new Set(ys).size).toBe(4);
+    expect(Math.min(...ys)).toBeGreaterThan(carrierBottom);
+    expect(l.height).toBeGreaterThanOrEqual(Math.max(...ys) + BUS_LANE / 2);
+    expect(l.arrows.every((a) => a.label!.x === carriers.x + 8)).toBe(true);
+  });
+
+  it('rounds the corners of an orthogonal path', () => {
+    expect(roundedPath([[0, 0], [10, 0], [10, 10]], 4)).toBe('M0,0 L6,0 Q10,0 10,4 L10,10');
+    expect(isIdLike('CVX-2611')).toBe(true);
+    expect(isIdLike("Lakeview Children's")).toBe(false);
   });
 });
 

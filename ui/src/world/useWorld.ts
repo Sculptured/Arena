@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { views as fetchViews } from '../api';
 import { hasModifier, isTyping, navOf } from '@/lib/keys';
 import type { BranchDetail } from '../types';
@@ -75,8 +75,9 @@ export function useStopKeys(stops: number[], setStep: (f: (s: number | null) => 
 export function useWidth<T extends HTMLElement>() {
   const [el, setEl] = useState<T | null>(null);
   const [width, setWidth] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!el) return;
+    setWidth(Math.floor(el.clientWidth));
     const ro = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();

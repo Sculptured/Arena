@@ -56,11 +56,12 @@ const HAPPENING: Record<Happening['kind'], string> = { disruption: 'text-warn fo
 const HAPPENING_GLYPH: Record<Happening['kind'], string> = { disruption: '▼', refusal: '▲', error: '✕', write: '■' };
 
 /** What happened at this step and what it changed in the twin. */
-function AtStep({ happened, changes }: { happened: Happening[]; changes: ItemChange[] }) {
+function AtStep({ happened: all, changes }: { happened: Happening[]; changes: ItemChange[] }) {
+  const happened = all.filter((h) => h.kind !== 'write');
   if (!happened.length && !changes.length) return <p className="px-3 pb-2 text-xs text-faint">Nothing changed in the twin at this step.</p>;
   return (
     <ul className="flex flex-wrap gap-x-4 gap-y-1 px-3 pb-2 text-xs">
-      {happened.filter((h) => h.kind !== 'write').map((h) => <li key={`h${h.seq}${h.kind}`} className={HAPPENING[h.kind]}><span className="font-mono">{HAPPENING_GLYPH[h.kind]}</span> {h.text}</li>)}
+      {happened.map((h) => <li key={`h${h.seq}${h.kind}`} className={HAPPENING[h.kind]}><span className="font-mono">{HAPPENING_GLYPH[h.kind]}</span> {h.text}</li>)}
       {changes.map((c) => <li key={`c${c.id}`} className={cn('font-medium', c.abnormal ? 'text-alarm' : 'text-accent')}>▸ {c.line}</li>)}
     </ul>
   );

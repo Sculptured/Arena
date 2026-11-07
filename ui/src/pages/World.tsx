@@ -53,6 +53,7 @@ function useWorldView(runId: string, d: BranchDetail, views: BranchView[]) {
 
 function Body({ runId, d, views }: { runId: string; d: BranchDetail; views: BranchView[] }) {
   const { s, step, setStep, play, move } = useWorldView(runId, d, views);
+  const all = useMemo(() => views.map((v) => v.view), [views]);
   if (!s.view) return null;
   return (
     <>
@@ -63,7 +64,7 @@ function Body({ runId, d, views }: { runId: string; d: BranchDetail; views: Bran
           <Scrubber track={s.track} current={s.current} index={s.index} headline={s.headline} happened={s.happened} changes={s.changes.items}
             playing={play.playing} onPlay={play.toggle} onStep={(seq) => { play.pause(); setStep(seq); }} onMove={move} rewind={s.rewind} />
         </Panel>
-        <Panel className="p-2.5"><TwinCanvas view={s.view} changes={s.changes} /></Panel>
+        <Panel className="p-2.5"><TwinCanvas view={s.view} changes={s.changes} all={all} /></Panel>
       </PageBody>
     </>
   );
