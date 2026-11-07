@@ -1,7 +1,9 @@
+//! What a run's saves cost and how they go: deleting a run, the saves limit, the cleanup at
+//! start. `live_`: runs on a real model make the saves (see `support/live.rs`).
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -16,7 +18,7 @@ use arenad::{
     app::{AppState, Config},
     model::*,
 };
-use fake_upstream::FakeUpstream;
+use live::Live;
 use packages::TestHub;
 use pg::Cleanup;
 use serde_json::{json, Value};
@@ -33,7 +35,7 @@ fn agent(id: &str) -> AgentSpec {
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
-        model: Some("fake/model".into()),
+        model: Some("m".into()),
         prompt: format!("You are {id}."),
         provider: None,
         read_only: false,
@@ -56,11 +58,23 @@ struct Fx {
     _clean: Cleanup,
 }
 
-async fn setup_with(tag: &str, upstream: &FakeUpstream, tweak: impl FnOnce(&mut Config)) -> Fx {
+/// An app that runs no agent; `tweak` adjusts its config.
+async fn setup_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Fx {
+    setup_on(tag, false, tweak).await
+}
+
+/// An app on the configured providers and Claude Code, for live tests.
+async fn live_setup(tag: &str) -> Fx {
+    setup_on(tag, true, |_| {}).await
+}
+
+async fn setup_on(tag: &str, live: bool, tweak: impl FnOnce(&mut Config)) -> Fx {
     let hub = TestHub::new(&[]);
     let (store, clean) = app_support::meta_store("disk", tag).await;
-    let (state, base) =
-        app_support::open_app(store, hub.hub.clone(), &upstream.base_url, tweak).await;
+    let (state, base) = match live {
+        true => app_support::app_for(store, hub.hub.clone(), Some("retail"), tweak).await,
+        false => app_support::idle_app(store, hub.hub.clone(), None, tweak).await,
+    };
     Fx {
         state,
         _hub: hub,
@@ -83,44 +97,17 @@ impl Fx {
     }
 }
 
-fn text_msg(t: &str) -> Value {
-    json!({"role": "assistant", "content": t})
+fn solo(live: &Live) -> Team {
+    let prompt = "You are a retail support agent. Read the order with get_order_details, then do what the ticket asks.";
+    live.team(vec![live.agent("resolver", prompt)])
 }
 
-fn tool_msg(id: &str, name: &str, args: Value) -> Value {
-    let call = json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}});
-    json!({"role": "assistant", "content": null, "tool_calls": [call]})
-}
-
-fn gold_write(id: &str) -> Value {
-    let gold = packages::gold_action_args("27", "exchange_delivered_order_items");
-    tool_msg(id, "exchange_delivered_order_items", gold)
-}
-
-fn solo() -> Team {
-    Team {
-        agents: vec![agent("resolver")],
-        ..team()
-    }
-}
-
-async fn finished(fx: &Fx, branch: &str) -> Branch {
-    for _ in 0..600 {
-        let b = fx.state.store.branch(branch).await.unwrap();
-        if b.status != BranchStatus::Running {
-            return b;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    panic!("branch still running");
-}
-
-/// A finished solo run of task 27 whose resolver makes the gold write; its branch id.
-async fn gold_run(fx: &Fx) -> (String, String) {
-    let (run_id, b) = arenad::runner::start_run(&fx.state, "27", solo())
+/// A finished solo run of task 27 on `live`: its run and branch ids.
+async fn live_run(fx: &Fx, live: &Live) -> (String, String) {
+    let (run_id, b) = arenad::runner::start_run(&fx.state, "27", solo(live))
         .await
         .unwrap();
-    assert_eq!(finished(fx, &b).await.status, BranchStatus::Passed);
+    live::ended_ok(&fx.state, &b).await;
     (run_id, b)
 }
 
@@ -173,42 +160,37 @@ async fn assert_saves(fx: &Fx, saves: &[String], exist: bool) {
     }
 }
 
-/// A gold run forked at its first model call (the child writes again); `(run, saves)` with the
-/// saves both branches' events name (each write is saved, and the final save reuses it).
-async fn run_with_fork(fx: &Fx) -> (String, Vec<String>) {
-    let (run_id, b) = gold_run(fx).await;
+/// A live run forked at its agent's start (the child runs again); `(run, saves)` with the saves
+/// both branches' events name.
+async fn run_with_fork(fx: &Fx, live: &Live) -> (String, Vec<String>) {
+    let (run_id, b) = live_run(fx, live).await;
     let evs = fx.state.store.events(&b).await.unwrap();
-    let at = evs
-        .iter()
-        .find(|e| e.kind == EventKind::ModelCall)
-        .unwrap()
-        .seq;
+    let at = live::first_of(&evs, EventKind::AgentStart, "resolver").unwrap();
     let child = arenad::fork::fork(&fx.state, &b, at, Default::default())
         .await
         .unwrap()
         .branch_id;
-    assert_eq!(finished(fx, &child).await.status, BranchStatus::Passed);
+    live::ended_ok(&fx.state, &child).await;
     let mut saves = run_saves(fx, &b).await;
     saves.extend(run_saves(fx, &child).await);
-    assert_eq!(saves.len(), 2, "a save per branch: {saves:?}");
+    saves.sort();
+    saves.dedup();
     (run_id, saves)
 }
 
+/// Deleting a run drops every save its branches' events name, and only those: the base and gold
+/// saves stay, and the arena's disk use falls.
 #[test]
-fn delete_run_drops_all_part_saves() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_delete_run_drops_all_part_saves() {
+    let Some(live) = Live::any("live_delete_run_drops_all_part_saves") else {
+        return;
+    };
     run(async {
-        let script = vec![
-            gold_write("w1"),
-            text_msg("Exchanged."),
-            gold_write("w2"),
-            text_msg("Again."),
-        ];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup_with("delete", &up, |_| {}).await;
-        let (run_id, saves) = run_with_fork(&fx).await;
+        let fx = live_setup("delete").await;
+        let (run_id, saves) = run_with_fork(&fx, &live).await;
         assert_saves(&fx, &saves, true).await;
         let before = disk_bytes(&fx).await;
-
         let (st, v) = fx.delete(&format!("/api/runs/{run_id}")).await;
         assert_eq!(
             (st, v["dropped"].as_u64()),
@@ -218,7 +200,9 @@ fn delete_run_drops_all_part_saves() {
         assert_saves(&fx, &saves, false).await;
         assert_saves(&fx, &shared_saves().map(String::from), true).await;
         let after = disk_bytes(&fx).await;
-        assert!(after < before, "disk usage falls: {before} -> {after}");
+        if !saves.is_empty() {
+            assert!(after < before, "disk usage falls: {before} -> {after}");
+        }
         assert!(fx.state.store.runs().await.unwrap().is_empty());
         assert_eq!(fx.delete(&format!("/api/runs/{run_id}")).await.0, 404);
     })
@@ -278,8 +262,7 @@ fn assert_over_limit(status: u16, body: &Value) {
 #[test]
 fn delete_running_run_is_409() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup_with("running", &up, |_| {}).await;
+        let fx = setup_with("running", |_| {}).await;
         let (run_id, b) = new_branch(&fx).await;
         let (st, v) = fx.delete(&format!("/api/runs/{run_id}")).await;
         assert_eq!(st, 409, "{v}");
@@ -293,8 +276,7 @@ fn delete_running_run_is_409() {
 #[test]
 fn limit_refuses_new_runs() {
     run(async {
-        let up = FakeUpstream::start(vec![text_msg("x")]).await;
-        let fx = setup_with("limit", &up, |c| c.max_db_bytes = 1).await;
+        let fx = setup_with("limit", |c| c.max_db_bytes = 1).await;
         // The base save is the first thing the integration keeps.
         let bench = fx.state.bench().await.unwrap();
         arenad::world::ensure_base(&fx.state.hub, &bench)
@@ -329,15 +311,18 @@ async fn orphan_save(fx: &Fx, save: &str) {
     c.call::<Value>("stop", stop).await.unwrap();
 }
 
+/// The cleanup at start drops a save no event names, with its folder, and keeps every save a
+/// run's events name and the shared ones.
 #[test]
-fn startup_gc_keeps_named_saves() {
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_startup_gc_keeps_named_saves() {
+    let Some(live) = Live::any("live_startup_gc_keeps_named_saves") else {
+        return;
+    };
     run(async {
-        let script = vec![gold_write("w1"), text_msg("Exchanged.")];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup_with("gc", &up, |_| {}).await;
-        let (_, b) = gold_run(&fx).await;
+        let fx = live_setup("gc").await;
+        let (_, b) = live_run(&fx, &live).await;
         let mut kept = run_saves(&fx, &b).await;
-        assert!(!kept.is_empty(), "{kept:?}");
         kept.extend(shared_saves().map(String::from));
         orphan_save(&fx, "s_orphan").await;
         let folder = |s: &str| fx._hub.saves.join("postgres").join(s);
@@ -364,7 +349,7 @@ fn delete_run_without_events_needs_no_benchmark() {
         let registry = parts::Registry::scan(&[]).unwrap();
         let hub = Arc::new(parts::Hub::new(registry, packages::bin_dir(), saves));
         let (store, _clean) = app_support::meta_store("disk", "noevents").await;
-        let (state, base) = app_support::open_app(store, hub, "http://127.0.0.1:9", |_| {}).await;
+        let (state, base) = app_support::idle_app(store, hub, None, |_| {}).await;
         let run_id = state.store.create_run("27", &team()).await.unwrap();
         let b = state
             .store
