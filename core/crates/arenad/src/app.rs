@@ -254,8 +254,7 @@ async fn cors(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    use axum::http::{header, HeaderValue, Method, StatusCode};
-    use axum::response::IntoResponse;
+    use axum::http::{header, HeaderValue, Method};
     let origin = req
         .headers()
         .get(header::ORIGIN)
@@ -266,32 +265,33 @@ async fn cors(
         return next.run(req).await;
     };
     let preflight = req.method() == Method::OPTIONS
-        && req
-            .headers()
-            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
-    let mut res = if preflight {
-        let mut r = StatusCode::NO_CONTENT.into_response();
-        let h = r.headers_mut();
-        h.insert(
-            header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
-        );
-        h.insert(
-            header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("content-type"),
-        );
-        h.insert(
-            header::ACCESS_CONTROL_MAX_AGE,
-            HeaderValue::from_static("600"),
-        );
-        r
-    } else {
-        next.run(req).await
+        && (req.headers()).contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
+    let mut res = match preflight {
+        true => preflight_answer(),
+        false => next.run(req).await,
     };
     let h = res.headers_mut();
     h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
     h.append(header::VARY, HeaderValue::from_static("origin"));
     res
+}
+
+/// The answer to an allowed origin's CORS preflight (its `Access-Control-Allow-Origin` is added
+/// by [`cors`]).
+fn preflight_answer() -> axum::response::Response {
+    use axum::http::{header, HeaderValue, StatusCode};
+    use axum::response::IntoResponse;
+    let mut r = StatusCode::NO_CONTENT.into_response();
+    let h = r.headers_mut();
+    let methods = HeaderValue::from_static("GET, POST, DELETE, OPTIONS");
+    h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, methods);
+    let headers = HeaderValue::from_static("content-type");
+    h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, headers);
+    h.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("600"),
+    );
+    r
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -315,40 +315,40 @@ mod tests {
         assert_eq!(got, ["http://127.0.0.1:5173", "https://ui.example"]);
     }
 
-    #[tokio::test]
-    async fn cors_answers_allowed_origins_only() {
+    /// A router with one `/api/x` route behind [`super::cors`] for `http://ui.test:5173`, and a
+    /// request to it with `method` from `origin`, answered with its status and allowed origin.
+    async fn cors_call(method: &str, origin: &str) -> (u16, Option<String>, bool) {
         use axum::{body::Body, http::Request, routing::get, Router};
         use tower::ServiceExt;
         let origins = std::sync::Arc::new(vec!["http://ui.test:5173".to_string()]);
         let app = Router::new()
             .route("/api/x", get(|| async { "ok" }))
             .layer(axum::middleware::from_fn_with_state(origins, super::cors));
-        let send = |method: &str, origin: &str| {
-            let req = Request::builder()
-                .method(method)
-                .uri("/api/x")
-                .header("origin", origin)
-                .header("access-control-request-method", "GET")
-                .body(Body::empty())
-                .unwrap();
-            app.clone().oneshot(req)
-        };
-        let allow = |r: &axum::response::Response| {
-            r.headers()
-                .get("access-control-allow-origin")
-                .map(|v| v.to_str().unwrap().to_string())
-        };
-        let r = send("GET", "http://ui.test:5173").await.unwrap();
-        assert_eq!(r.status(), 200);
-        assert_eq!(allow(&r).as_deref(), Some("http://ui.test:5173"));
-        let r = send("OPTIONS", "http://ui.test:5173").await.unwrap();
-        assert_eq!(r.status(), 204);
-        assert!(r.headers().contains_key("access-control-allow-methods"));
-        let r = send("GET", "http://evil.test").await.unwrap();
-        assert_eq!(r.status(), 200);
-        assert_eq!(allow(&r), None);
-        let r = send("OPTIONS", "http://evil.test").await.unwrap();
-        assert_ne!(r.status(), 204);
+        let req = Request::builder()
+            .method(method)
+            .uri("/api/x")
+            .header("origin", origin)
+            .header("access-control-request-method", "GET")
+            .body(Body::empty())
+            .unwrap();
+        let r = app.oneshot(req).await.unwrap();
+        let h = r.headers();
+        let allow = (h.get("access-control-allow-origin")).map(|v| v.to_str().unwrap().to_string());
+        let methods = h.contains_key("access-control-allow-methods");
+        (r.status().as_u16(), allow, methods)
+    }
+
+    #[tokio::test]
+    async fn cors_answers_allowed_origins_only() {
+        let ui = "http://ui.test:5173";
+        assert_eq!(cors_call("GET", ui).await, (200, Some(ui.into()), false));
+        assert_eq!(cors_call("OPTIONS", ui).await, (204, Some(ui.into()), true));
+        assert_eq!(
+            cors_call("GET", "http://evil.test").await,
+            (200, None, false)
+        );
+        let (status, allow, _) = cors_call("OPTIONS", "http://evil.test").await;
+        assert!(status != 204 && allow.is_none());
     }
 
     #[test]
