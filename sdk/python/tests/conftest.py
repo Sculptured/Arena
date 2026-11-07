@@ -16,6 +16,7 @@ external runs, call a tool endpoint, fork, read records, export) and never pose 
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import tempfile
 from pathlib import Path
@@ -75,6 +76,7 @@ def arena():
     )
     yield a
     a.close()
+    shutil.rmtree(saves, ignore_errors=True)
 
 
 @pytest.fixture

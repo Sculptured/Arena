@@ -56,7 +56,8 @@ class LocalArena(Arena):
         cors_origin: web origins allowed to call the API from a browser (``ARENA_CORS_ORIGIN``).
         env: more environment variables for arenad (model provider keys, ``ARENA_LOCAL_MODELS``, ...);
             arenad otherwise inherits this process's environment.
-        log: a file for arenad's output (default: a temporary file; ``self.log_path``).
+        log: a file for arenad's output (default: a temporary file, ``self.log_path``, removed on
+            close; a failed start quotes its end).
         startup_timeout: seconds to wait for arenad to answer.
     """
 
@@ -93,6 +94,7 @@ class LocalArena(Arena):
             "ARENA_CORS_ORIGIN": cors_origin,
         }
         e = {**os.environ, **{k: v for k, v in settings.items() if v}, **(env or {})}
+        self._tmp_log = log is None
         if log is None:
             fd, log = tempfile.mkstemp(prefix="arenad-", suffix=".log")
             os.close(fd)
@@ -128,7 +130,7 @@ class LocalArena(Arena):
             return ""
 
     def close(self) -> None:
-        """Stops arenad (ctrl-c, then kill after 15 s) and removes a temporary saves folder."""
+        """Stops arenad (ctrl-c, then kill after 15 s) and removes a temporary saves folder and log."""
         super().close()
         p = getattr(self, "process", None)
         if p is not None and p.poll() is None:
@@ -143,6 +145,12 @@ class LocalArena(Arena):
         if self._tmp_saves:
             shutil.rmtree(self._tmp_saves, ignore_errors=True)
             self._tmp_saves = None
+        if getattr(self, "_tmp_log", False):
+            try:
+                os.remove(self.log_path)
+            except OSError:
+                pass
+            self._tmp_log = False
 
     def __repr__(self) -> str:
         return f"LocalArena({self.url!r}, pid={self.process.pid})"
