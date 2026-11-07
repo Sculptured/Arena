@@ -1,63 +1,93 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { PageBody, PageHeader } from '../components/ui/page';
+import { Panel, PanelHeader } from '../components/ui/panel';
+import { ErrorState, LoadingState } from '../components/ui/state';
+import { StatusMark, Tag } from '../components/ui/status';
+import { RowTh, Table, Td, Th, Tr } from '../components/ui/table';
 import { compareSuites } from './api';
-import { StatusMark } from './Marks';
-import { type Unit, change, fmt, pct, pts, verdictMark } from './suite';
+import { type Unit, change, fmt, pct, pts, suiteMark, verdictMark } from './suite';
 import type { Delta, SuiteComparison } from './types';
-import './control.css';
 
 function FigureRow({ label, d, unit }: { label: string; d: Delta; unit: Unit | 'rate' }) {
   const show = (x: number | null) => (unit === 'rate' ? pct(x) : fmt(x, unit));
   return (
-    <tr>
-      <th>{label}</th><td className="mono">{show(d.a)}</td><td className="mono">{show(d.b)}</td>
-      <td className="mono">{unit === 'rate' ? pts(d.change) : change(d.change, unit)}</td>
-      <td><StatusMark mark={verdictMark(d.verdict)} /></td>
-    </tr>
+    <Tr>
+      <RowTh>{label}</RowTh><Td className="text-right font-mono text-xs">{show(d.a)}</Td><Td className="text-right font-mono text-xs">{show(d.b)}</Td>
+      <Td className="text-right font-mono text-xs">{unit === 'rate' ? pts(d.change) : change(d.change, unit)}</Td>
+      <Td><StatusMark mark={verdictMark(d.verdict)} /></Td>
+    </Tr>
   );
+}
+
+function Figures({ c }: { c: SuiteComparison }) {
+  return (
+    <Panel>
+      <PanelHeader title="Figures" meta="per run; B against A" />
+      <Table>
+        <thead><tr><Th /><Th className="text-right">A</Th><Th className="text-right">B</Th><Th className="text-right">Change</Th><Th>Verdict</Th></tr></thead>
+        <tbody>
+          <Tr><RowTh>Team</RowTh><Td className="text-right">{c.a.team}</Td><Td className="text-right">{c.b.team}</Td><Td /><Td /></Tr>
+          <Tr><RowTh>Scored runs</RowTh><Td className="text-right font-mono text-xs">{c.a.scored}</Td><Td className="text-right font-mono text-xs">{c.b.scored}</Td><Td /><Td /></Tr>
+          <FigureRow label="Pass rate" d={c.pass_rate} unit="rate" />
+          <FigureRow label="Score" d={c.score} unit="rate" />
+          <FigureRow label="Safety violations per run" d={c.safety} unit="n" />
+          <FigureRow label="Time per run" d={c.measured_s} unit="s" />
+          <FigureRow label="Estimated in production" d={c.estimated_s} unit="s" />
+          <FigureRow label="Tokens per run" d={c.tokens} unit="tok" />
+          <FigureRow label="Cost per run" d={c.cost_usd} unit="usd" />
+          <FigureRow label="Peak context" d={c.peak_context} unit="tok" />
+        </tbody>
+      </Table>
+    </Panel>
+  );
+}
+
+function Checks({ c }: { c: SuiteComparison }) {
+  return (
+    <Panel>
+      <PanelHeader title="Checks" meta="pass rate of each check in A and B" />
+      <Table>
+        <thead><tr><Th>Scenario</Th><Th>Check</Th><Th className="text-right">A</Th><Th className="text-right">B</Th><Th className="text-right">Change</Th><Th>Verdict</Th></tr></thead>
+        <tbody>{c.checks.map((d) => (
+          <Tr key={`${d.task_id}/${d.name}`}>
+            <RowTh className="font-mono text-xs">{d.task_id}</RowTh>
+            <Td><span className="flex items-center gap-1.5 font-mono text-xs">{d.name}{d.safety && <Tag>◆ safety</Tag>}</span></Td>
+            <Td className="text-right font-mono text-xs">{pct(d.a)}</Td><Td className="text-right font-mono text-xs">{pct(d.b)}</Td><Td className="text-right font-mono text-xs">{pts(d.change)}</Td>
+            <Td><StatusMark mark={verdictMark(d.verdict)} /></Td>
+          </Tr>
+        ))}</tbody>
+      </Table>
+    </Panel>
+  );
+}
+
+function Sides({ c }: { c: SuiteComparison }) {
+  const side = (label: string, s: SuiteComparison['a']) => (
+    <Panel className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+      <span className="font-mono text-xs text-muted">{label}</span>
+      <Link className="font-medium hover:underline" to={`/suites/${s.id}`}>{s.name}</Link>
+      <StatusMark mark={suiteMark(s.status)} /><span className="text-xs text-muted">{s.team} · {s.scored} scored runs</span>
+    </Panel>
+  );
+  return <div className="grid gap-3 lg:grid-cols-2">{side('A', c.a)}{side('B', c.b)}</div>;
 }
 
 export default function SuiteComparePage() {
   const { a = '', b = '' } = useParams();
   const [c, setC] = useState<SuiteComparison | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { compareSuites(a, b).then(setC).catch((e) => setError(String(e.message ?? e))); }, [a, b]);
-  if (!c) return <><header className="page-head"><h1>Compare suites</h1></header><main className="content">{error ? <div className="notice error">{error}</div> : <p className="muted">Loading…</p>}</main></>;
+  useEffect(() => { setC(null); compareSuites(a, b).then(setC).catch((e) => setError(String(e.message ?? e))); }, [a, b]);
+  if (!c) return <><PageHeader title="Compare suites" /><PageBody>{error ? <ErrorState error={error} /> : <Panel><LoadingState label="Comparing the two suites…" rows={6} /></Panel>}</PageBody></>;
   return (
     <>
-      <header className="page-head">
-        <h1>Compare suites</h1><StatusMark mark={verdictMark(c.verdict)} />
-        <span className="muted small">B against A, from checks and safety; time and cost flagged beyond 10%</span>
-      </header>
-      <main className="content wide hmi">
-        <table className="hmi-table panel">
-          <thead><tr><th /><th>A: <Link to={`/suites/${c.a.id}`}>{c.a.name}</Link></th><th>B: <Link to={`/suites/${c.b.id}`}>{c.b.name}</Link></th><th>Change</th><th>Verdict</th></tr></thead>
-          <tbody>
-            <tr><th>Team</th><td>{c.a.team}</td><td>{c.b.team}</td><td /><td /></tr>
-            <tr><th>Scored runs</th><td className="mono">{c.a.scored}</td><td className="mono">{c.b.scored}</td><td /><td /></tr>
-            <FigureRow label="Pass rate" d={c.pass_rate} unit="rate" />
-            <FigureRow label="Score" d={c.score} unit="rate" />
-            <FigureRow label="Safety violations per run" d={c.safety} unit="n" />
-            <FigureRow label="Time per run" d={c.measured_s} unit="s" />
-            <FigureRow label="Estimated in production" d={c.estimated_s} unit="s" />
-            <FigureRow label="Tokens per run" d={c.tokens} unit="tok" />
-            <FigureRow label="Cost per run" d={c.cost_usd} unit="usd" />
-            <FigureRow label="Peak context" d={c.peak_context} unit="tok" />
-          </tbody>
-        </table>
-        <h2 className="hmi-h2">Checks</h2>
-        <table className="hmi-table panel">
-          <thead><tr><th>Scenario</th><th>Check</th><th>A</th><th>B</th><th>Change</th><th>Verdict</th></tr></thead>
-          <tbody>{c.checks.map((d) => (
-            <tr key={`${d.task_id}/${d.name}`}>
-              <th className="mono">{d.task_id}</th>
-              <td className="mono">{d.name}{d.safety && <span className="muted"> ◆ safety</span>}</td>
-              <td className="mono">{pct(d.a)}</td><td className="mono">{pct(d.b)}</td><td className="mono">{pts(d.change)}</td>
-              <td><StatusMark mark={verdictMark(d.verdict)} /></td>
-            </tr>
-          ))}</tbody>
-        </table>
-      </main>
+      <PageHeader title="Compare suites" status={<StatusMark mark={verdictMark(c.verdict)} />}
+        meta="B against A, judged from checks and safety; time and cost flagged beyond 10%." />
+      <PageBody>
+        <Sides c={c} />
+        <Figures c={c} />
+        <Checks c={c} />
+      </PageBody>
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { actionsOf } from './actions';
 import { events } from './fixtures';
-import { actionsPerBucket, cumulative, modelCalls, sparkPoints } from './trends';
+import { actionsPerBucket, bucketFor, cumulative, latencies, modelCalls, perMinute } from './trends';
 
 describe('trends', () => {
   it('counts_actions_per_minute_per_system_kind', () => {
@@ -22,8 +22,13 @@ describe('trends', () => {
     expect(c.cost).toEqual([0.01, null]);
   });
 
-  it('draws_a_sparkline_in_its_box', () => {
-    expect(sparkPoints([0, 5, 10], 100, 10)).toBe('0.0,10.0 50.0,5.0 100.0,0.0');
-    expect(sparkPoints([], 100, 10)).toBe('');
+  it('picks_a_bucket_for_about_two_dozen_points_and_gives_rates_per_minute', () => {
+    expect(bucketFor(actionsOf(events))).toBe(5_000);
+    expect(bucketFor([])).toBe(60_000);
+    expect(perMinute([1, 2], 15_000)).toEqual([4, 8]);
+  });
+
+  it('lists_the_tool_calls_whose_duration_was_recorded', () => {
+    expect(latencies(actionsOf(events)).map((l) => l.ms)).toEqual([120, 1500]);
   });
 });

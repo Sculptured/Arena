@@ -3,7 +3,7 @@
 // agents name who they went to; a call to an approvals system, or one a gate refused, is an
 // interlock.
 import type { Event, Team } from '../types';
-import { type Action, type Outcome, actionWord, classify, worldInfo } from './actions';
+import { type Action, type Outcome, actionWord, classify, kindWord, worldInfo } from './actions';
 import type { Effect } from './types';
 
 export type MarkKind = 'action' | 'interlock' | 'message' | 'model' | 'start' | 'end' | 'check' | 'world';
@@ -20,6 +20,12 @@ export interface Mark {
   outcome: Outcome;
   durationMs: number | null;
   inherited: boolean;
+  /** The world was saved after this step. */
+  saved: boolean;
+  /** An action: the kind of system it touched ("ERP"), the short label the timeline draws next to its shape. */
+  system?: string;
+  /** A message or handoff: the agent it went to (`*` for everyone, null when the record does not say). */
+  to?: string | null;
 }
 
 export interface LaneRow {
@@ -41,30 +47,40 @@ function actionMark(a: Action): Mark {
   return {
     seq: a.seq, at: a.at, kind: interlock ? 'interlock' : 'action',
     label: actionWord(a), detail: a.error ? `${a.tool}: ${a.error}` : a.tool,
-    effect: a.effect, outcome: a.outcome, durationMs: a.durationMs, inherited: a.inherited,
+    effect: a.effect, outcome: a.outcome, durationMs: a.durationMs, inherited: a.inherited, saved: a.saved,
+    system: kindWord(a.system),
   };
 }
 
+type Base = Pick<Mark, 'seq' | 'at' | 'outcome' | 'durationMs' | 'inherited' | 'saved'>;
+type Payload = Record<string, unknown>;
+
+function messageMark(e: Event, p: Payload, base: Base): Mark {
+  const raw = typeof p.to === 'string' ? p.to : null;
+  const to = raw == null ? 'next' : raw === '*' ? 'everyone' : raw;
+  return { ...base, kind: 'message', label: `${e.kind} → ${to}`, detail: String(p.text ?? p.note ?? ''), to: raw };
+}
+
+function endMark(p: Payload, base: Base): Mark {
+  const failed = p.ok === false;
+  return { ...base, kind: 'end', label: failed ? 'ended: failed' : 'ended', detail: String(p.error ?? ''), outcome: failed ? 'error' : 'ok' };
+}
+
+const MARKS: Partial<Record<Event['kind'], (e: Event, p: Payload, base: Base) => Mark>> = {
+  message: messageMark,
+  handoff: messageMark,
+  model_call: (_e, _p, base) => ({ ...base, kind: 'model', label: 'model call', detail: '' }),
+  agent_start: (_e, _p, base) => ({ ...base, kind: 'start', label: 'start', detail: '' }),
+  agent_end: (_e, p, base) => endMark(p, base),
+  check: (_e, p, base) => ({ ...base, kind: 'check', label: p.passed ? 'check passed' : 'check failed', detail: '', outcome: p.passed ? 'ok' : 'error' }),
+  world_event: (_e, p, base) => ({ ...base, kind: 'world', label: `${String(p.part ?? '')} ${String(p.kind ?? 'event')}`.trim(), detail: String(p.text ?? '') }),
+};
+
 /** The mark of any step but a tool call. */
 function stepMark(e: Event, inherited: boolean): Mark | null {
-  const p = obj(e.payload);
-  const base = { seq: e.seq, at: Date.parse(e.at), outcome: 'ok' as Outcome, durationMs: null, inherited };
-  switch (e.kind) {
-    case 'message':
-    case 'handoff': {
-      const to = typeof p.to === 'string' ? (p.to === '*' ? 'everyone' : p.to) : 'next';
-      return { ...base, kind: 'message', label: `${e.kind} → ${to}`, detail: String(p.text ?? p.note ?? '') };
-    }
-    case 'model_call': return { ...base, kind: 'model', label: 'model call', detail: '' };
-    case 'agent_start': return { ...base, kind: 'start', label: 'start', detail: '' };
-    case 'agent_end': {
-      const failed = p.ok === false;
-      return { ...base, kind: 'end', label: failed ? 'ended: failed' : 'ended', detail: String(p.error ?? ''), outcome: failed ? 'error' : 'ok' };
-    }
-    case 'check': return { ...base, kind: 'check', label: p.passed ? 'check passed' : 'check failed', detail: '', outcome: p.passed ? 'ok' : 'error' };
-    case 'world_event': return { ...base, kind: 'world', label: `${String(p.part ?? '')} ${String(p.kind ?? 'event')}`.trim(), detail: String(p.text ?? '') };
-    default: return null;
-  }
+  const make = MARKS[e.kind];
+  if (!make) return null;
+  return make(e, obj(e.payload), { seq: e.seq, at: Date.parse(e.at), outcome: 'ok', durationMs: null, inherited, saved: false });
 }
 
 function laneOf(e: Event): string {

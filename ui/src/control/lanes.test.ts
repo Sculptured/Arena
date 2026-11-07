@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHECK_LANE, buildLanes, formatDuration, position, spanOf } from './lanes';
-import { events, team } from './fixtures';
+import { ev, events, runStart, team } from './fixtures';
 
 describe('lanes', () => {
   it('builds_one_lane_per_agent_in_team_order_then_the_check', () => {
@@ -34,5 +34,11 @@ describe('lanes', () => {
     const q = l[1].marks;
     expect(q.find((m) => m.seq === 6)!.inherited).toBe(true);
     expect(q.find((m) => m.seq === 7)!.inherited).toBe(false);
+  });
+
+  it('marks_the_steps_the_world_was_saved_after_including_legacy_snapshots', () => {
+    const saved = buildLanes([runStart, ev(2, 1, 'quality', 'tool_call', { name: 'open_deviation', saves: { erp: 's2' } }),
+      ev(3, 2, 'quality', 'tool_call', { name: 'hold_batch', snapshot: 's3' }), ev(4, 3, 'quality', 'tool_call', { name: 'get_result' })], team);
+    expect(saved[1].marks.map((m) => [m.seq, m.saved])).toEqual([[2, true], [3, true], [4, false]]);
   });
 });

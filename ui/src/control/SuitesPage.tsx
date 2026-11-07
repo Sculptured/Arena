@@ -1,109 +1,91 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { tasks as fetchTasks } from '../api';
-import { formatTime } from '../components';
-import { loadTeam, teamForRun } from '../team';
-import type { Runner, TaskSummary } from '../types';
-import { createSuite, suites as fetchSuites } from './api';
-import { StatusMark } from './Marks';
+import type { ColumnDef } from '@tanstack/react-table';
+import { GitCompare, Play } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ago, formatTime } from '../components';
+import { Button } from '../components/ui/button';
+import { DataTable } from '../components/ui/data-table';
+import { FilterChips } from '../components/ui/filter-chips';
+import { Checkbox, Input } from '../components/ui/input';
+import { PageBody, PageHeader } from '../components/ui/page';
+import { Panel } from '../components/ui/panel';
+import { EmptyState, ErrorState } from '../components/ui/state';
+import { StatusMark } from '../components/ui/status';
+import NewSuiteDialog, { RUNNERS } from '../suites/NewSuiteDialog';
+import { suites as fetchSuites } from './api';
 import { suiteMark } from './suite';
+import { type ListFilter, SUITE_FILTERS, progress, suiteCounts, suiteMatches, togglePick } from './suiteList';
 import type { ListedSuite } from './types';
-import './control.css';
 
-const RUNNERS: Record<Runner, string> = { chain: 'one after another', concurrent: 'all at once', external: 'external system' };
-
-function NewSuiteForm({ tasks, onError }: { tasks: TaskSummary[]; onError: (m: string | null) => void }) {
-  const nav = useNavigate();
-  const [picked, setPicked] = useState<string[]>([]);
-  const [repeats, setRepeats] = useState(2);
-  const [runner, setRunner] = useState<Runner>('chain');
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-
-  const start = async () => {
-    setBusy(true);
-    onError(null);
-    try {
-      const team = teamForRun(await loadTeam());
-      const chosen = tasks.map((t) => t.id).filter((t) => picked.includes(t));
-      const r = await createSuite({ name: name.trim() || undefined, team, tasks: chosen, repeats, runner });
-      nav(`/suites/${r.id}`);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  };
-
+function Meter({ fraction, label }: { fraction: number; label: string }) {
   return (
-    <div className="panel hmi-form">
-      <div className="hmi-form-row">
-        <label className="field grow"><span className="label">Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="your team's name" disabled={busy} /></label>
-        <label className="field"><span className="label">Repeats</span>
-          <input type="number" min={1} max={100} value={repeats} onChange={(e) => setRepeats(Number(e.target.value))} disabled={busy} /></label>
-        <label className="field"><span className="label">Runs made by</span>
-          <select value={runner} onChange={(e) => setRunner(e.target.value as Runner)} disabled={busy}>
-            {Object.entries(RUNNERS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select></label>
-        <button className="btn primary" onClick={start} disabled={busy || !tasks.length}>{busy ? 'Starting…' : 'New suite'}</button>
-      </div>
-      <div className="hmi-tasks">
-        <span className="label">Scenarios {picked.length ? `(${picked.length})` : '(all)'}</span>
-        {tasks.map((t) => (
-          <label key={t.id} className="check-field small">
-            <input type="checkbox" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} disabled={busy} />
-            <span className="mono">{t.id}</span> <span className="muted">{t.reason}</span>
-          </label>
-        ))}
-      </div>
-      <span className="muted small">Runs your <Link to="/team">team</Link> over each scenario on the same seeded world.</span>
-    </div>
+    <span className="flex items-center gap-2">
+      <span className="font-mono text-xs">{label}</span>
+      <span aria-hidden="true" className="relative hidden h-1.5 w-16 overflow-hidden rounded-full bg-sunken ring-1 ring-line sm:block">
+        <span className="absolute inset-y-0 left-0 bg-line-strong" style={{ width: `${fraction * 100}%` }} />
+      </span>
+    </span>
   );
 }
 
-function SuiteRow({ s, picked, onPick }: { s: ListedSuite; picked: boolean; onPick: () => void }) {
-  return (
-    <tr>
-      <td><input type="checkbox" checked={picked} onChange={onPick} aria-label={`compare ${s.name}`} /></td>
-      <td><StatusMark mark={suiteMark(s.status)} /></td>
-      <td><Link to={`/suites/${s.id}`}>{s.name}</Link></td>
-      <td className="muted">{s.team.name}</td>
-      <td className="mono">{s.tasks.length} × {s.repeats}</td>
-      <td className="muted">{RUNNERS[s.runner]}</td>
-      <td className="mono">{s.ended}/{s.runs}</td>
-      <td className="mono">{s.passed}</td>
-      <td className="muted small">{formatTime(s.created_at)}</td>
-    </tr>
-  );
+function columns(picked: string[], pick: (id: string) => void): ColumnDef<ListedSuite, unknown>[] {
+  return [
+    {
+      id: 'pick', header: () => <span className="sr-only">Compare</span>, enableSorting: false, meta: { className: 'w-8 pr-0' },
+      cell: ({ row }) => <Checkbox checked={picked.includes(row.original.id)} onClick={(e) => e.stopPropagation()} onChange={() => pick(row.original.id)} aria-label={`Pick ${row.original.name} to compare`} />,
+    },
+    { id: 'status', header: 'Status', accessorFn: (s) => s.status, cell: ({ row }) => <StatusMark mark={suiteMark(row.original.status)} />, meta: { className: 'w-28' } },
+    { id: 'name', header: 'Suite', accessorFn: (s) => s.name, cell: ({ row }) => <span className="font-medium">{row.original.name}</span> },
+    { id: 'team', header: 'Team', accessorFn: (s) => s.team.name, cell: ({ getValue }) => <span className="text-muted">{String(getValue())}</span>, meta: { className: 'hidden lg:table-cell' } },
+    { id: 'size', header: 'Scenarios × repeats', enableSorting: false, cell: ({ row }) => <span className="font-mono text-xs">{row.original.tasks.length} × {row.original.repeats}</span>, meta: { className: 'hidden md:table-cell' } },
+    { id: 'runner', header: 'Runs made by', enableSorting: false, cell: ({ row }) => <span className="text-xs text-muted">{RUNNERS[row.original.runner]}</span>, meta: { className: 'hidden xl:table-cell' } },
+    { id: 'ended', header: 'Ended', accessorFn: progress, cell: ({ row }) => <Meter fraction={progress(row.original)} label={`${row.original.ended}/${row.original.runs}`} /> },
+    { id: 'passed', header: 'Passed', accessorFn: (s) => s.passed, cell: ({ row }) => <span className="font-mono text-xs">{row.original.passed}</span>, meta: { className: 'text-right' } },
+    { id: 'created', header: 'Created', accessorFn: (s) => s.created_at, cell: ({ row }) => <span className="text-xs text-muted" title={formatTime(row.original.created_at)}>{ago(row.original.created_at)}</span>, meta: { className: 'hidden sm:table-cell text-right' } },
+  ];
+}
+
+function useSuites() {
+  const [list, setList] = useState<ListedSuite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => { fetchSuites().then((l) => { setList(l); setError(null); }).catch((e) => setError(String(e.message ?? e))); }, []);
+  useEffect(() => { load(); }, [load]);
+  return { list, error, load };
 }
 
 export default function SuitesPage() {
   const nav = useNavigate();
-  const [list, setList] = useState<ListedSuite[] | null>(null);
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [sp, setSp] = useSearchParams();
+  const { list, error, load } = useSuites();
+  const [filter, setFilter] = useState<ListFilter>({ status: 'all', text: '' });
   const [picked, setPicked] = useState<string[]>([]);
-  const load = useCallback(() => { fetchSuites().then(setList).catch((e) => setError(String(e.message ?? e))); }, []);
-  useEffect(() => { load(); fetchTasks().then(setTasks).catch(() => {}); }, [load]);
-  const pick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p.slice(-1), id]));
-
+  const cols = useMemo(() => columns(picked, (id) => setPicked((p) => togglePick(p, id))), [picked]);
+  const newSuite = sp.get('new') === 'suite';
+  const setNewSuite = (o: boolean) => setSp(o ? { new: 'suite' } : {}, { replace: true });
+  const compare = (
+    <Button disabled={picked.length !== 2} onClick={() => nav(`/suites/compare/${picked[0]}/${picked[1]}`)} title={picked.length === 2 ? 'Compare the two picked suites' : 'Pick two suites in the list to compare them'}>
+      <GitCompare />Compare {picked.length === 2 ? 'the two' : `(${picked.length}/2 picked)`}
+    </Button>
+  );
   return (
     <>
-      <header className="page-head"><h1>Test suites</h1><span className="spacer" />
-        <button className="btn" disabled={picked.length !== 2} onClick={() => nav(`/suites/compare/${picked[0]}/${picked[1]}`)}>Compare two</button>
-      </header>
-      <main className="content wide">
-        {error && <div className="notice error">{error}</div>}
-        <NewSuiteForm tasks={tasks} onError={setError} />
-        {list && list.length === 0 && <p className="muted">No suites yet.</p>}
-        {list && list.length > 0 && (
-          <table className="hmi-table panel">
-            <thead><tr><th /><th>Status</th><th>Suite</th><th>Team</th><th>Scenarios × repeats</th><th>Runs made by</th><th>Ended</th><th>Passed</th><th>Created</th></tr></thead>
-            <tbody>{list.map((s) => <SuiteRow key={s.id} s={s} picked={picked.includes(s.id)} onPick={() => pick(s.id)} />)}</tbody>
-          </table>
-        )}
-      </main>
+      <PageHeader title="Suites" meta="Each suite runs one team over every scenario, repeated, on the same seeded world."
+        actions={<>{compare}<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button></>} />
+      <PageBody>
+        {error && list && <ErrorState error={error} onRetry={load} />}
+        <Panel>
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+            <FilterChips label="Status" options={SUITE_FILTERS} value={filter.status} counts={suiteCounts(list ?? [])} onChange={(status) => setFilter({ ...filter, status })} />
+            <Input className="ml-auto w-full sm:w-64" placeholder="Filter by name, team or scenario" value={filter.text} onChange={(e) => setFilter({ ...filter, text: e.target.value })} aria-label="Filter suites" />
+          </div>
+          <DataTable label="Suites" columns={cols} data={list} getRowId={(s) => s.id} loadingLabel="Loading suites…" error={error} onRetry={load}
+            filter={filter} filterFn={(s, f) => suiteMatches(s, f as ListFilter)} onOpen={(s) => nav(`/suites/${s.id}`)} noMatch="No suite matches the filter."
+            sorting={[{ id: 'created', desc: true }]}
+            empty={<EmptyState title="No suites yet" hint="A suite runs your team over each scenario, several times, so you can compare teams fairly."
+              action={<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button>} />} />
+        </Panel>
+      </PageBody>
+      <NewSuiteDialog open={newSuite} onOpenChange={setNewSuite} />
     </>
   );
 }

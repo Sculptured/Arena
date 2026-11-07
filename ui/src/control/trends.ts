@@ -82,10 +82,28 @@ export function cumulative(calls: CallPoint[]): Cumulative {
   return out;
 }
 
-/** The points of a sparkline of `values` in a `w` × `h` box (SVG `points`). */
-export function sparkPoints(values: number[], w: number, h: number): string {
-  if (!values.length) return '';
-  const max = Math.max(...values, 1);
-  const step = values.length > 1 ? w / (values.length - 1) : 0;
-  return values.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`).join(' ');
+const BUCKETS_MS = [5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
+
+/** A bucket size that cuts the actions' time span into about `want` buckets (5 s to 10 min). */
+export function bucketFor(actions: Action[], want = 24): number {
+  const ts = actions.map((a) => a.at).filter((t) => !Number.isNaN(t));
+  if (ts.length < 2) return 60_000;
+  const span = Math.max(...ts) - Math.min(...ts);
+  return BUCKETS_MS.find((b) => span / b <= want) ?? BUCKETS_MS[BUCKETS_MS.length - 1];
+}
+
+/** A bucket's count as a rate per minute. */
+export const perMinute = (values: number[], bucketMs: number) => values.map((v) => (v * 60_000) / bucketMs);
+
+/** Seconds from `t0` for each time (for a chart's x axis). */
+export const secondsFrom = (t0: number, ats: number[]) => ats.map((t) => (t - t0) / 1000);
+
+export interface LatencyPoint {
+  at: number;
+  ms: number;
+}
+
+/** How long each tool call ran in the world, where the record says. */
+export function latencies(actions: Action[]): LatencyPoint[] {
+  return actions.filter((a) => a.durationMs != null && !Number.isNaN(a.at)).map((a) => ({ at: a.at, ms: a.durationMs as number }));
 }

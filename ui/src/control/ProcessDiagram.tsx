@@ -1,58 +1,78 @@
+import { Handle, type NodeProps, Position, ReactFlow, ReactFlowProvider } from '@xyflow/react';
+import { useMemo } from 'react';
+import { StatusMark, Tag } from '../components/ui/status';
+import { cn } from '@/lib/cn';
 import { kindWord, systemLine } from './actions';
+import { type EquipNode, type EquipShape, type UnitNode, equipShape, flowGraph } from './flowLayout';
 import { type Counts, type ProcessView, type UnitState, abnormal, countsLine } from './process';
 
-const ROW = 64;
 const STATE: Record<UnitState, { glyph: string; word: string; abnormal: boolean }> = {
   idle: { glyph: '○', word: 'idle', abnormal: false },
   running: { glyph: '◐', word: 'running', abnormal: false },
   done: { glyph: '■', word: 'done', abnormal: false },
   failed: { glyph: '✕', word: 'failed', abnormal: true },
+  automatic: { glyph: '⟳', word: 'run by arena', abnormal: false },
 };
 
 function Alarm({ c }: { c: Counts }) {
   if (!abnormal(c)) return null;
   const bits = [c.errors && `${c.errors} error${c.errors > 1 ? 's' : ''}`, c.refused && `${c.refused} refused`].filter(Boolean);
-  return <span className="hmi-mark abnormal"><span className="hmi-glyph">⚠</span>{bits.join(', ')}</span>;
+  return <StatusMark mark={{ glyph: '⚠', word: bits.join(', '), abnormal: true }} />;
 }
 
-/** Agents as units (left), the world's systems as equipment (right), and the action flows between them. */
-export default function ProcessDiagram({ view }: { view: ProcessView }) {
-  const rows = Math.max(view.units.length, view.equipment.length, 1);
-  const y = (i: number) => i * ROW + ROW / 2;
-  const unitAt = new Map(view.units.map((u, i) => [u.id, i]));
-  const partAt = new Map(view.equipment.map((e, i) => [e.part, i]));
+/** The equipment's simple shape: a cylinder for data stores, a box for applications, a diamond for approvals. */
+function ShapeGlyph({ shape }: { shape: EquipShape }) {
+  const common = { fill: 'var(--equip)', stroke: 'var(--equip-line)', strokeWidth: 1.25 };
   return (
-    <div className="hmi-process" style={{ height: rows * ROW }}>
-      <div className="hmi-col">
-        {view.units.map((u) => {
-          const s = STATE[u.state];
-          return (
-            <div key={u.id} className="hmi-unit" style={{ height: ROW - 8 }}>
-              <div className="hmi-unit-name">{u.name}</div>
-              <div className="small"><span className={`hmi-mark${s.abnormal ? ' abnormal' : ''}`}><span className="hmi-glyph">{s.glyph}</span>{s.word}</span>
-                <span className="mono muted"> {countsLine(u)}</span> <Alarm c={u} /></div>
-            </div>
-          );
-        })}
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" className="shrink-0">
+      {shape === 'cylinder' && <><path d="M3 5v12c0 1.7 3.6 3 8 3s8-1.3 8-3V5" {...common} /><ellipse cx="11" cy="5" rx="8" ry="3" {...common} /></>}
+      {shape === 'box' && <rect x="2.5" y="4" width="17" height="14" rx="1" {...common} />}
+      {shape === 'diamond' && <path d="M11 2 20 11 11 20 2 11Z" {...common} />}
+      {shape === 'hexagon' && <path d="M6 3h10l4 8-4 8H6l-4-8Z" {...common} />}
+      {shape === 'truck' && <><rect x="1.5" y="6" width="12" height="9" {...common} /><path d="M13.5 9h4l3 3v3h-7Z" {...common} /><circle cx="6" cy="17" r="2" {...common} /><circle cx="16" cy="17" r="2" {...common} /></>}
+    </svg>
+  );
+}
+
+function UnitBox({ data }: NodeProps<UnitNode>) {
+  const u = data.unit;
+  return (
+    <div className={cn('flex flex-col gap-0.5 rounded-md border bg-raised px-2.5 py-1.5 shadow-panel', abnormal(u) ? 'border-alarm' : 'border-line-strong')} style={{ width: 232 }}>
+      <span className="truncate text-sm font-medium" title={u.id}>{u.name}</span>
+      <span className="flex flex-wrap items-center gap-1.5 text-xs">
+        <StatusMark mark={STATE[u.state]} /><span className="font-mono text-2xs text-muted">{countsLine(u)}</span><Alarm c={u} />
+      </span>
+      <Handle type="source" position={Position.Right} className="!size-1.5 !border-0 !bg-line-strong" isConnectable={false} />
+    </div>
+  );
+}
+
+function EquipBox({ data }: NodeProps<EquipNode>) {
+  const e = data.equipment;
+  return (
+    <div className={cn('flex items-start gap-2 rounded-sm border bg-surface px-2 py-1.5', abnormal(e) ? 'border-alarm' : 'border-equip-line')} style={{ width: 264 }} title={systemLine(e.system)}>
+      <Handle type="target" position={Position.Left} className="!size-1.5 !border-0 !bg-line-strong" isConnectable={false} />
+      <ShapeGlyph shape={equipShape(e.system?.kind)} />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="flex items-center gap-1.5"><span className="text-sm font-semibold">{kindWord(e.system)}</span><span className="font-mono text-2xs text-muted">{e.part}</span>{e.system?.simulated && <Tag>simulated</Tag>}</span>
+        <span className="truncate text-2xs text-muted">{systemLine(e.system)}</span>
+        <span className="flex flex-wrap items-center gap-1.5"><span className="font-mono text-2xs text-muted">{countsLine(e)}</span><Alarm c={e} /></span>
       </div>
-      <svg className="hmi-flows" viewBox={`0 0 100 ${rows * ROW}`} preserveAspectRatio="none" aria-hidden="true">
-        {view.flows.map((f) => {
-          const [a, b] = [unitAt.get(f.agent), partAt.get(f.part)];
-          if (a == null || b == null) return null;
-          const cls = `hmi-flow${f.writes ? ' writes' : ''}${abnormal(f) ? ' abnormal' : ''}`;
-          return <line key={`${f.agent}/${f.part}`} className={cls} x1={0} y1={y(a)} x2={100} y2={y(b)} vectorEffect="non-scaling-stroke" />;
-        })}
-      </svg>
-      <div className="hmi-col">
-        {view.equipment.map((e) => (
-          <div key={e.part} className="hmi-equipment" style={{ height: ROW - 8 }} title={systemLine(e.system)}>
-            <div><span className="hmi-kind">{kindWord(e.system)}</span> <span className="mono muted small">{e.part}</span>
-              {e.system?.simulated && <span className="hmi-tag">simulated</span>}</div>
-            <div className="small muted hmi-ellipsis">{systemLine(e.system)}</div>
-            <div className="small"><span className="mono muted">{countsLine(e)}</span> <Alarm c={e} /></div>
-          </div>
-        ))}
-      </div>
+    </div>
+  );
+}
+
+const NODE_TYPES = { unit: UnitBox, equipment: EquipBox };
+
+/** Agents as units (left), the world's systems as equipment (right), the action flows between them; writes heavier, abnormal flows in the alarm colour. */
+export default function ProcessDiagram({ view }: { view: ProcessView }) {
+  const g = useMemo(() => flowGraph(view), [view]);
+  return (
+    <div className="w-full" style={{ height: Math.max(220, g.height + 40) }}>
+      <ReactFlowProvider>
+        <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} fitView fitViewOptions={{ padding: 0.08 }} proOptions={{ hideAttribution: true }}
+          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnScroll={false} preventScrolling={false} minZoom={0.4} maxZoom={1.5} />
+      </ReactFlowProvider>
     </div>
   );
 }

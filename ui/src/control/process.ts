@@ -5,7 +5,10 @@ import type { Event, Team } from '../types';
 import { type Action, worldInfo } from './actions';
 import type { SystemInfo } from './types';
 
-export type UnitState = 'idle' | 'running' | 'done' | 'failed';
+export type UnitState = 'idle' | 'running' | 'done' | 'failed' | 'automatic';
+
+/** The world's links (calls one part makes on another, e.g. a QA review): drawn as a unit, run by arena. */
+export const LINK_AGENT = 'link';
 
 export interface Counts {
   reads: number;
@@ -66,6 +69,11 @@ function getOr<K, V>(m: Map<K, V>, k: K, make: () => V): V {
   return m.get(k)!;
 }
 
+function newUnit(id: string, states: Map<string, UnitState>): Unit {
+  if (id === LINK_AGENT) return { id, name: 'World links', state: 'automatic', ...empty() };
+  return { id, name: id, state: states.get(id) ?? 'idle', ...empty() };
+}
+
 export function processView(events: Event[], actions: Action[], team: Team): ProcessView {
   const info = worldInfo(events);
   const states = unitStates(events);
@@ -73,7 +81,7 @@ export function processView(events: Event[], actions: Action[], team: Team): Pro
   const equipment = new Map<string, Equipment>(info.parts.map((p) => [p, { part: p, system: info.systems[p] ?? null, ...empty() }]));
   const flows = new Map<string, Flow>();
   for (const a of actions) {
-    count(getOr(units, a.agent, () => ({ id: a.agent, name: a.agent, state: states.get(a.agent) ?? 'idle', ...empty() })), a);
+    count(getOr(units, a.agent, () => newUnit(a.agent, states)), a);
     if (a.part == null) continue;
     count(getOr(equipment, a.part, () => ({ part: a.part!, system: a.system, ...empty() })), a);
     count(getOr(flows, `${a.agent}\u0000${a.part}`, () => ({ agent: a.agent, part: a.part!, ...empty() })), a);
@@ -84,9 +92,9 @@ export function processView(events: Event[], actions: Action[], team: Team): Pro
 /** True when a flow or unit carried an error or a refusal. */
 export const abnormal = (c: Counts) => c.errors > 0 || c.refused > 0;
 
-/** "3 R · 1 W": reads, writes and any calls of unstated effect. */
+/** "3 R · 1 W": reads, writes and any calls whose effect the record does not state ("2 other"). */
 export function countsLine(c: Counts): string {
   const bits = [`${c.reads} R`, `${c.writes} W`];
-  if (c.other) bits.push(`${c.other} ?`);
+  if (c.other) bits.push(`${c.other} other`);
   return bits.join(' · ');
 }

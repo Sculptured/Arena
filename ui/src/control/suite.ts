@@ -1,13 +1,9 @@
 // The display model of a suite report (L1) and of a suite comparison: the task × repeat grid,
 // each status and verdict as glyph + word (colour only for abnormal), and the figures formatted.
+import type { Mark } from '@/lib/mark';
 import type { CheckRate, RunRow, RunRowStatus, Spread, SuiteReport, SuiteStatus, Verdict } from './types';
 
-export interface Mark {
-  glyph: string;
-  word: string;
-  /** Abnormal states are the only ones drawn in colour. */
-  abnormal: boolean;
-}
+export type { Mark };
 
 const RUN: Record<RunRowStatus, Mark> = {
   pending: { glyph: '○', word: 'pending', abnormal: false },
