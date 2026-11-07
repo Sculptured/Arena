@@ -1,4 +1,4 @@
-import { ChevronDown, GitBranch, GitCompare, Workflow } from 'lucide-react';
+import { ChevronDown, Factory, GitBranch, GitCompare, Workflow } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApproximateMark, StatusChip } from '../components';
@@ -23,6 +23,9 @@ import { formatCost, summarize } from '../run/timeline';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
+import { useStepParam, withStep } from '../run/useStepParam';
+import { type ForkChoice, forkChoiceOf } from '../run/architecture';
+import { recordedLine } from '../scenario/scenario';
 import Waterfall from '../run/Waterfall';
 import { branchTree } from '../runs/tree';
 import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
@@ -97,25 +100,27 @@ function Stats({ detail }: { detail: BranchDetail }) {
   );
 }
 
-function Header({ runId, detail, siblings }: { runId: string; detail: BranchDetail; siblings: Branch[] }) {
+function Header({ runId, detail, siblings, step }: { runId: string; detail: BranchDetail; siblings: Branch[]; step: number | null }) {
   const task = taskOf(detail.events);
+  const scenario = recordedLine((detail.events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined)?.scenario);
   const world = worldLine(detail.events);
   const runner = runnerLine(detail.events);
   return (
     <PageHeader mono title={task ? `task ${task}` : 'Run'}
       status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} /><span className="font-mono text-xs text-faint">{detail.id.slice(0, 8)}</span></>}
       actions={<>
-        <Button size="sm" asChild><Link to={`/control/${runId}/${detail.id}`}><Workflow />Process view</Link></Button>
+        <Button size="sm" variant="primary" asChild><Link to={withStep(`/world/${runId}/${detail.id}`, step)}><Factory />World</Link></Button>
+        <Button size="sm" asChild><Link to={withStep(`/control/${runId}/${detail.id}`, step)}><Workflow />Process view</Link></Button>
         <BranchMenu runId={runId} detail={detail} siblings={siblings} /><CompareMenu detail={detail} siblings={siblings} />
       </>}
-      meta={<>{detail.fork_note && <span>{detail.fork_note}</span>}{world && <span className="truncate" title={world}>{world}</span>}{runner && <span>{runner}</span>}</>}>
+      meta={<>{detail.fork_note && <span>{detail.fork_note}</span>}{world && <span className="truncate" title={world}>{world}</span>}{runner && <span>{runner}</span>}{scenario && <span className="text-warn">▼ {scenario}</span>}</>}>
       <Stats detail={detail} />
     </PageHeader>
   );
 }
 
-function Side({ runId, detail, event, forking, setForking, autoRows }: {
-  runId: string; detail: BranchDetail; event: Event | null; forking: boolean; setForking: (f: boolean) => void; autoRows: boolean;
+function Side({ runId, detail, event, forking, setForking, autoRows, choice }: {
+  runId: string; detail: BranchDetail; event: Event | null; forking: boolean; setForking: (f: boolean) => void; autoRows: boolean; choice: ForkChoice;
 }) {
   const nav = useNavigate();
   const canFork = !!event && event.kind !== 'check' && event.kind !== 'run_start';
@@ -127,7 +132,7 @@ function Side({ runId, detail, event, forking, setForking, autoRows }: {
       </PanelHeader>
       {forking && event && (
         <div className="border-b border-line bg-raised">
-          <ForkPanel key={`${detail.id}:${event.seq}`} branch={detail} seq={event.seq} onClose={() => setForking(false)}
+          <ForkPanel key={`${detail.id}:${event.seq}`} branch={detail} seq={event.seq} choice={choice} onClose={() => setForking(false)}
             onForked={(r) => nav(`/runs/${runId}/${r.branch_id}`, { state: { notice: r.moved_from != null ? `Restarted from step ${r.start_seq} instead of ${r.moved_from}: ${r.reason ?? ''}` : null } })} />
         </div>
       )}
@@ -158,20 +163,19 @@ function Main({ detail, selected, onSelect, models, setModels }: {
   );
 }
 
-/** Selection, fork panel and notice, reset whenever the branch changes. */
+/** Selection (the address's `?step=`, shared with the process and world views), fork panel and notice, reset whenever the branch changes. */
 function useRunView(branchId: string, order: number[]) {
   const [sp] = useSearchParams();
   const loc = useLocation();
-  const stepParam = sp.get('step');
-  const [selected, setSelected] = useState<number | null>(stepParam ? Number(stepParam) : null);
+  const [selected, setSelected] = useStepParam();
   const [forking, setForking] = useState(sp.get('fork') === '1');
   const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
   useEffect(() => {
-    setSelected(stepParam ? Number(stepParam) : null); setForking(sp.get('fork') === '1');
+    setForking(sp.get('fork') === '1');
     setNotice((loc.state as { notice?: string } | null)?.notice ?? null);
   }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
   useStepKeys(order, setSelected);
-  return { selected, setSelected, forking, setForking, notice, setNotice, autoRows: sp.get('rows') === '1' };
+  return { selected, setSelected, forking, setForking, notice, setNotice, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
 }
 
 export default function Run() {
@@ -186,13 +190,13 @@ export default function Run() {
   const event = detail.events.find((e) => e.seq === v.selected) ?? null;
   return (
     <>
-      <Header runId={runId} detail={detail} siblings={siblings} />
+      <Header runId={runId} detail={detail} siblings={siblings} step={v.selected} />
       <PageBody>
         {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
         {error && <ErrorState error={error} onRetry={reload} />}
         {detail.error && <ErrorState error={detail.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
         <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
-          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} />} />
+          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} />} />
         {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
       </PageBody>
     </>

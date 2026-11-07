@@ -1,6 +1,6 @@
-import { ArrowRight, GitCompare, Layers, ListTree, Monitor, Play } from 'lucide-react';
+import { ArrowRight, Factory, GitCompare, Layers, ListTree, Monitor, Play } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { runs as fetchRuns } from '../api';
 import { suites as fetchSuites } from '../control/api';
 import type { ListedSuite } from '../control/types';
@@ -9,7 +9,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent } from '../components/ui/dialog';
 import { Kbd } from '../components/ui/kbd';
 import { hasModifier } from '@/lib/keys';
-import { type Action, type Item, type Mode, itemsFor, placeholderOf } from './palette';
+import { type Action, type Item, type Mode, hereOf, itemsFor, placeholderOf } from './palette';
 import { setThemePref, useTheme } from './theme';
 import { nextPref } from './themeModel';
 
@@ -39,6 +39,7 @@ function useLists(open: boolean) {
 
 function iconOf(item: Item) {
   if (item.id.startsWith('new-')) return <Play aria-hidden="true" />;
+  if (item.id.startsWith('world') || item.group === 'World view of') return <Factory aria-hidden="true" />;
   if (item.id.startsWith('cmp-') || item.group === 'Compare with') return <GitCompare aria-hidden="true" />;
   if (item.group === 'Go to') return <ArrowRight aria-hidden="true" />;
   if (item.id === 'theme') return <Monitor aria-hidden="true" />;
@@ -67,7 +68,8 @@ export default function CommandPalette({ open, onOpenChange }: { open: boolean; 
   const [mode, setMode] = useState<Mode>({ kind: 'root' });
   const [query, setQuery] = useState('');
   const lists = useLists(open);
-  const items = useMemo(() => itemsFor(mode, lists.runs, lists.suites), [mode, lists.runs, lists.suites]);
+  const { pathname } = useLocation();
+  const items = useMemo(() => itemsFor(mode, lists.runs, lists.suites, hereOf(pathname)), [mode, lists.runs, lists.suites, pathname]);
   const close = (o: boolean) => { onOpenChange(o); if (!o) { setMode({ kind: 'root' }); setQuery(''); } };
   const run = (a: Action) => {
     if ('mode' in a) { setMode(a.mode); setQuery(''); return; }

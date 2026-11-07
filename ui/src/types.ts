@@ -1,4 +1,5 @@
 // Mirrors arenad's model.rs / fork.rs / compare.rs / recorded.rs (serde snake_case).
+import type { RecordedScenario, ScenarioOptions } from './scenario/types';
 
 export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external';
 
@@ -36,7 +37,9 @@ export type EventKind =
   | 'message'
   | 'agent_end'
   | 'check'
-  | 'world_event';
+  | 'world_event'
+  /** The digital twin after a step (`payload: {seq_of, view}`); not a step of its own. */
+  | 'world_view';
 
 export type RestoreMode = 'exact' | 'approximate';
 /** How one part of a rerun's world is (or was) restored (`model.rs` `RestoredHow`). */
@@ -81,6 +84,8 @@ export interface RunStartPayload {
   /** The run's rules; absent in runs recorded before runners (a chain with a handoff required). */
   runner?: Runner;
   handoff?: 'required' | 'optional';
+  /** The scenario the run was started with, as arenad expanded it (absent: none chosen). */
+  scenario?: RecordedScenario;
 }
 
 export interface AgentSpec {
@@ -272,6 +277,8 @@ export interface BenchmarkInfo {
   tasks?: number;
   world?: WorldPart[];
   error?: string;
+  /** The disruptions a run can be started with (absent when the benchmark offers none). */
+  scenario_options?: ScenarioOptions;
 }
 
 export interface TaskSummary {

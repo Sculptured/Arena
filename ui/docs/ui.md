@@ -93,6 +93,23 @@ Logic lives in pure modules with tests, and components only render. For example:
   - Flows: writes are heavier and solid, reads-only flows are thin and dashed. An abnormal flow is
     alarm-coloured and labelled ("⚠ 1 refused").
   - On phones the diagram scrolls sideways.
+- **World view** (`pages/World.tsx`, `/world/:runId/:branchId`). The benchmark's digital twin
+  (`world_view` events, `GET /api/branches/{id}/views`) as an HMI overview: areas as zones left to right
+  in process order (`world/layout.ts`), approvals as a dashed rail, items as tiles with a glyph and a
+  word, and lot-to-order flows as pipes along a bus under the zones between them, one labelled lane
+  each. Tiles changed since the view before get an accent ring and a "what changed" line
+  (`world/twin.ts`). The scrubber (`world/scrub.ts`) stops at each view, marks disruptions (▼) and
+  refusals (▲), plays and pauses (space), and moves with ←/→. Rewind here opens the run page's fork
+  panel at the next agent step with "Swap architecture" chosen (`run/architecture.ts`). The selected
+  step is `?step=` in the address, shared by the run page, the process view and the world view. On
+  phones the zones stack and flows are listed.
+- **Scenario builder** (`scenario/`). In the New run and New suite dialogs, from the benchmark's
+  `scenario_options`: a toggle and parameters per disruption, and a plain-words preview.
+- **Outcome comparison** (`compare/`). At the top of the compare page: valid plan, safety
+  violations, orders on time, transport cost, agent cost and escalations for both branches, and a
+  divergence strip on one step axis.
+- **Fixtures.** A build with `VITE_ARENA_FIXTURES=1` answers `/api` from the summit demo fixtures
+  (`dev/fixtureApi.ts`), for screenshots without arenad.
 - **Trends.** Actions per minute for each system kind, tokens, cost and tool latency as sparklines,
   and context per model call as a chart. A cost the record does not give per call draws no line.
 - **Data tables.** Lists use filter chips with counts plus a text filter, and rows open with a click

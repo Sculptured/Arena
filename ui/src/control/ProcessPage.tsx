@@ -1,5 +1,5 @@
-import { ListTree } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Factory, ListTree } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { StatusChip } from '../components';
 import { Button } from '../components/ui/button';
@@ -13,6 +13,7 @@ import Inspector from '../run/Inspector';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
+import { useStepParam, withStep } from '../run/useStepParam';
 import type { BranchDetail } from '../types';
 import { actionsOf, worldInfo } from './actions';
 import { buildLanes, spanOf } from './lanes';
@@ -20,9 +21,9 @@ import { processView } from './process';
 import ProcessDiagram from './ProcessDiagram';
 import TrendsPanel from './TrendsPanel';
 
-function useSelection(order: number[], branchId: string) {
-  const [selected, setSelected] = useState<number | null>(null);
-  useEffect(() => { setSelected(null); }, [branchId]);
+/** The selected step, in the address (`?step=`) the run page and the world view share. */
+function useSelection(order: number[]) {
+  const [selected, setSelected] = useStepParam();
   useStepKeys(order, setSelected);
   return [selected, setSelected] as const;
 }
@@ -49,7 +50,7 @@ export default function ProcessPage() {
   const { detail: d, error, reload } = useBranch(branchId);
   const [models, setModels] = useState(true);
   const order = useMemo(() => (d ? stepOrder(buildLanes(d.events, d.team, d.start_seq), models) : []), [d, models]);
-  const [selected, setSelected] = useSelection(order, branchId);
+  const [selected, setSelected] = useSelection(order);
   if (!d) return <><PageHeader title="Process" /><PageBody>{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the run…" rows={5} /></Panel>}</PageBody></>;
   const task = taskOf(d.events);
   const info = worldInfo(d.events);
@@ -57,7 +58,10 @@ export default function ProcessPage() {
     <>
       <PageHeader mono title={task ? `task ${task}` : 'Run'} status={<><StatusChip status={d.status} /><span className="font-mono text-xs text-faint">{d.id.slice(0, 8)}</span></>}
         meta={!info.known ? 'Recorded before Arena kept each tool\'s system and effect: those are shown as unknown.' : 'Process view'}
-        actions={<Button size="sm" asChild><Link to={`/runs/${runId}/${branchId}`}><ListTree />Run page</Link></Button>} />
+        actions={<>
+          <Button size="sm" asChild><Link to={withStep(`/world/${runId}/${branchId}`, selected)}><Factory />World</Link></Button>
+          <Button size="sm" asChild><Link to={withStep(`/runs/${runId}/${branchId}`, selected)}><ListTree />Run page</Link></Button>
+        </>} />
       <PageBody>
         {error && <ErrorState error={error} onRetry={reload} />}
         {d.error && <ErrorState error={d.error} hint="The run stopped with this error. Its steps up to here are recorded." />}

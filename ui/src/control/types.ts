@@ -1,4 +1,5 @@
 // Mirrors arenad's suite/ (report.rs, compare.rs, outcome.rs) and world/systems.rs (serde snake_case).
+import type { ScenarioChoice } from '../scenario/types';
 import type { BranchStatus, Runner, Team } from '../types';
 
 /** What kind of system a part is (`describe.system`); absent when its integration does not say. */
@@ -170,4 +171,6 @@ export interface NewSuite {
   tasks: string[];
   repeats: number;
   runner: Runner;
+  /** Disruptions every run of the suite is started with. */
+  scenario?: ScenarioChoice;
 }

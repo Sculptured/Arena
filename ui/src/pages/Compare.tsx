@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { branch as fetchBranch, compare } from '../api';
+import { branch as fetchBranch, compare, views as fetchViews } from '../api';
+import OutcomePanel from '../compare/OutcomePanel';
+import { normalizeViews } from '../world/twin';
+import type { BranchView, TwinView } from '../world/types';
 import { ApproximateMark, StatusChip } from '../components';
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel, PanelHeader } from '../components/ui/panel';
@@ -86,7 +89,20 @@ export function Rows({ data }: { data: CompareResponse }) {
   );
 }
 
-interface Loaded { data: CompareResponse; a: BranchDetail; b: BranchDetail }
+interface Loaded {
+  data: CompareResponse;
+  a: BranchDetail;
+  b: BranchDetail;
+  /** Each branch's twin at the end, from the views endpoint; undefined when it can't be read (the events' own views are used). */
+  va?: TwinView | null;
+  vb?: TwinView | null;
+}
+
+/** The branch's last view from `GET /api/branches/{id}/views`; undefined when the endpoint fails. */
+const endView = (id: string) => fetchViews(id).then((v) => v, () => undefined);
+
+const lastOf = (raw: BranchView[] | undefined, d: BranchDetail): TwinView | null | undefined =>
+  raw === undefined ? undefined : normalizeViews(raw, d.events).at(-1)?.view ?? null;
 
 function useCompare(a: string, b: string) {
   const [got, setGot] = useState<Loaded | null>(null);
@@ -95,8 +111,8 @@ function useCompare(a: string, b: string) {
   useEffect(() => {
     let cancelled = false;
     setGot(null); setError(null);
-    Promise.all([compare(a, b), fetchBranch(a), fetchBranch(b)])
-      .then(([data, x, y]) => { if (!cancelled) setGot({ data, a: x, b: y }); })
+    Promise.all([compare(a, b), fetchBranch(a), fetchBranch(b), endView(a), endView(b)])
+      .then(([data, x, y, rx, ry]) => { if (!cancelled) setGot({ data, a: x, b: y, va: lastOf(rx, x), vb: lastOf(ry, y) }); })
       .catch((e) => { if (!cancelled) setError(String(e.message ?? e)); });
     return () => { cancelled = true; };
   }, [a, b, attempt]);
@@ -132,6 +148,7 @@ export default function Compare() {
         {!got && !error && <Panel><LoadingState label="Comparing the two final worlds… The first comparison of a pair can take up to a minute while the saves are read." rows={4} /></Panel>}
         {got && (
           <>
+            <OutcomePanel a={{ detail: got.a, side: got.data.a, view: got.va }} b={{ detail: got.b, side: got.data.b, view: got.vb }} first={got.data.first_divergent_seq} />
             <div className="grid gap-3 lg:grid-cols-2"><Side label="A" id={a} s={got.data.a} team={got.a.team} /><Side label="B" id={b} s={got.data.b} team={got.b.team} /></div>
             {(isApproximate(got.data.a) || isApproximate(got.data.b)) && <Notice>{APPROXIMATE_NOTE}</Notice>}
             <Divergence got={got} a={a} b={b} />

@@ -17,6 +17,7 @@ const SuitesPage = lazy(() => import('./control/SuitesPage'));
 const Compare = lazy(() => import('./pages/Compare'));
 const Run = lazy(() => import('./pages/Run'));
 const Team = lazy(() => import('./pages/Team'));
+const World = lazy(() => import('./pages/World'));
 
 function NotFound() {
   return (
@@ -39,6 +40,7 @@ function AppRoutes() {
         <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
         <Route path="/suites/:id" element={<SuitePage />} />
         <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
+        <Route path="/world/:runId/:branchId" element={<World />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>

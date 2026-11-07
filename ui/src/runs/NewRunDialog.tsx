@@ -5,6 +5,7 @@ import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
 import { Field, NativeSelect } from '../components/ui/input';
 import { ErrorState } from '../components/ui/state';
 import { agentModelLine } from '../providers';
+import ScenarioBuilder, { useScenario } from '../scenario/ScenarioBuilder';
 import { loadTeam, teamForRun } from '../team';
 import type { Runner, TaskSummary, Team } from '../types';
 
@@ -39,42 +40,56 @@ function TeamSummary({ team }: { team: Team | null }) {
   );
 }
 
-/** Start a run of one task with your team; opens the run when it starts. */
-export default function NewRunDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function TaskField({ tasks, value, onChange, busy }: { tasks: TaskSummary[] | null; value: string; onChange: (id: string) => void; busy: boolean }) {
+  return (
+    <Field label="Task">
+      <NativeSelect value={value} onChange={(e) => onChange(e.target.value)} disabled={busy || !tasks?.length}>
+        {!tasks && <option>Loading tasks…</option>}
+        {tasks?.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.reason}</option>)}
+      </NativeSelect>
+    </Field>
+  );
+}
+
+/** The run's task, rules, disruptions and the start. */
+function useNewRun(open: boolean) {
   const nav = useNavigate();
   const inputs = useRunInputs(open);
   const [taskId, setTaskId] = useState('');
   const [runner, setRunner] = useState<Runner>('chain');
   const [busy, setBusy] = useState(false);
   const selected = taskId || inputs.tasks?.[0]?.id || '';
+  const scenario = useScenario(open, [selected]);
   const start = async () => {
     setBusy(true); inputs.setError(null);
     try {
-      const r = await startRun(selected, teamForRun(inputs.team ?? await loadTeam()), runner);
+      const r = await startRun(selected, teamForRun(inputs.team ?? await loadTeam()), runner, scenario.scenario);
       nav(`/runs/${r.run_id}/${r.branch_id}`);
     } catch (e) { inputs.setError(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
+  return { inputs, selected, setTaskId, runner, setRunner, busy, scenario, start };
+}
+
+/** Start a run of one task with your team; opens the run when it starts. */
+export default function NewRunDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { inputs, selected, setTaskId, runner, setRunner, busy, scenario, start } = useNewRun(open);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="New run" description="Every step is recorded and saved; you can change and rerun from any of them.">
         <div className="flex flex-col gap-3 overflow-auto p-4">
-          <Field label="Task">
-            <NativeSelect value={selected} onChange={(e) => setTaskId(e.target.value)} disabled={busy || !inputs.tasks?.length}>
-              {!inputs.tasks && <option>Loading tasks…</option>}
-              {inputs.tasks?.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.reason}</option>)}
-            </NativeSelect>
-          </Field>
+          <TaskField tasks={inputs.tasks} value={selected} onChange={setTaskId} busy={busy} />
           <Field label="Agents run" hint={RUNNER_HINT}>
             <NativeSelect value={runner} onChange={(e) => setRunner(e.target.value as Runner)} disabled={busy}>
               <option value="chain">one after another</option>
               <option value="concurrent">all at once</option>
             </NativeSelect>
           </Field>
+          <ScenarioBuilder s={scenario} busy={busy} />
           <TeamSummary team={inputs.team} />
           {inputs.error && <ErrorState error={inputs.error} hint="Nothing was started. Fix the cause and start again." />}
         </div>
-        <DialogActions onCancel={() => onOpenChange(false)} onGo={start} disabled={busy || !selected} label={busy ? 'Starting…' : 'Start run'} />
+        <DialogActions onCancel={() => onOpenChange(false)} onGo={start} disabled={busy || !selected || !!scenario.problem} label={busy ? 'Starting…' : 'Start run'} />
       </DialogContent>
     </Dialog>
   );
