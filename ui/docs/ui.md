@@ -113,7 +113,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   KPIs at the end), agent cost (as the agents reported it, labelled reported, and illustrative for
   scripted usage) and escalations for both branches, and a divergence strip on one step axis. World
   views are not steps: the timeline, run figures, process view and divergence skip them.
-- **Fixtures.** A build with `VITE_ARENA_FIXTURES=1` answers `/api` from the summit demo fixtures
+- **Fixtures.** A build with `VITE_ARENA_FIXTURES=1` answers `/api` from the pharma fixtures
   (`dev/fixtureApi.ts`), for screenshots without arenad.
 - **Trends.** Actions per minute for each system kind, tokens, cost and tool latency as sparklines,
   and context per model call as a chart. A cost the record does not give per call draws no line.

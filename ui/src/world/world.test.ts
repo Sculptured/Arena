@@ -230,12 +230,9 @@ describe('world view state', () => {
     expect(worldState({ ...input, views: [] }).view).toBeNull();
   });
 
-  it('says the agents are scripted when an external runner made no model call', () => {
-    expect(drivenLine(v1Detail.events)).toBe('Scripted agents · no model calls');
+  it('says when a run made no model call', () => {
     expect(drivenLine([])).toBe('No model calls');
     expect(drivenLine([{ branch_id: 'b', seq: 2, at: '', agent: 'a', kind: 'model_call', payload: {} }])).toBe('');
-    const usage = { branch_id: 'b', seq: 9, at: '', agent: 'a', kind: 'model_call' as const, payload: { model: 'scripted-illustrative', reported_by: 'client' } };
-    expect(drivenLine([...v1Detail.events, usage])).toBe('Scripted agents, illustrative usage · no model calls');
     expect(stepHeadline(v1Detail.events, team, 1)).toBe('Step 1 · after setup');
     expect(stepHeadline(v1Detail.events, team, null)).toBe('No step');
   });

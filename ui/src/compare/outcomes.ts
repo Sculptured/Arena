@@ -85,7 +85,7 @@ export const transportCost = (view: TwinView | null): Figure => kpiFigure(view, 
 
 /**
  * What the agents cost as they reported it: the branch's own agent ends (their `cost_usd`), else
- * the metrics' cost. Always labelled as reported; scripted usage is labelled illustrative too.
+ * the metrics' cost, labelled by where the figure came from.
  */
 export function agentCost(s: CompareSide): Figure {
   const usd = s.cost_usd ?? s.metrics?.cost.usd ?? null;

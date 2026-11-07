@@ -3,7 +3,6 @@ import { StatusChip } from '../components';
 import { Panel, PanelHeader } from '../components/ui/panel';
 import { cn } from '@/lib/cn';
 import type { BranchDetail } from '../types';
-import { drivenLine } from '../world/page';
 import type { TrackMark } from '../world/scrub';
 import { type Strip, divergenceStrip } from './divergence';
 import { type Figure, type OutcomeRow, type SideInput, outcomeRows, verdict } from './outcomes';
@@ -70,10 +69,9 @@ export function DivergenceStrip({ s }: { s: Strip }) {
 /** Outcomes, not transcripts: what each branch achieved, side by side, and where they parted. */
 export default function OutcomePanel({ a, b, first }: { a: SideInput; b: SideInput; first: number | null }) {
   const rows = outcomeRows(a, b);
-  const driven = [drivenLine(a.detail.events), drivenLine(b.detail.events)].find((l) => l.startsWith('Scripted'));
   return (
     <Panel>
-      <PanelHeader title="Outcomes" meta={`from the checks, the metrics and the twin at the end${driven ? ` · ${driven}` : ''}`} />
+      <PanelHeader title="Outcomes" meta="from the checks, the metrics and the twin at the end" />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[340px] border-collapse">
           <thead><tr><th scope="col" className="w-[34%]" /><SideHead label="A" d={a.detail} /><SideHead label="B" d={b.detail} /><th scope="col" /></tr></thead>

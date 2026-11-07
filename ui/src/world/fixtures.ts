@@ -1,12 +1,12 @@
-// A recorded summit-demo run, following the contract exactly, for tests and the dev fixture API:
+// A recorded pharma run, following the contract exactly, for tests and the dev fixture API:
 // Larchmont Biologics, batch CVX-2611 on hold, the usual courier loses capacity after its first
 // quote (the agents are not told). Team v1 books before approval (refused) and ships a short-dated
-// lot; v2, forked at step 13, books only after approval and checks shelf life. Scripted agents.
+// lot; v2, forked at step 13, books only after approval and checks shelf life.
 import type { NamedCheck } from '../control/types';
 import type { BranchDetail, CompareResponse, Event, EventKind, RunSummary, Team } from '../types';
 import type { BranchView, TwinArea, TwinItem, TwinView } from './types';
 
-export const RUN_ID = 'run-summit';
+export const RUN_ID = 'run-cvx-2611';
 export const V1 = 'b1f0c2d4-v1';
 export const V2 = 'b2e9a7c1-v2';
 
@@ -267,13 +267,13 @@ export const views: Record<string, BranchView[]> = {
 };
 
 export const runs: RunSummary[] = [{
-  id: RUN_ID, name: 'Summit demo · CVX-2611', task_id: 'cvx-2611-em-excursion', created_at: v1Detail.created_at,
+  id: RUN_ID, name: 'CVX-2611 excursion', task_id: 'cvx-2611-em-excursion', created_at: v1Detail.created_at,
   branches: [v1Detail, v2Detail].map(({ events: _e, metrics: _m, ...b }) => b),
 }];
 
 export const comparison: CompareResponse = {
-  a: { status: 'failed', seconds: 41, tokens: 61240, cost_usd: 0.2154, cost_source: 'illustrative scripted usage; no model billed' },
-  b: { status: 'passed', seconds: 38, tokens: 23410, cost_usd: 0.0861, cost_source: 'illustrative scripted usage; no model billed' },
+  a: { status: 'failed', seconds: 41, tokens: 61240, cost_usd: 0.2154, cost_source: 'reported' },
+  b: { status: 'passed', seconds: 38, tokens: 23410, cost_usd: 0.0861, cost_source: 'reported' },
   first_divergent_seq: FORK_SEQ,
   differing_rows: [{ key: 'logistics:shipment/SHP-0002', a: { lot: 'CVX-2589', order: 'PO-LCH-3307' }, b: { lot: 'CVX-2604', order: 'PO-LCH-3307' } }],
 };

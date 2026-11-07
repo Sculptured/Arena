@@ -375,7 +375,7 @@ async fn assert_paths(hub: &Arc<Hub>) {
     }
 }
 
-/// The scenario the summit demo shows first: Tundra full after its first quote.
+/// Tundra full after its first quote.
 fn courier_full(bench: &parts::proto::BenchDescribe) -> arenad::scenario::Scenario {
     let asked =
         json!({"disruptions": [{"id": "courier-capacity", "params": {"after": 1, "capacity": 0}}]});

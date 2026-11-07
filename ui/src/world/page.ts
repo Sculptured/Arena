@@ -1,25 +1,14 @@
 // The world view's words: who drove the agents, and what the step on screen was.
-import type { Event, RunStartPayload, Team } from '../types';
+import type { Event, Team } from '../types';
 import { type Happening, type Track, buildTrack, happenings, rewindLink, rewindSeq } from './scrub';
 import { type ViewChanges, diffViews, viewIndexAt } from './twin';
 import type { BranchView, TwinView } from './types';
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 
-/** True for a model call its client reported for a scripted stand-in (its model says "scripted"). */
-const scriptedCall = (e: Event) => e.kind === 'model_call' && /scripted/i.test(String(obj(e.payload).model ?? ''));
-
-/**
- * What drove the agents, when no model did: "Scripted agents, illustrative usage · no model calls"
- * for a run driven from outside whose only model calls are scripted usage reports (or none);
- * "No model calls" for any other run without one; else empty.
- */
+/** "No model calls" for a run that recorded none (nothing billed, nothing to inspect); else empty. */
 export function drivenLine(events: Event[]): string {
-  const rs = events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined;
-  const calls = events.filter((e) => e.kind === 'model_call');
-  const scripted = calls.every(scriptedCall);
-  if (rs?.runner === 'external' && scripted) return calls.length ? 'Scripted agents, illustrative usage · no model calls' : 'Scripted agents · no model calls';
-  return calls.length ? '' : 'No model calls';
+  return events.some((e) => e.kind === 'model_call') ? '' : 'No model calls';
 }
 
 /** "Step 21 · Logistics · book_shipment": the step a view shows. */

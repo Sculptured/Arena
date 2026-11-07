@@ -1,4 +1,4 @@
-// The digital twin a benchmark draws (summit demo contract, section C): generic, so any world can
+// The digital twin a benchmark draws (twin contract): generic, so any world can
 // give one. arenad records a `world_view` event after setup and after every step that wrote
 // anything; `GET /api/branches/{id}/views` returns a branch's views, inherited ones included.
 

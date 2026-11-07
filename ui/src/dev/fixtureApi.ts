@@ -1,4 +1,4 @@
-// Dev only: answers /api with the summit demo fixtures, so the real pages (world view, run page,
+// Dev only: answers /api with the pharma fixtures, so the real pages (world view, run page,
 // compare, the New run and New suite dialogs) render without arenad. Bundled only when the build
 // sets VITE_ARENA_FIXTURES=1 (see main.tsx); never in a normal build.
 import { scenarioOptions } from '../scenario/fixtures';

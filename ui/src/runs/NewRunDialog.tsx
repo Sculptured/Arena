@@ -9,7 +9,7 @@ import ScenarioBuilder, { useScenario } from '../scenario/ScenarioBuilder';
 import { loadTeam, teamForRun } from '../team';
 import type { Runner, TaskSummary, Team } from '../types';
 
-const RUNNER_HINT = 'Arena tracks every agent either way and imposes no order or handoff. With an external system, the run waits for your own code (or a scripted driver) to drive its agents through their endpoints.';
+const RUNNER_HINT = 'Arena tracks every agent either way and imposes no order or handoff. With an external system, the run waits for your own code to drive its agents through their endpoints.';
 
 /** The tasks and the team a new run would use. */
 function useRunInputs(open: boolean) {

@@ -1,4 +1,4 @@
-// A scenario chosen per run (summit demo contract, sections A and B): the knobs the benchmark's
+// A scenario chosen per run (scenario contract): the knobs the benchmark's
 // `describe` offers as `scenario_options`, and the choice sent on POST /api/runs and /api/suites.
 
 /** When a disruption fires: before answering the agent tool call that crosses `after_calls`. */

@@ -6,7 +6,6 @@ export function costLabel(source: string | null | undefined): string {
   if (source === 'openrouter') return 'OpenRouter';
   if (source === LOCAL_COST_SOURCE) return 'no API charge';
   if (source === 'mixed') return 'mixed';
-  if (source && /illustrative|scripted/i.test(source)) return 'reported, illustrative';
   return source ? 'reported' : '';
 }
 
