@@ -53,4 +53,4 @@ call it counts writes `disruption/<id>`, so arenad saves the count with the step
 
 `uv run --with pytest pytest -q`: quotes, bookings and their refusals, capacity, the director's rules, the scenarios,
 notices, save and restore, the four disruption kinds (when they fire, once, and across a save), and `arena-part-check`.
-Verified on Linux, 2026-11-06: all 9 pass, conformance included. 2026-11-07: the 5 disruption tests added; 13 pass, conformance skipped (checker not built).
+Verified on Linux, 2026-11-06: all 9 pass, conformance included. 2026-11-07: the 5 disruption tests added; all 14 pass, conformance included.

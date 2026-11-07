@@ -157,7 +157,16 @@ the ERPNext and Twenty images, and arenad stopped. It is `opt_in`.
   as the links send them.
 - `pharma-lims` and `pharma-logistics`: their pytest suites and `arena-part-check`.
 
-**Not run:** the arenad live test (`tests/pharma.rs`), so not the CRM seed, `arenad base`, the links and the gate
+**Verified (Linux, 2026-11-07):** `cargo test -p arena-pharma` passes (32 tests, the twin's and the options' included).
+`live_pharma_a_disruption_shows_in_the_twin` (arenad's `tests/pharma.rs`, with the Sculptured build of 2026-11-04 as
+`ARENA_SCULPTURED_BINARY`; the one on `PATH` from 2026-10-24 lacks the changes route the approvals part needs) passed
+once: the base incident with Tundra full after its first quote, the coordinated team scripted. The disruption fired as
+a world event, the scripted logistics turned to Borealis, all 13 checks passed, and 56 views were recorded, Tundra's
+lane going from available to no capacity and orders covered from 0 to 7 of 8; from each view's step to the view took
+27 ms on average, 86 ms at most (event timestamps, so the view call and its recording). The older live test of the
+three paths was not rerun.
+
+**Not run (2026-11-06):** the arenad live test (`tests/pharma.rs`), so not the CRM seed, `arenad base`, the links and the gate
 inside a run, or a run of any scenario: the machine had under 20 GB free when it was ready. No real agent or model has
 run this world.
 

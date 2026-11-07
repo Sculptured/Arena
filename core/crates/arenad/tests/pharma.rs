@@ -6,7 +6,8 @@
 //! hold and safety checks.
 //!
 //! `live_`: it starts an ERPNext stack and a Twenty server of its own and needs the Sculptured
-//! program; everything it makes is removed when it ends. Run:
+//! program (`ARENA_SCULPTURED_BINARY`: one recent enough to serve the changes route); everything it
+//! makes is removed when it ends. Run:
 //! `cargo test -p arenad --test pharma -- --ignored live_ --nocapture`.
 #[path = "support/app.rs"]
 mod app_support;
@@ -30,7 +31,7 @@ use arenad::{
     exec::{BranchCtx, ToolExec},
     model::*,
 };
-use live_world::{path_with_sculptured, scripted_team, walk_for, Stack};
+use live_world::{path_with_sculptured, scripted_team, walk_for, walk_in, Stack};
 use packages::{arena, bin_dir, package_roots};
 use parts::{Hub, Registry};
 use pg::Cleanup;
@@ -215,10 +216,8 @@ impl Calls<'_> {
         let asked = json!({"origin": origin, "customer": customer, "qty": qty});
         let quotes = self.call("cold_chain_quotes", asked).await?;
         let list = quotes["quotes"].as_array().ok_or("no quotes")?;
-        let q = list
-            .iter()
-            .find(|q| q["carrier"] == carrier)
-            .ok_or("no quote")?;
+        let q = pick_quote(list, carrier).ok_or("no quote")?;
+        let carrier = q["carrier"].clone();
         let shipment = json!({"carrier": carrier, "quote_id": q["quote_id"], "order": po, "batch": batch, "qty": qty});
         let id = self
             .approved("cold_chain_shipment", shipment.clone())
@@ -254,6 +253,18 @@ impl Calls<'_> {
         }
         Ok(())
     }
+}
+
+/// The quote of `carrier`, or, when that lane has no capacity left (a disruption), the first
+/// 2-8 C quote that has some, as a sensible agent would.
+fn pick_quote<'a>(quotes: &'a [Value], carrier: &str) -> Option<&'a Value> {
+    let has_room = |q: &&Value| q["capacity_left"].as_u64() > Some(0);
+    let planned = quotes
+        .iter()
+        .find(|q| q["carrier"] == carrier)
+        .filter(has_room);
+    let cold = |q: &&Value| q["temperature"] == "2-8 C" && has_room(q);
+    planned.or_else(|| quotes.iter().find(cold))
 }
 
 /// Which path the scripted team walks.
@@ -364,6 +375,79 @@ async fn assert_paths(hub: &Arc<Hub>) {
     }
 }
 
+/// The scenario the summit demo shows first: Tundra full after its first quote.
+fn courier_full(bench: &parts::proto::BenchDescribe) -> arenad::scenario::Scenario {
+    let asked =
+        json!({"disruptions": [{"id": "courier-capacity", "params": {"after": 1, "capacity": 0}}]});
+    let asked = serde_json::from_value(asked).unwrap();
+    arenad::scenario::expand(bench.scenario_options.as_ref(), &asked).unwrap()
+}
+
+/// The status of `item` in `area` of a recorded view.
+fn status_in<'a>(view: &'a Value, area: &str, item: &str) -> &'a str {
+    let areas = view["view"]["areas"].as_array().unwrap();
+    let a = areas.iter().find(|a| a["id"] == area).unwrap();
+    let it = a["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == item);
+    it.and_then(|i| i["status"].as_str()).unwrap_or("absent")
+}
+
+fn kpi_of<'a>(view: &'a Value, id: &str) -> &'a str {
+    let kpis = view["view"]["kpis"].as_array().unwrap();
+    kpis.iter()
+        .find(|k| k["id"] == id)
+        .and_then(|k| k["value"].as_str())
+        .unwrap()
+}
+
+/// Milliseconds from each view's step (its last event before it) to the view.
+fn view_ms(evs: &[Event]) -> Vec<i64> {
+    let gap = |(prev, e): (&Event, &Event)| {
+        (e.kind == EventKind::WorldView).then(|| (e.at - prev.at).num_milliseconds())
+    };
+    evs.iter().zip(evs.iter().skip(1)).filter_map(gap).collect()
+}
+
+/// The base incident with Tundra full after its first quote: the disruption is a world event at
+/// that moment, the scripted logistics turns to Borealis, and the twin's views change with it.
+async fn assert_disruption_in_the_twin(hub: &Arc<Hub>) {
+    let bench = hub.bench_describe("pharma").await.unwrap();
+    let scenario = courier_full(&bench);
+    let (state, _clean) = app(hub, "disrupted", Path::Gold).await;
+    let team = scripted_team(bench.team.unwrap());
+    let (b, check, evs) = walk_in(&state, "cvx-2611-em-excursion", team, &scenario, 6000).await;
+    println!("disrupted: {:?} {:?} {check:?}", b.status, b.error);
+    let is_fired =
+        |e: &&Event| e.kind == EventKind::WorldEvent && e.payload["kind"] == "disruption";
+    let fired = evs.iter().find(is_fired).expect("a disruption event");
+    assert_eq!(fired.payload["data"]["id"], "courier-capacity");
+    assert_views_change(&evs);
+}
+
+/// The views: Tundra's lane available, then full; orders covered as the bookings go in.
+fn assert_views_change(evs: &[Event]) {
+    let is_view = |e: &&Event| e.kind == EventKind::WorldView;
+    let views: Vec<&Value> = evs.iter().filter(is_view).map(|e| &e.payload).collect();
+    assert!(views.len() >= 3, "{} views", views.len());
+    let tundra = "lane:Tundra Medical Courier|US";
+    let (first, last) = (views[0], views[views.len() - 1]);
+    assert_eq!(status_in(first, "carriers", tundra), "available");
+    assert_eq!(status_in(last, "carriers", tundra), "no capacity");
+    assert_eq!(kpi_of(first, "orders_covered"), "0 of 8");
+    let covered = kpi_of(last, "orders_covered");
+    assert_ne!(covered, "0 of 8");
+    let ms = view_ms(evs);
+    let mean = ms.iter().sum::<i64>() / ms.len().max(1) as i64;
+    let max = ms.iter().max();
+    println!(
+        "{} views; covered at the end {covered}; ms to each view: mean {mean}, max {max:?}",
+        views.len()
+    );
+}
+
 fn missing() -> Option<String> {
     let found = Command::new("sculptured")
         .arg("--version")
@@ -392,6 +476,25 @@ fn build() {
         .status()
         .unwrap();
     assert!(st.success(), "building the package binaries failed");
+}
+
+#[test]
+#[ignore]
+fn live_pharma_a_disruption_shows_in_the_twin() {
+    if let Some(why) = missing() {
+        eprintln!("skipped: {why}");
+        return;
+    }
+    build();
+    let stack = Stack::new("pd");
+    let hub = Hub::new(
+        Registry::scan(&package_roots()).unwrap(),
+        bin_dir(),
+        stack.saves.clone(),
+    );
+    let hub = Arc::new(hub.with_env(stack.env()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(assert_disruption_in_the_twin(&hub));
 }
 
 #[test]

@@ -56,5 +56,5 @@ Kind: `result_fails {lot, test}`: the lot's `test` is out of specification, so `
 `uv run --with pytest pytest -q`: the tools on the benchmark's data, the QA head's rules, the scenarios, refusals,
 save and restore, and `arena-part-check` (skipped without the built checker; `ARENA_BIN_DIR` names where it is). Verified
 on Linux, 2026-11-06: all 8 pass, the conformance check included (describe, start, the examples, save, restore, diff,
-stop, drop_save; replay skipped since the part restores from saves). 2026-11-07: 2 disruption tests added; 9 pass,
-conformance skipped (checker not built).
+stop, drop_save; replay skipped since the part restores from saves). 2026-11-07: 2 disruption tests added; all 10 pass,
+conformance included.

@@ -5,7 +5,7 @@
 
 use std::{path::PathBuf, process::Command, sync::Arc, time::Duration};
 
-use arenad::{app::AppState, model::*, runner};
+use arenad::{app::AppState, model::*, runner, scenario::Scenario};
 
 use crate::packages::arena;
 use crate::pg::pg_url;
@@ -135,7 +135,19 @@ pub async fn walk_for(
     team: Team,
     polls: usize,
 ) -> (Branch, CheckPayload, Vec<Event>) {
-    let (_run, id) = runner::start_run(state, task, team).await.unwrap();
+    walk_in(state, task, team, &Scenario::default(), polls).await
+}
+
+/// `walk_for` in `scenario`.
+pub async fn walk_in(
+    state: &Arc<AppState>,
+    task: &str,
+    team: Team,
+    scenario: &Scenario,
+    polls: usize,
+) -> (Branch, CheckPayload, Vec<Event>) {
+    let started = runner::start_run_in(state, task, team, Runner::Chain, scenario);
+    let (_run, id) = started.await.unwrap();
     for _ in 0..polls {
         let b = state.store.branch(&id).await.unwrap();
         if b.status != BranchStatus::Running {
