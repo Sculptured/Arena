@@ -81,6 +81,8 @@ impl Benchmark for Factory {
             links: world::links(),
             gates: world::gates(),
             scored: true,
+            scenario_options: None,
+            view: None,
         })
     }
 

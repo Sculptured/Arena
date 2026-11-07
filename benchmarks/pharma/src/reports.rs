@@ -130,8 +130,8 @@ fn lot_row(l: &Value, held: f64) -> Value {
            "free": (on_hand - held).max(0.0), "reserved_for": l["reserved_for"]})
 }
 
-/// Every lot of the product with what open orders hold of it.
-async fn stock(erp: &Erp, d: &Data) -> Result<(Vec<Value>, Vec<String>)> {
+/// Every lot of the product in the ERP, with the fields the stock report reads.
+pub async fn lots(erp: &Erp, d: &Data) -> Result<Vec<Value>> {
     let fields = [
         "name",
         "expiry_date",
@@ -140,26 +140,32 @@ async fn stock(erp: &Erp, d: &Data) -> Result<(Vec<Value>, Vec<String>)> {
         "reserved_for",
         "batch_qty",
     ];
-    let lots = erp
-        .list("Batch", &json!([["item", "=", d.product.code]]), &fields)
-        .await?;
-    let orders = erp
-        .list(
-            "Sales Order",
-            &open_orders(),
-            &["planned_batch", "total_qty"],
-        )
-        .await?;
+    erp.list("Batch", &json!([["item", "=", d.product.code]]), &fields)
+        .await
+}
+
+/// The open sales orders, with `fields`.
+pub async fn orders(erp: &Erp, fields: &[&str]) -> Result<Vec<Value>> {
+    erp.list("Sales Order", &open_orders(), fields).await
+}
+
+/// The stock report's lines: each lot with what the open `orders` hold of it.
+pub fn stock_rows(lots: &[Value], orders: &[Value]) -> Vec<Value> {
     let committed = |batch: &Value| -> f64 {
         let of = orders.iter().filter(|o| o["planned_batch"] == *batch);
         of.filter_map(|o| o["total_qty"].as_f64()).sum::<f64>() + 0.0
     };
-    let rows: Vec<Value> = lots
-        .iter()
+    lots.iter()
         .map(|l| lot_row(l, committed(&l["name"])))
-        .collect();
+        .collect()
+}
+
+/// Every lot of the product with what open orders hold of it.
+async fn stock(erp: &Erp, d: &Data) -> Result<(Vec<Value>, Vec<String>)> {
+    let lots = lots(erp, d).await?;
+    let orders = orders(erp, &["planned_batch", "total_qty"]).await?;
     let read = keys("Batch", &lots);
-    Ok((rows, read))
+    Ok((stock_rows(&lots, &orders), read))
 }
 
 async fn eligible(
@@ -187,7 +193,8 @@ async fn eligible(
     ))
 }
 
-async fn schedule(erp: &Erp) -> Result<(Value, Vec<String>)> {
+/// The work orders not cancelled.
+pub async fn work_orders(erp: &Erp) -> Result<Vec<Value>> {
     let fields = [
         "name",
         "planned_batch",
@@ -197,9 +204,12 @@ async fn schedule(erp: &Erp) -> Result<(Value, Vec<String>)> {
         "status",
         "docstatus",
     ];
-    let rows = erp
-        .list("Work Order", &json!([["docstatus", "<", 2]]), &fields)
-        .await?;
+    erp.list("Work Order", &json!([["docstatus", "<", 2]]), &fields)
+        .await
+}
+
+async fn schedule(erp: &Erp) -> Result<(Value, Vec<String>)> {
+    let rows = work_orders(erp).await?;
     let read = keys("Work Order", &rows);
     Ok((json!({"work_orders": rows}), read))
 }
