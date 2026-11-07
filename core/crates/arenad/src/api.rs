@@ -117,6 +117,7 @@ impl From<ForkError> for ApiError {
             | ForkError::ReplayDiverged { .. }
             | ForkError::FingerprintMismatch { .. } => StatusCode::CONFLICT,
             ForkError::UnknownSeq
+            | ForkError::TeamChange(_)
             | ForkError::UnknownAgent(_)
             | ForkError::MissingHandoff(_)
             | ForkError::NoRestorePoint { .. } => StatusCode::BAD_REQUEST,
@@ -436,6 +437,9 @@ struct ForkReq {
     /// `"exact"` (default) or `"approximate"`.
     #[serde(default = "exact")]
     restore: Mode,
+    /// Another team, for a run an external system drives (in place of `changes`).
+    #[serde(default)]
+    team: Option<Team>,
 }
 
 /// The branch to fork: 404 for an unknown branch and 409 for a running one; these come before
@@ -460,11 +464,16 @@ async fn fork_branch(
     let parent = forkable(&state, &id).await?;
     fork::settle_changes(&parent.team, &mut req.changes, &state.config.providers);
     check_fork_team(&state, &parent.team, &req.changes)?;
+    if let Some(team) = &mut req.team {
+        settle_providers(team);
+        validate_team(&state, team)?;
+    }
     check_disk(&state).await?;
     let req = fork::ForkRequest {
         at_seq: req.at_seq,
         changes: req.changes,
         restore: req.restore,
+        team: req.team,
     };
     let resp = detached(async move {
         let _cleanup = cleanup;

@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     app::AppState,
-    model::{Branch, Change, Event, RestoredHow},
+    model::{Branch, Change, Event, RestoredHow, Team},
     recorded::{clock_at, run_info, RunInfo},
     replay::{self, ReplayError},
     restore::{restore_plan, How},
@@ -26,6 +26,9 @@ pub struct ForkRequest {
     pub at_seq: i64,
     pub changes: std::collections::HashMap<String, Change>,
     pub restore: Mode,
+    /// Another team for the new branch, in place of `changes` (only for a run an external
+    /// system drives: how its agents resume is that system's choice).
+    pub team: Option<Team>,
 }
 
 /// How one part of the new world is restored.

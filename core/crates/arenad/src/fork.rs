@@ -40,6 +40,9 @@ pub const REASON_LAST_MODEL_CALL: &str =
     "the step is redone from the agent's last model call before it";
 pub const REASON_NO_MODEL_CALL: &str =
     "the agent made no model call to resume from, so it restarts from its start";
+pub const TEAM_NOT_EXTERNAL: &str =
+    "a fork can change the whole team only in a run an external system drives; change its agents instead";
+pub const TEAM_AND_CHANGES: &str = "give a fork either agent changes or a new team, not both";
 
 /// Where a fork actually starts, and what it carries over.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +81,8 @@ pub enum ForkError {
     ReplayDiverged { part: String, seq: i64 },
     /// A part to replay runs on a different machine or version than when the run started.
     FingerprintMismatch { part: String },
+    /// A team change the run can't take (see [`ForkRequest::team`]).
+    TeamChange(&'static str),
     /// Storage or database failure.
     Internal(anyhow::Error),
 }
@@ -103,6 +108,7 @@ impl std::fmt::Display for ForkError {
                 f,
                 "the {part} integration is running on a different machine or version than the original"
             ),
+            ForkError::TeamChange(why) => write!(f, "{why}"),
             ForkError::Internal(e) => write!(f, "fork failed: {e:#}"),
         }
     }
@@ -516,6 +522,7 @@ pub async fn fork(
         at_seq,
         changes,
         restore,
+        team: None,
     };
     fork_with(state, branch_id, req).await
 }
@@ -532,7 +539,7 @@ pub async fn fork_with(
     let events = state.store.events(branch_id).await?;
     let mut rerun = prepare(state, &parent, &events, &req).await?;
     let task_id = task_of(state, &events, &parent).await?;
-    let team = apply_changes(&parent.team, &req.changes);
+    let team = new_team(&parent.team, &events, &req)?;
     let new_id = create_child(state, &parent, &rerun, &team, &req).await?;
     let world = start_child_world(state, &events, &parent.id, &new_id, &mut rerun).await?;
     let ctx = BranchCtx::new(new_id, Arc::new(world), team, task_id)
@@ -542,6 +549,21 @@ pub async fn fork_with(
         return Ok(live_child(state, ctx, rerun.plan, &events).await);
     }
     Ok(spawn_child(state, ctx, rerun.plan))
+}
+
+/// The new branch's team: the one the request gives (a run an external system drives only, and
+/// without agent changes), else the parent's with the changes applied.
+fn new_team(parent: &Team, events: &[Event], req: &ForkRequest) -> Result<Team, ForkError> {
+    let Some(team) = &req.team else {
+        return Ok(apply_changes(parent, &req.changes));
+    };
+    if recorded::rules(events).runner != Runner::External {
+        return Err(ForkError::TeamChange(TEAM_NOT_EXTERNAL));
+    }
+    if !req.changes.is_empty() {
+        return Err(ForkError::TeamChange(TEAM_AND_CHANGES));
+    }
+    Ok(team.clone())
 }
 
 /// Makes the new branch of an external run live, for its system to resume: the response gives
@@ -582,6 +604,7 @@ pub async fn restore_preview(
         at_seq,
         changes: HashMap::new(),
         restore,
+        team: None,
     };
     let rerun = prepare(state, &branch, &events, &req).await?;
     Ok(part_plans(&rerun, &events))
@@ -638,7 +661,8 @@ async fn create_child(
     let changes_json = serde_json::to_value(&req.changes)?;
     let plan = &rerun.plan;
     let from = Some((parent.id.as_str(), plan.start_seq));
-    let note = plan.reason.clone();
+    let swapped = (req.team.as_ref()).map(|t| format!("the team changed to {}", t.name));
+    let note = plan.reason.clone().or(swapped);
     let store = &state.store;
     let id = store
         .create_branch(&parent.run_id, from, team, &changes_json, note)
@@ -812,6 +836,40 @@ mod tests {
         let mut evs = events();
         evs[0].payload = json!({"task_id": "27", "runner": runner, "handoff": "optional"});
         evs
+    }
+
+    #[test]
+    fn only_an_external_run_takes_another_team_and_not_with_changes() {
+        let start =
+            |runner: &str| vec![ev(1, None, EventKind::RunStart, json!({"runner": runner}))];
+        let id = "single".to_string();
+        let mut req = ForkRequest {
+            at_seq: 1,
+            changes: HashMap::new(),
+            restore: parts::proto::Mode::Exact,
+            team: Some(Team {
+                id,
+                ..team(AgentKind::Open)
+            }),
+        };
+        let parent = team(AgentKind::Open);
+        let refused = new_team(&parent, &start("chain"), &req);
+        assert!(matches!(
+            refused,
+            Err(ForkError::TeamChange(TEAM_NOT_EXTERNAL))
+        ));
+        let swapped = new_team(&parent, &start("external"), &req).unwrap();
+        assert_eq!(swapped.id, "single");
+        let prompt = Some("x".to_string());
+        req.changes.insert(
+            "triage".into(),
+            Change {
+                prompt,
+                ..Change::default()
+            },
+        );
+        let both = new_team(&parent, &start("external"), &req);
+        assert!(matches!(both, Err(ForkError::TeamChange(TEAM_AND_CHANGES))));
     }
 
     #[test]

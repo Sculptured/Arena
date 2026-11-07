@@ -244,6 +244,48 @@ fn a_fork_of_an_external_run_hands_back_each_agents_history() {
     })
 }
 
+/// A team of one external agent, `solo`.
+fn single() -> Value {
+    let solo = json!({"id": "solo", "name": "Solo", "kind": "external", "model": null,
+                      "prompt": "You do it all."});
+    json!({"id": "single", "name": "Single agent", "agents": [solo]})
+}
+
+/// A fork of an external run may give another team: the new branch runs it (its agents have no
+/// history of their own), and asking for both a team and agent changes is refused.
+#[test]
+fn a_fork_of_an_external_run_can_change_the_team() {
+    run(async {
+        let up = FakeUpstream::start(vec![json!({"role": "assistant", "content": "yes"})]).await;
+        let fx = setup("swap", &up).await;
+        let branch = start(&fx).await;
+        drive(&fx, &branch).await;
+        assert_eq!(fx.finish(&branch).await.0, 200);
+        let at = fx.events(&branch).await[4].seq;
+        let swap = json!({"at_seq": at, "team": single()});
+        let both = json!({"changes": {"planner": {"prompt": "x"}}, "at_seq": at, "team": single()});
+        let (status, v) = fx.on(&branch, "fork", both).await;
+        assert_eq!(status, 400, "{v}");
+        let (status, f) = fx.on(&branch, "fork", swap).await;
+        assert_eq!(status, 200, "{f}");
+        let agents = f["agents"].as_array().unwrap();
+        assert_eq!((agents.len(), &agents[0]["agent"]), (1, &json!("solo")));
+        let child = f["branch_id"].as_str().unwrap();
+        let stored = fx.state.store.branch(child).await.unwrap();
+        assert_eq!(stored.team.id, "single");
+        assert!(stored.fork_note.unwrap().contains("Single agent"));
+        let out = fx
+            .mcp(
+                agents[0]["mcp_url"].as_str().unwrap(),
+                "get_order_details",
+                json!({"order_id": "#W7181492"}),
+            )
+            .await;
+        assert_eq!(out["isError"], false, "{out}");
+        assert_eq!(fx.finish(child).await.0, 200);
+    })
+}
+
 #[test]
 fn only_external_runs_take_registrations() {
     run(async {
