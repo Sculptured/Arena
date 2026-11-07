@@ -39,7 +39,7 @@ function StepView({ label, id, run, ev }: { label: string; id: string; run?: str
 /** One branch's outcome, numbers and agents (each with its model and where it runs). */
 export function Side({ id, s, team, label = '' }: { id: string; s: CompareSide; team?: Team; label?: string }) {
   const unknown = teamProviders(team).some(costIsUnknown);
-  const row = (k: string, v: React.ReactNode) => <><dt className="text-2xs font-medium tracking-wide text-muted uppercase">{k}</dt><dd>{v}</dd></>;
+  const row = (k: string, v: React.ReactNode) => <><dt className="text-2xs font-medium text-muted">{k}</dt><dd>{v}</dd></>;
   return (
     <Panel>
       <PanelHeader title={label || 'Branch'} meta={<span className="font-mono">{id.slice(0, 8)}</span>}><StatusChip status={s.status} /><ApproximateMark of={s} /></PanelHeader>
@@ -47,7 +47,7 @@ export function Side({ id, s, team, label = '' }: { id: string; s: CompareSide; 
         {row('Seconds', <span className="font-mono">{s.seconds != null ? s.seconds.toFixed(1) : '–'}</span>)}
         {row('Tokens', <span className="font-mono">{s.tokens?.toLocaleString() ?? '–'}</span>)}
         {row('Cost', formatCost(s.cost_usd, s.cost_source, unknown))}
-        {team && row('Agents', <ul className="flex flex-col gap-0.5 text-xs">{team.agents.map((a) => <li key={a.id}>{a.name}: <span className="font-mono text-2xs text-muted">{agentModelLine(a)}</span></li>)}</ul>)}
+        {team && row('Agents', <ul className="flex flex-col gap-0.5 text-xs">{team.agents.map((a) => <li key={a.id}>{a.name}: <span className="text-2xs text-muted">{agentModelLine(a)}</span></li>)}</ul>)}
       </dl>
     </Panel>
   );

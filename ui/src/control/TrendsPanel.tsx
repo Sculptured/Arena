@@ -10,7 +10,7 @@ function Trend({ label, value, xs, ys }: { label: string; value: string; xs: num
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-md border border-line bg-raised px-2.5 py-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate text-2xs font-medium tracking-wide text-muted uppercase">{label}</span>
+        <span className="truncate text-2xs font-medium text-muted">{label}</span>
         <span className="shrink-0 font-mono text-xs">{value}</span>
       </div>
       {ys.length > 1 ? <Sparkline xs={xs} ys={ys} label={`${label}: ${value}`} /> : <span className="h-7 text-2xs text-faint">{ys.length ? 'not enough points' : 'no line to draw'}</span>}
@@ -50,7 +50,7 @@ export default function TrendsPanel({ events, actions }: { events: Event[]; acti
         <Trend label="Tool latency" value={t.lat.length ? `max ${fmt(Math.max(...t.lat.map((l) => l.ms)) / 1000, 's')}` : '–'} xs={secondsFrom(t.t0, t.lat.map((l) => l.at))} ys={t.lat.map((l) => l.ms)} />
       </div>
       <div className="rounded-md border border-line bg-raised px-2.5 py-2">
-        <div className="flex items-baseline justify-between"><span className="text-2xs font-medium tracking-wide text-muted uppercase">Context per model call (tokens)</span><span className="font-mono text-xs">peak {fmt(peak, 'tok')}</span></div>
+        <div className="flex items-baseline justify-between"><span className="text-2xs font-medium text-muted">Context per model call (tokens)</span><span className="font-mono text-xs">peak {fmt(peak, 'tok')}</span></div>
         {t.calls.length > 1 ? <LineChart xs={xsCalls} ys={t.calls.map((c) => c.context)} label="Context per model call" /> : <p className="py-4 text-xs text-faint">No model call recorded its context size.</p>}
       </div>
       <p className="text-2xs text-faint">System lines are actions per minute over {t.bucketMs / 1000} s buckets. A call without a price leaves the cost line out; the run's cost is in the run page's header.</p>

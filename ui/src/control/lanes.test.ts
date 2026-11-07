@@ -6,7 +6,7 @@ describe('lanes', () => {
   it('builds_one_lane_per_agent_in_team_order_then_the_check', () => {
     const l = buildLanes(events, team);
     expect(l.map((x) => x.id)).toEqual(['lead', 'quality', CHECK_LANE]);
-    expect(l[0].marks.map((m) => m.label)).toEqual(['start', 'model call', 'message → quality']);
+    expect(l[0].marks.map((m) => m.label)).toEqual(['Start', 'Model call', 'Message → quality']);
   });
 
   it('marks_approvals_and_refusals_as_interlocks_and_keeps_writes_apart_from_reads', () => {
@@ -14,7 +14,7 @@ describe('lanes', () => {
     expect(q.map((m) => [m.label, m.kind, m.effect, m.outcome])).toEqual([
       ['LIMS read', 'action', 'read', 'ok'],
       ['ERP write', 'action', 'write', 'ok'],
-      ['approvals write', 'interlock', 'write', 'ok'],
+      ['Approvals write', 'interlock', 'write', 'ok'],
       ['ERP write', 'interlock', 'write', 'refused'],
     ]);
     expect(q[3].detail).toContain('no approval');

@@ -124,8 +124,9 @@ export function systemLine(system: SystemInfo | null): string {
   return bits.join(', ');
 }
 
-/** "ERP write", "database read", "unknown call": the system kind and the effect, as a mark is labelled. */
+/** "ERP write", "Database read", "Unknown call": the system kind and the effect, as a mark is labelled. */
 export function actionWord(a: Pick<Action, 'system' | 'effect'>): string {
   const effect = a.effect === 'unknown' ? 'call' : a.effect;
-  return `${kindWord(a.system)} ${effect}`;
+  const kind = kindWord(a.system);
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)} ${effect}`;
 }

@@ -274,6 +274,25 @@ pub async fn finish(state: &AppState, ctx: &BranchCtx) -> Option<Ending> {
     Some(conclude(state, ctx, outcome).await)
 }
 
+/// How a branch someone stopped ends: unscored.
+const STOPPED_ENDING: Ending = (BranchStatus::Stopped, None);
+
+/// Stops a live branch: its agents are dropped where they are, calls that wait are refused, and
+/// it ends `stopped` without being scored. A branch an external system drives ends here; arenad's
+/// own runner ends its branch itself. False when the branch was stopped or ending already.
+pub async fn stop(state: &AppState, ctx: &BranchCtx) -> bool {
+    if !ctx.flow.stop() {
+        return false;
+    }
+    if ctx.rules.runner == Runner::External {
+        if !ctx.claim_end() {
+            return false;
+        }
+        conclude(state, ctx, Ok(STOPPED_ENDING)).await;
+    }
+    true
+}
+
 /// Stops a branch's world and records how it ended: as `outcome` says, unless a world program
 /// stopped, which makes it `infra_error` whatever the agents did after.
 async fn conclude(state: &AppState, ctx: &BranchCtx, outcome: Result<Ending>) -> Ending {
@@ -324,10 +343,17 @@ struct Brief {
 async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) -> Result<Ending> {
     let brief = brief_of(state, ctx).await?;
     restore_notes(ctx, &from)?;
-    let ended = match ctx.rules.runner {
-        Runner::Chain => run_chain(state, ctx, &brief, from).await?,
-        Runner::Concurrent => run_concurrent(state, ctx, &brief, from.agent_index).await?,
-        Runner::External => return Err(anyhow!("an external system drives this run, not arenad")),
+    let agents = async {
+        match ctx.rules.runner {
+            Runner::Chain => run_chain(state, ctx, &brief, from).await,
+            Runner::Concurrent => run_concurrent(state, ctx, &brief, from.agent_index).await,
+            Runner::External => Err(anyhow!("an external system drives this run, not arenad")),
+        }
+    };
+    // Stopping drops the agents where they are (a CLI agent's process is killed with it).
+    let ended = tokio::select! {
+        ended = agents => ended?,
+        () = ctx.flow.stopped() => return Ok(STOPPED_ENDING),
     };
     if let Some(end) = ended {
         return Ok(end);

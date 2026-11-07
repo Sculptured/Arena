@@ -138,7 +138,8 @@ export function statusGlyph(status: string, abnormal: boolean): string {
 
 /** An item's (or flow's) status as a mark. */
 export function statusMark(x: { status: string; abnormal: boolean }): Mark {
-  return { glyph: statusGlyph(x.status, x.abnormal), word: x.status, abnormal: x.abnormal };
+  const word = x.status ? x.status[0].toUpperCase() + x.status.slice(1) : x.status;
+  return { glyph: statusGlyph(x.status, x.abnormal), word, abnormal: x.abnormal };
 }
 
 /** The facts under a tile, each kept whole when it wraps: its quantity, due date and the parts of its detail. */

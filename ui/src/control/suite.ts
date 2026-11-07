@@ -6,15 +6,16 @@ import type { CheckRate, RunRow, RunRowStatus, Spread, SuiteReport, SuiteStatus,
 export type { Mark };
 
 const RUN: Record<RunRowStatus, Mark> = {
-  pending: { glyph: '○', word: 'pending', abnormal: false },
-  starting: { glyph: '◔', word: 'starting', abnormal: false },
-  running: { glyph: '◐', word: 'running', abnormal: false },
-  passed: { glyph: '✓', word: 'passed', abnormal: false },
-  failed: { glyph: '✕', word: 'failed', abnormal: true },
-  infra_error: { glyph: '⚠', word: 'infra error', abnormal: true },
-  interrupted: { glyph: '■', word: 'interrupted', abnormal: true },
-  error: { glyph: '⚠', word: 'could not start', abnormal: true },
-  missing: { glyph: '?', word: 'run deleted', abnormal: false },
+  pending: { glyph: '○', word: 'Pending', abnormal: false },
+  starting: { glyph: '◔', word: 'Starting', abnormal: false },
+  running: { glyph: '◐', word: 'Running', abnormal: false },
+  passed: { glyph: '✓', word: 'Passed', abnormal: false },
+  failed: { glyph: '✕', word: 'Failed', abnormal: true },
+  infra_error: { glyph: '⚠', word: 'Infra error', abnormal: true },
+  interrupted: { glyph: '■', word: 'Interrupted', abnormal: true },
+  stopped: { glyph: '■', word: 'Stopped', abnormal: false },
+  error: { glyph: '⚠', word: 'Could not start', abnormal: true },
+  missing: { glyph: '?', word: 'Run deleted', abnormal: false },
 };
 
 export function runMark(status: RunRowStatus): Mark {
@@ -22,17 +23,17 @@ export function runMark(status: RunRowStatus): Mark {
 }
 
 const SUITE: Record<SuiteStatus, Mark> = {
-  running: { glyph: '◐', word: 'running', abnormal: false },
-  finished: { glyph: '■', word: 'finished', abnormal: false },
-  stopped: { glyph: '⚠', word: 'stopped', abnormal: true },
+  running: { glyph: '◐', word: 'Running', abnormal: false },
+  finished: { glyph: '■', word: 'Finished', abnormal: false },
+  stopped: { glyph: '⚠', word: 'Stopped', abnormal: true },
 };
 
 export const suiteMark = (s: SuiteStatus): Mark => SUITE[s];
 
 const VERDICT: Record<Verdict, Mark> = {
-  improved: { glyph: '▲', word: 'improved', abnormal: false },
-  regressed: { glyph: '▼', word: 'regressed', abnormal: true },
-  same: { glyph: '=', word: 'same', abnormal: false },
+  improved: { glyph: '▲', word: 'Improved', abnormal: false },
+  regressed: { glyph: '▼', word: 'Regressed', abnormal: true },
+  same: { glyph: '=', word: 'Same', abnormal: false },
   incomparable: { glyph: '–', word: 'n/a', abnormal: false },
 };
 

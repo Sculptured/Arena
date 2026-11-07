@@ -160,10 +160,14 @@ async fn handle(
     Path((branch, agent)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Response {
-    let since = Instant::now();
     let Some((ctx, provider)) = live_agent(&state, &branch, &agent) else {
         return error_response(StatusCode::NOT_FOUND, "unknown branch or agent");
     };
+    // A paused branch holds the call until it resumes; that wait is no part of the gateway's.
+    if ctx.flow.go().await.is_err() {
+        return error_response(StatusCode::CONFLICT, crate::flow::STOPPED);
+    }
+    let since = Instant::now();
     if !body.is_object() {
         return error_response(
             StatusCode::BAD_REQUEST,

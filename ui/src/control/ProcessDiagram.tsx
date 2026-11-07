@@ -7,11 +7,11 @@ import { EQUIP_W, type EquipNode, type EquipShape, UNIT_W, type UnitNode, equipS
 import { type Counts, type ProcessView, type UnitState, abnormal, countsLine } from './process';
 
 const STATE: Record<UnitState, { glyph: string; word: string; abnormal: boolean }> = {
-  idle: { glyph: '○', word: 'idle', abnormal: false },
-  running: { glyph: '◐', word: 'running', abnormal: false },
-  done: { glyph: '■', word: 'done', abnormal: false },
-  failed: { glyph: '✕', word: 'failed', abnormal: true },
-  automatic: { glyph: '⟳', word: 'run by arena', abnormal: false },
+  idle: { glyph: '○', word: 'Idle', abnormal: false },
+  running: { glyph: '◐', word: 'Running', abnormal: false },
+  done: { glyph: '■', word: 'Done', abnormal: false },
+  failed: { glyph: '✕', word: 'Failed', abnormal: true },
+  automatic: { glyph: '⟳', word: 'Run by Arena', abnormal: false },
 };
 
 function Alarm({ c }: { c: Counts }) {

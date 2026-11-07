@@ -25,15 +25,16 @@ const FINISHED: BranchStatus[] = ['passed', 'failed'];
 
 function pages(): Item[] {
   return [
-    { id: 'go-runs', group: 'Go to', label: 'Runs', keywords: ['list'], action: { go: '/' } },
+    { id: 'go-run', group: 'Go to', label: 'Run', keywords: ['home', 'start'], action: { go: '/' } },
+    { id: 'go-history', group: 'Go to', label: 'History', keywords: ['runs', 'list'], action: { go: '/history' } },
     { id: 'go-suites', group: 'Go to', label: 'Suites', keywords: ['tests'], action: { go: '/suites' } },
-    { id: 'go-team', group: 'Go to', label: 'Team', keywords: ['agents'], action: { go: '/team' } },
+    { id: 'go-team', group: 'Go to', label: 'Team editor', keywords: ['agents', 'edit'], action: { go: '/team' } },
   ];
 }
 
 function actions(): Item[] {
   return [
-    { id: 'new-run', group: 'Actions', label: 'New run…', keywords: ['start', 'task'], action: { go: '/?new=run' } },
+    { id: 'new-run', group: 'Actions', label: 'New run', keywords: ['start', 'task'], action: { go: '/' } },
     { id: 'new-suite', group: 'Actions', label: 'New suite…', keywords: ['start', 'test'], action: { go: '/suites?new=suite' } },
     { id: 'world', group: 'Actions', label: 'World view of a run…', keywords: ['twin', 'digital', 'plant', 'scrub'], action: { mode: { kind: 'world' } } },
     { id: 'cmp-runs', group: 'Actions', label: 'Compare two runs…', keywords: ['diff', 'branch'], action: { mode: { kind: 'compare-runs', first: null } } },
@@ -64,20 +65,33 @@ export function suiteItems(suites: ListedSuite[], group = 'Suites', pick?: (id: 
   }));
 }
 
-/** The run branch a page is about (run page, process view, world view), from its path. */
-export function hereOf(pathname: string): { runId: string; branchId: string; page: string } | null {
+export type Here = { runId: string; branchId: string; page: string } | null;
+
+/** The run branch a page is about (the Run screen's live run, run page, process view, world view), from its address. */
+export function hereOf(pathname: string, search = ''): Here {
   const m = /^\/(runs|control|world)\/([^/]+)\/([^/]+)/.exec(pathname);
-  return m ? { page: m[1], runId: decodeURIComponent(m[2]), branchId: decodeURIComponent(m[3]) } : null;
+  if (m) return { page: m[1], runId: decodeURIComponent(m[2]), branchId: decodeURIComponent(m[3]) };
+  const q = new URLSearchParams(search);
+  const [runId, branchId] = [q.get('run'), q.get('branch')];
+  return pathname === '/' && runId && branchId ? { page: 'home', runId, branchId } : null;
 }
 
-/** On a run's page: its world view, first. */
-function hereItems(here: ReturnType<typeof hereOf>): Item[] {
-  if (!here || here.page === 'world') return [];
-  return [{ id: 'world-here', group: 'This run', label: 'World view (digital twin)', hint: here.branchId.slice(0, 8), keywords: ['twin', 'world', 'plant'], action: { go: `/world/${here.runId}/${here.branchId}` } }];
+/** The deeper views of the run on screen: its world view, all its details (event log, trace, deployment estimate), its process view. */
+export function hereItems(here: Here): Item[] {
+  if (!here) return [];
+  const at = `${encodeURIComponent(here.runId)}/${encodeURIComponent(here.branchId)}`;
+  const item = (page: string, label: string, keywords: string[]): Item[] => (here.page === page ? [] : [{
+    id: `${page}-here`, group: 'This run', label, keywords, action: { go: `/${page}/${at}` },
+  }]);
+  return [
+    ...item('world', 'World view (digital twin)', ['twin', 'world', 'plant']),
+    ...item('runs', 'All details: event log, trace, deployment estimate', ['details', 'log', 'trace', 'estimate', 'branches']),
+    ...item('control', 'Process view', ['process', 'flows', 'equipment']),
+  ];
 }
 
 /** The items of a mode: everything at the root, or the runs or sides of a comparison to pick from. */
-export function itemsFor(mode: Mode, runs: RunSummary[], suites: ListedSuite[], here: ReturnType<typeof hereOf> = null): Item[] {
+export function itemsFor(mode: Mode, runs: RunSummary[], suites: ListedSuite[], here: Here = null): Item[] {
   if (mode.kind === 'root') return [...hereItems(here), ...pages(), ...actions(), ...runItems(runs), ...suiteItems(suites)];
   if (mode.kind === 'world') return runItems(runs, 'World view of', (id, run) => ({ go: `/world/${run}/${id}` }));
   if (mode.kind === 'compare-runs') {

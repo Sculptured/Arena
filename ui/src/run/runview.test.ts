@@ -56,7 +56,7 @@ describe('run stats and diffs', () => {
     expect(runStats(events, null)).toEqual({ steps: 11, reads: 1, writes: 3, abnormal: 1, check: { passed: false, ok: 0, total: 0 }, safety: null });
     const scored = [...events, ev(13, 96, null, 'check', { passed: false, checks: [{ name: 'goal', passed: true }, { name: 'no_short_dated', passed: false, safety: true }, { name: 'no_expired', passed: true, safety: true }] })];
     expect(runStats(scored, null)).toMatchObject({ check: { passed: false, ok: 2, total: 3 }, safety: { violated: 1, total: 2 } });
-    expect(checkMark({ passed: false, ok: 2, total: 3 })).toEqual({ glyph: '✕', word: 'failed 2/3', abnormal: true });
+    expect(checkMark({ passed: false, ok: 2, total: 3 })).toEqual({ glyph: '✕', word: 'Failed 2/3', abnormal: true });
     expect([safetyLine({ violated: 1, total: 2 }), safetyLine({ violated: 0, total: 2 })]).toEqual(['◆ 1 of 2 violated', '0 of 2 violated']);
     expect(runStats(events, 8)).toMatchObject({ steps: 5, reads: 0, writes: 2, abnormal: 1 });
   });

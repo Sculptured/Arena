@@ -1,3 +1,4 @@
+import { api } from './core';
 import type { ScenarioChoice } from './scenario/types';
 import type { BranchView } from './world/types';
 import type {
@@ -11,8 +12,9 @@ export class ApiError extends Error {
   }
 }
 
+/** `path` (`/api/…`) on the Arena core this page talks to (`core.ts`). */
 export async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await fetch(api(path), init);
   const text = await res.text();
   let body: unknown = null;
   try {
@@ -49,6 +51,11 @@ export const fork = (id: string, at_seq: number, changes: Record<string, Change>
 /** How each part of a fork at `at_seq` would be restored; a 409 names the part that can't be. */
 export const restorePlan = (id: string, at_seq: number, restore: RestoreMode) =>
   call<RestorePlan>(`/api/branches/${encodeURIComponent(id)}/restore-plan?at_seq=${at_seq}&restore=${restore}`);
+/** Pause or resume a live branch: its calls wait while paused (`{paused, changed}`). */
+export const setPaused = (id: string, paused: boolean) =>
+  post<{ paused: boolean; changed: boolean }>(`/api/branches/${encodeURIComponent(id)}/${paused ? 'pause' : 'resume'}`, {});
+/** Stop a live branch: it ends `stopped`, unscored; the stream's status says when. */
+export const stopBranch = (id: string) => post<{ stopping: boolean }>(`/api/branches/${encodeURIComponent(id)}/stop`, {});
 /** The branch's digital twin after each step that wrote anything, inherited views included. */
 export const views = (id: string) => call<BranchView[]>(`/api/branches/${encodeURIComponent(id)}/views`);
 
@@ -63,7 +70,7 @@ export function stream(
   onEvent: (e: Event) => void,
   onStatus: (s: StatusEvent) => void,
 ): () => void {
-  const es = new EventSource(`/api/branches/${encodeURIComponent(id)}/stream`);
+  const es = new EventSource(api(`/api/branches/${encodeURIComponent(id)}/stream`));
   const listen = <T>(name: string, fn: (v: T) => void) =>
     es.addEventListener(name, (m) => {
       try {

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    Json,
+    routing::post,
+    Json, Router,
 };
 use serde_json::{json, Value};
 use tokio::sync::OwnedRwLockReadGuard;
@@ -21,6 +22,15 @@ use crate::{
     model::*,
     runner,
 };
+
+pub(super) fn router() -> Router<Arc<AppState>> {
+    let agent = "/api/branches/{id}/agents/{agent}";
+    Router::new()
+        .route("/api/branches/{id}/agents", post(register))
+        .route(&format!("{agent}/end"), post(end_agent))
+        .route(&format!("{agent}/usage"), post(report_usage))
+        .route("/api/branches/{id}/finish", post(finish))
+}
 
 /// Starts a run whose agents an external system drives: its world started, its clock ticking,
 /// the team's agents (there may be none yet) registered. Answers `{run_id, branch_id, agents}`
@@ -59,7 +69,7 @@ fn external_branch(state: &AppState, id: &str) -> Result<Arc<BranchCtx>, ApiErro
 
 /// `POST /api/branches/{id}/agents`: registers an agent (or starts a known one again) and
 /// answers its endpoints and the tools it gets.
-pub(super) async fn register(
+async fn register(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     body: Bytes,
@@ -80,7 +90,7 @@ pub(super) async fn register(
 
 /// `POST /api/branches/{id}/agents/{agent}/end`: records that the agent is done, with the tokens
 /// and cost the system reports for it.
-pub(super) async fn end_agent(
+async fn end_agent(
     State(state): State<Arc<AppState>>,
     Path((id, agent)): Path<(String, String)>,
     body: Bytes,
@@ -106,7 +116,7 @@ pub(super) async fn end_agent(
 
 /// `POST /api/branches/{id}/agents/{agent}/usage`: records one model call (or compaction) the
 /// agent's client reported, as a `ModelCall` event.
-pub(super) async fn report_usage(
+async fn report_usage(
     State(state): State<Arc<AppState>>,
     Path((id, agent)): Path<(String, String)>,
     body: Bytes,
@@ -129,10 +139,7 @@ pub(super) async fn report_usage(
 
 /// `POST /api/branches/{id}/finish`: the run is over. arenad freezes and scores the world, stops
 /// it and answers how the branch ended.
-pub(super) async fn finish(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> ApiResult<Value> {
+async fn finish(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> ApiResult<Value> {
     let ctx = external_branch(&state, &id)?;
     detached(async move {
         let ended = runner::finish(&state, &ctx).await;

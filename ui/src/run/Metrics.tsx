@@ -1,3 +1,4 @@
+import { agentModelLine } from '../providers';
 import { Table, Td, Th, Tr } from '../components/ui/table';
 import type { Cost, Metrics, Overhead } from '../types';
 
@@ -12,6 +13,7 @@ export const OVERHEAD_KINDS: [keyof Overhead, string][] = [
   ['link', 'link calls'],
   ['wait', 'waiting for the step lock'],
   ['score', 'final save and scoring'],
+  ['pause', 'paused'],
 ];
 
 const secs = (s: number) => (s < 10 ? s.toFixed(2) : s.toFixed(1));
@@ -55,7 +57,7 @@ function AgentsTable({ m }: { m: Metrics }) {
         {m.agents.map((a, i) => (
           <Tr key={`${a.agent}-${i}`}>
             <Td className="font-mono">{a.agent}</Td>
-            <Td className="font-mono">{a.model ?? '–'}{a.provider ? ` · ${a.provider}` : ''}</Td>
+            <Td>{a.kind ? agentModelLine({ kind: a.kind, model: a.model, provider: a.provider }) : a.model ?? '–'}</Td>
             <Td className="text-right font-mono">{a.tokens}{a.prompt_tokens != null ? ` (${a.prompt_tokens} / ${a.completion_tokens ?? 0})` : ''}</Td>
             <Td title={a.cost.source ?? ''}>{costText(a.cost)}</Td>
           </Tr>
@@ -69,7 +71,7 @@ function AgentsTable({ m }: { m: Metrics }) {
 export default function MetricsPanel({ m }: { m: Metrics }) {
   return (
     <div className="flex flex-col gap-3 p-3">
-      <p className="text-sm"><span className="text-2xs font-medium tracking-wide text-muted uppercase">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
+      <p className="text-sm"><span className="text-2xs font-medium text-muted">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div className="min-w-0 rounded-md border border-line"><OverheadTable lines={overheadLines(m.overhead_ms)} /></div>
         <div className="min-w-0 rounded-md border border-line"><AgentsTable m={m} /></div>

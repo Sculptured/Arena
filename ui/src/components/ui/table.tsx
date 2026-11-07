@@ -11,7 +11,7 @@ export function Table({ className, wrapperClassName, ...props }: ComponentProps<
 }
 
 export function Th({ className, ...props }: ComponentProps<'th'>) {
-  return <th className={cn('h-8 border-b border-line bg-sunken px-3 text-left text-2xs font-medium tracking-wide whitespace-nowrap text-muted uppercase', className)} {...props} />;
+  return <th className={cn('h-8 border-b border-line bg-sunken px-3 text-left text-2xs font-medium whitespace-nowrap text-muted', className)} {...props} />;
 }
 
 /** A row header cell: the first column naming the row. */

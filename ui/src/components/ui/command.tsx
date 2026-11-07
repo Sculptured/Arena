@@ -25,7 +25,7 @@ export function CommandEmpty(props: ComponentProps<typeof CommandPrimitive.Empty
 }
 
 export function CommandGroup({ className, ...props }: ComponentProps<typeof CommandPrimitive.Group>) {
-  return <CommandPrimitive.Group className={cn('[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-muted [&_[cmdk-group-heading]]:uppercase', className)} {...props} />;
+  return <CommandPrimitive.Group className={cn('[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:[&_[cmdk-group-heading]]:text-muted [&_[cmdk-group-heading]]:', className)} {...props} />;
 }
 
 export function CommandItem({ className, ...props }: ComponentProps<typeof CommandPrimitive.Item>) {

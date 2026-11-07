@@ -182,10 +182,12 @@ describe('fork panel', () => {
 
 describe('model and cost per provider', () => {
   it('lists the provider next to the model', () => {
-    expect(agentModelLine(agent())).toBe('deepseek/deepseek-chat-v3.1 (default) · OpenRouter');
-    expect(agentModelLine(agent({ provider: 'anthropic', model: 'claude-x' }))).toBe('claude-x · Anthropic');
-    expect(agentModelLine(agent({ provider: 'local:ollama', model: 'llama3.3' }))).toBe('llama3.3 · ollama (local)');
-    expect(agentModelLine(agent({ kind: 'claude_code', model: 'sonnet' }))).toBe('sonnet · Claude Code');
+    expect(agentModelLine(agent())).toBe('OpenRouter · deepseek/deepseek-chat-v3.1 (default)');
+    expect(agentModelLine(agent({ provider: 'anthropic', model: 'claude-x' }))).toBe('Anthropic · claude-x');
+    expect(agentModelLine(agent({ provider: 'local:ollama', model: 'llama3.3' }))).toBe('ollama (local) · llama3.3');
+    expect(agentModelLine(agent({ kind: 'claude_code', model: 'sonnet' }))).toBe('Claude Code · Sonnet');
+    expect(agentModelLine(agent({ kind: 'claude_code', model: 'haiku' }))).toBe('Claude Code · Haiku');
+    expect(agentModelLine(agent({ kind: 'codex', model: null }))).toBe('Codex · Default model');
   });
 
   it('OpenAI and Anthropic cost is unknown; a local server has no API charge', () => {

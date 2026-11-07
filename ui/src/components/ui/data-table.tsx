@@ -50,7 +50,7 @@ function HeaderRow<T>({ table }: { table: TableT<T> }) {
               <Th key={h.id} className={h.column.columnDef.meta?.className}
                 aria-sort={sort ? (sort === 'asc' ? 'ascending' : 'descending') : undefined}>
                 {h.column.getCanSort()
-                  ? <button className="inline-flex items-center gap-1 uppercase hover:text-fg" onClick={h.column.getToggleSortingHandler()}>
+                  ? <button className="inline-flex items-center gap-1 hover:text-fg" onClick={h.column.getToggleSortingHandler()}>
                     {flexRender(h.column.columnDef.header, h.getContext())}
                     {sort === 'asc' && <ArrowUp className="size-3" />}{sort === 'desc' && <ArrowDown className="size-3" />}
                   </button>

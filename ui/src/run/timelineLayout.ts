@@ -2,6 +2,7 @@
 // connectors of messages and handoffs between lanes, each lane's active span, the time ticks,
 // and which marks have room for their label (system kind and read/write).
 import { type LaneRow, type Mark, type Span, position } from '../control/lanes';
+import type { Pause } from './flow';
 
 export const LANE_H = 36;
 /** Space kept clear at each end of the track so edge marks are whole. */
@@ -28,7 +29,7 @@ export function shortLabel(m: Mark): string {
   if (m.system && (m.kind === 'action' || m.kind === 'interlock')) return m.system;
   if (m.kind === 'message') return `→ ${m.to === '*' ? 'everyone' : m.to ?? 'next'}`;
   if (m.kind === 'model' || m.kind === 'start') return '';
-  if (m.kind === 'end') return m.outcome === 'ok' ? '' : 'failed';
+  if (m.kind === 'end') return m.outcome === 'ok' ? '' : 'Failed';
   return m.label;
 }
 
@@ -58,11 +59,19 @@ export interface Bar {
   x2: number;
 }
 
+/** A pause drawn across the lanes: nothing could happen in it. */
+export interface Band {
+  x1: number;
+  x2: number;
+  open: boolean;
+}
+
 export interface Layout {
   placed: Placed[];
   connectors: Connector[];
   ticks: Tick[];
   bars: Bar[];
+  bands: Band[];
 }
 
 /** How far right of its mark's centre a label reaches at 11 px (shape, gap, text, padding), plus room before the next shape. */
@@ -106,8 +115,8 @@ function connectorsOf(placed: Placed[], laneIndex: Map<string, number>): Connect
   });
 }
 
-/** The whole layout for a track `width` pixels wide; `models` false leaves model calls out. */
-export function layoutTimeline(lanes: LaneRow[], span: Span, width: number, models = true): Layout {
+/** The whole layout for a track `width` pixels wide; `models` false leaves model calls out; `pauses` become bands. */
+export function layoutTimeline(lanes: LaneRow[], span: Span, width: number, models = true, pauses: Pause[] = []): Layout {
   const xOf = (at: number) => (Number.isNaN(at) ? TRACK_PAD : TRACK_PAD + position(at, span) * (width - 2 * TRACK_PAD));
   const laneIndex = new Map(lanes.map((l, i) => [l.id, i]));
   const placed = lanes.flatMap((l, i) => placeLane(l.marks.filter((m) => models || m.kind !== 'model'), i, xOf, width));
@@ -115,7 +124,8 @@ export function layoutTimeline(lanes: LaneRow[], span: Span, width: number, mode
     const xs = placed.filter((p) => p.lane === i).map((p) => p.x);
     return xs.length > 1 ? [{ lane: i, x1: Math.min(...xs), x2: Math.max(...xs) }] : [];
   });
-  return { placed, connectors: connectorsOf(placed, laneIndex), ticks: ticksOf(span, width), bars };
+  const bands = pauses.map((p) => ({ x1: xOf(p.start), x2: Math.max(xOf(p.end), xOf(p.start) + 2), open: p.open }));
+  return { placed, connectors: connectorsOf(placed, laneIndex), ticks: ticksOf(span, width), bars, bands };
 }
 
 /** Every step in the order the timeline moves through with ←/→ (model calls only when shown). */

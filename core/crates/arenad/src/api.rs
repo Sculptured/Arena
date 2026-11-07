@@ -40,6 +40,7 @@ use crate::{
 };
 
 mod external;
+mod flow;
 mod names;
 mod suites;
 mod twin;
@@ -59,20 +60,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/branches/{id}/rows", get(rows))
         .route("/api/branches/{id}/fork", post(fork_branch))
         .route("/api/branches/{id}/restore-plan", get(get_restore_plan))
-        .route("/api/branches/{id}/agents", post(external::register))
-        .route(
-            "/api/branches/{id}/agents/{agent}/end",
-            post(external::end_agent),
-        )
-        .route(
-            "/api/branches/{id}/agents/{agent}/usage",
-            post(external::report_usage),
-        )
-        .route("/api/branches/{id}/finish", post(external::finish))
         .route("/api/compare", get(compare_branches))
         .route("/api/world", get(world::world))
         .route("/api/usage", get(world::usage))
         .route("/api/gc", post(world::gc))
+        .merge(external::router())
+        .merge(flow::router())
         .merge(suites::router())
         .merge(twin::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
@@ -429,6 +422,7 @@ async fn get_branch(
     let mut v = serde_json::to_value(branch).map_err(anyhow::Error::from)?;
     v["events"] = serde_json::to_value(events).map_err(anyhow::Error::from)?;
     v["metrics"] = serde_json::to_value(m).map_err(anyhow::Error::from)?;
+    v["paused"] = json!(flow::is_paused(&state, &id));
     Ok(Json(v))
 }
 

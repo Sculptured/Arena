@@ -40,12 +40,12 @@ export async function loadTeam(): Promise<Team> {
   return readStoredTeam() ?? (await defaultTeam());
 }
 
-/** The team as a run is started with: a provider only on API-mode agents, trimmed, never blank. */
 /**
  * The team as a run takes it: an open agent's blank provider dropped; with the `external` runner,
- * every agent is `external` (the system that drives the run runs them, not arenad).
+ * every agent is `external` (the system that drives the run runs them, not arenad). The board
+ * stays in the browser.
  */
-export function teamForRun(team: Team, runner: Runner = 'chain'): Team {
+export function teamForRun({ board: _board, ...team }: Team, runner: Runner = 'chain'): Team {
   return {
     ...team,
     agents: team.agents.map(({ provider, ...a }) => {

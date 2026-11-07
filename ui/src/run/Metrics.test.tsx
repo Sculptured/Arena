@@ -30,7 +30,7 @@ describe('metrics', () => {
   });
   it('shows each agent with its model and tokens', () => {
     const html = renderToStaticMarkup(<MetricsPanel m={metrics()} />);
-    expect(html).toContain('m · anthropic');
+    expect(html).toContain('Anthropic · m');
     expect(html).toContain('150 (100 / 50)');
   });
   it('says how the agents ran, old runs included', () => {

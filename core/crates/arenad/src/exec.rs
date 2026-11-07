@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::{
     clock::BranchClock,
+    flow::{FlowControl, STOPPED},
     model::*,
     overhead::{self, Cat},
     recorded::LEGACY_PART,
@@ -44,6 +45,8 @@ pub struct BranchCtx {
     gate: tokio::sync::Mutex<()>,
     /// Set once something has begun to end the branch.
     ending: std::sync::atomic::AtomicBool,
+    /// Paused, stopped or running: calls wait while the branch is paused.
+    pub flow: FlowControl,
 }
 
 impl BranchCtx {
@@ -63,6 +66,7 @@ impl BranchCtx {
             fatal: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
             ending: Default::default(),
+            flow: FlowControl::default(),
         }
     }
 
@@ -166,6 +170,33 @@ impl BranchCtx {
     ) -> anyhow::Result<Event> {
         let _paused = self.clock.paused();
         store.append(&self.branch_id, agent, kind, payload).await
+    }
+
+    /// Pauses the branch: new tool calls and model calls wait and the world clock stands still
+    /// until `resume`. Records `Pause`; false when the branch wasn't running.
+    pub async fn pause(&self, store: &Store) -> anyhow::Result<bool> {
+        if !self.flow.pause() {
+            return Ok(false);
+        }
+        self.clock.pause();
+        self.append(store, None, EventKind::Pause, json!({}))
+            .await?;
+        Ok(true)
+    }
+
+    /// Resumes a paused branch: the calls that wait go on and the clock runs again. Records
+    /// `Resume` with how long the pause lasted (counted as arena's time, not the run's); false
+    /// when the branch wasn't paused.
+    pub async fn resume(&self, store: &Store) -> anyhow::Result<bool> {
+        let Some(lasted) = self.flow.resume() else {
+            return Ok(false);
+        };
+        let ms = lasted.as_secs_f64() * 1000.0;
+        overhead::add(&self.branch_id, Cat::Pause, ms);
+        self.clock.resume();
+        let payload = json!({"paused_ms": ms.round() as i64});
+        self.append(store, None, EventKind::Resume, payload).await?;
+        Ok(true)
     }
 
     /// Waits for the branch gate, counting the wait as arena's overhead.
@@ -443,6 +474,7 @@ impl ToolExec {
         args: Value,
         tool_call_id: Option<String>,
     ) -> Result<Value, String> {
+        branch.flow.go().await.map_err(|_| STOPPED.to_string())?;
         let _gate = branch.gate_timed().await;
         if talk::is_talk(branch, name) {
             return self.talk(branch, agent, name, args, tool_call_id).await;

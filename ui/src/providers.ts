@@ -43,14 +43,23 @@ export const costIsUnknown = (id: string) => kindOf(id) === 'openai' || kindOf(i
 export const teamProviders = (team: Team | null | undefined): string[] =>
   [...new Set((team?.agents ?? []).filter((a) => a.kind === 'open').map(providerOf))];
 
-/** "deepseek/… (default) · OpenRouter", "sonnet · Claude Code": the model and where it runs. */
-export function agentModelLine(a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>): string {
-  const model = a.model?.trim();
-  if (a.kind !== 'open') return model ? `${model} · ${MODE_LABEL[a.kind]}` : MODE_LABEL[a.kind];
-  const p = providerOf(a);
-  const m = model || (hasDefaultModel(p) ? `${DEFAULT_OPENROUTER_MODEL} (default)` : 'no model');
-  return `${m} · ${providerName(p)}`;
+/** "sonnet" → "Sonnet"; a full model id stays as it is. */
+export const modelWord = (m: string) => (/^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m);
+
+/** The model an agent runs on, in words: "Sonnet" (Claude Code's default when none is named), "Default model", "deepseek/… (default)". */
+export function modelOf(a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>): string {
+  const m = a.model?.trim();
+  if (a.kind === 'open') return m || (hasDefaultModel(providerOf(a)) ? `${DEFAULT_OPENROUTER_MODEL} (default)` : 'No model');
+  // arenad starts Claude Code with Sonnet when the team names no model.
+  if (!m) return a.kind === 'claude_code' ? 'Sonnet' : a.kind === 'external' ? 'Its own model' : 'Default model';
+  return modelWord(m);
 }
+
+/** Where an agent runs: its CLI, its API provider, or the external system. */
+export const runsOn = (a: Pick<AgentSpec, 'kind' | 'provider'>) => (a.kind === 'open' ? providerName(providerOf(a)) : MODE_LABEL[a.kind]);
+
+/** "Claude Code · Haiku", "OpenRouter · deepseek/… (default)": where an agent runs and on which model. Every agent label uses it. */
+export const agentModelLine = (a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>) => `${runsOn(a)} · ${modelOf(a)}`;
 
 export type ProviderState = 'ready' | 'unavailable' | 'not checked';
 

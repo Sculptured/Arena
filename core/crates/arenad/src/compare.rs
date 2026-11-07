@@ -70,9 +70,15 @@ fn signature(e: &Event) -> Signature<'_> {
     )
 }
 
-/// Each step's seq and signature, the world's views left out.
+/// Each step's seq and signature, the world's views and pauses left out.
 fn steps(evs: &[Event]) -> Vec<(i64, Signature<'_>)> {
-    (evs.iter().filter(|e| e.kind != EventKind::WorldView))
+    let step = |e: &&Event| {
+        !matches!(
+            e.kind,
+            EventKind::WorldView | EventKind::Pause | EventKind::Resume
+        )
+    };
+    (evs.iter().filter(step))
         .map(|e| (e.seq, signature(e)))
         .collect()
 }

@@ -181,6 +181,16 @@ the new branch live. Its answer gives each agent's recorded history before the f
 new branch, so the design resumes its agents its own way. A branch whose design never calls `finish` stays running
 until arenad restarts (it is then `interrupted`).
 
+## Pausing and stopping
+
+Any live branch can be paused (`POST /api/branches/{id}/pause`), whoever drives its agents: arenad's own runners,
+in CLI or API mode, or an external system. While it is paused, every new tool call and every model call through
+the gateway waits (it doesn't fail), and the world clock stands still; `resume` lets them go on. A CLI agent's
+own model calls don't pass through arenad, so it may think on, but it can't act until the branch resumes; time
+paused doesn't count against its time limit. `pause` and `resume` are recorded as events, and the pause's length
+is counted as overhead (`pause`), so the estimate in production leaves it out. `stop` ends a live branch
+`stopped` without scoring it: the agents are dropped where they are and calls that wait are refused.
+
 ## What the world says about itself
 
 An integration may say in `describe` what kind of system it is: `system: {kind, product, stands_in_for?,

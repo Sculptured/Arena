@@ -1,6 +1,7 @@
 // The twin's scrubber: a track over the branch's steps, a stop at every view, marks where a
 // disruption fired, a call was refused and the branch forked; what happened at a step; and where
 // "Rewind here" forks.
+import { isWorldActor } from '../control/lanes';
 import { type Nav, moveIn } from '@/lib/keys';
 import { actionsOf } from '../control/actions';
 import type { Event, Team } from '../types';
@@ -108,7 +109,7 @@ const FORKABLE = new Set<Event['kind']>(['tool_call', 'model_call', 'message', '
  * step after it (a fork reruns from its step and reuses everything before). Null at the end.
  */
 export function rewindSeq(events: Event[], seq: number): number | null {
-  const next = events.filter((e) => e.seq > seq && FORKABLE.has(e.kind) && e.agent != null && e.agent !== 'link').map((e) => e.seq);
+  const next = events.filter((e) => e.seq > seq && FORKABLE.has(e.kind) && !isWorldActor(e.agent)).map((e) => e.seq);
   return next.length ? Math.min(...next) : null;
 }
 

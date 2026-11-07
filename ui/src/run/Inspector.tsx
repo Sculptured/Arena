@@ -19,7 +19,7 @@ const obj = (v: unknown): Payload => (v && typeof v === 'object' ? (v as Payload
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-1 border-t border-line px-3 py-2">
-      <h3 className="text-2xs font-medium tracking-wide text-muted uppercase">{title}</h3>
+      <h3 className="text-2xs font-medium text-muted">{title}</h3>
       {children}
     </section>
   );
@@ -90,7 +90,7 @@ function PermitLine({ events, event }: { events: Event[]; event: Event }) {
     <Section title="Permit">
       {permit
         ? <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <StatusMark mark={permit.approved === false ? { glyph: '✕', word: 'rejected', abnormal: true } : permit.approved ? { glyph: '◆', word: 'granted', abnormal: false } : { glyph: '◇', word: 'pending', abnormal: false }} />
+          <StatusMark mark={permit.approved === false ? { glyph: '✕', word: 'Rejected', abnormal: true } : permit.approved ? { glyph: '◆', word: 'Granted', abnormal: false } : { glyph: '◇', word: 'Pending', abnormal: false }} />
           <span className="font-mono text-2xs">{permit.id}</span><span className="text-muted">{permit.decision || permit.action}</span>
         </div>
         : <StatusMark mark={{ glyph: '◇', word: `no permit: ${missing} is not in approvals`, abnormal: true }} />}
@@ -108,7 +108,7 @@ function ToolCall({ branchId, event, events, auto }: { branchId: string; event: 
       {p.error ? <Section title="Error"><Json value={p.error} error /></Section> : null}
       <Block title="Arguments" value={p.args} />
       <Section title="Reads / writes">
-        <KeyList label="reads" keys={reads} /><KeyList label="writes" keys={writes} />
+        <KeyList label="Reads" keys={reads} /><KeyList label="Writes" keys={writes} />
         {typeof p.snapshot_error === 'string' && <ErrorState error={`Saving after this step failed: ${p.snapshot_error}`} hint="Reruns from this step can't use a save." />}
         {savedLine(p) && <span className="text-xs text-muted">{savedLine(p)}</span>}
       </Section>
@@ -156,12 +156,12 @@ function Check({ p }: { p: Payload }) {
   const diff = keysOf(p.differing_rows);
   return (
     <>
-      <Section title="Outcome"><StatusMark mark={p.passed ? { glyph: '✓', word: 'passed', abnormal: false } : { glyph: '✕', word: 'failed', abnormal: true }} /></Section>
+      <Section title="Outcome"><StatusMark mark={p.passed ? { glyph: '✓', word: 'Passed', abnormal: false } : { glyph: '✕', word: 'Failed', abnormal: true }} /></Section>
       {checks.length > 0 && (
         <Section title={`Checks (${checks.filter((c) => c.passed).length}/${checks.length})`}>
           <ul className="flex flex-col gap-0.5">{checks.map((c) => (
             <li key={c.name} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs" title={c.detail}>
-              <StatusMark mark={c.passed ? { glyph: '✓', word: 'pass', abnormal: false } : { glyph: '✕', word: 'fail', abnormal: true }} />
+              <StatusMark mark={c.passed ? { glyph: '✓', word: 'Pass', abnormal: false } : { glyph: '✕', word: 'Fail', abnormal: true }} />
               <span className="font-mono text-2xs">{c.name}</span>{c.safety && <Tag tone={c.passed ? undefined : 'alarm'}>◆ safety</Tag>}
               {!c.passed && c.detail && <span className="w-full pl-6 text-2xs text-muted">{c.detail}</span>}
             </li>
@@ -188,7 +188,7 @@ function AgentEnd({ p, team, agent }: { p: Payload; team?: Team; agent: string |
   return (
     <Section title="Outcome">
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <StatusMark mark={ok ? { glyph: '■', word: 'finished', abnormal: false } : { glyph: '✕', word: 'failed', abnormal: true }} />
+        <StatusMark mark={ok ? { glyph: '■', word: 'Finished', abnormal: false } : { glyph: '✕', word: 'Failed', abnormal: true }} />
         {typeof p.error === 'string' && p.error && <span className="text-alarm">{p.error}</span>}
       </span>
       <span className="text-xs text-muted">{bits.join(' · ')}</span>
