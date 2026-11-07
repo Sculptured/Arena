@@ -185,9 +185,10 @@ pub fn named_saves(branch: &str, events: &[Event]) -> BTreeSet<NamedSave> {
         .collect()
 }
 
-/// True for a tool call that committed a write.
+/// True for a tool call that committed a write: one that names keys it wrote, refused or not (a
+/// part may change on a call it refuses, when a scheduled disruption fires).
 fn wrote(payload: &Value) -> bool {
-    payload["error"].is_null() && payload["writes"].as_array().is_some_and(|w| !w.is_empty())
+    payload["writes"].as_array().is_some_and(|w| !w.is_empty())
 }
 
 #[cfg(test)]

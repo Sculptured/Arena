@@ -8,6 +8,7 @@ use tokio_postgres::Row;
 use super::{new_id, Store};
 use crate::{
     model::{Runner, Team},
+    scenario::Scenario,
     suite::{slots_of, Slot, Suite},
 };
 
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS suite_runs (
     error text,
     PRIMARY KEY (suite_id, ord)
 );
+ALTER TABLE suites ADD COLUMN IF NOT EXISTS scenario jsonb NOT NULL DEFAULT '{}';
 "#;
 
 /// Built-in suites arenad was driving when it stopped get no more runs.
@@ -43,7 +45,14 @@ pub(super) const INTERRUPT: &str = "UPDATE suites SET ended_at = now(), \
      WHERE runner <> 'external' AND ended_at IS NULL";
 
 const SUITE_COLS: &str =
-    "id, name, team, tasks, repeats, runner, benchmark, created_at, ended_at, error";
+    "id, name, team, tasks, repeats, runner, benchmark, created_at, ended_at, error, scenario";
+/// Inserts a suite (`$1`..`$7`, `$11` the scenario) and its slots (`$8`..`$10`, in arrays).
+const INSERT_SUITE: &str =
+    "WITH s AS (INSERT INTO suites (id, name, team, tasks, repeats, runner, benchmark, scenario)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $11) RETURNING id)
+           INSERT INTO suite_runs (suite_id, ord, task_id, repeat)
+           SELECT s.id, u.o, u.t, u.r
+           FROM s, unnest($8::int[], $9::text[], $10::int[]) AS u(o, t, r)";
 const SLOT_COLS: &str = "ord, task_id, repeat, claimed, run_id, branch_id, error";
 
 /// What a new suite is: its team, tasks, repeats, runner and benchmark.
@@ -54,6 +63,7 @@ pub struct NewSuite<'a> {
     pub repeats: i32,
     pub runner: Runner,
     pub benchmark: &'a str,
+    pub scenario: &'a Scenario,
 }
 
 fn runner_word(r: Runner) -> Result<String> {
@@ -67,6 +77,7 @@ fn suite_from(r: &Row) -> Result<Suite> {
     let team: Value = r.get("team");
     let tasks: Value = r.get("tasks");
     let runner: String = r.get("runner");
+    let scenario: Value = r.get("scenario");
     Ok(Suite {
         id: r.get("id"),
         name: r.get("name"),
@@ -78,6 +89,7 @@ fn suite_from(r: &Row) -> Result<Suite> {
         created_at: r.get("created_at"),
         ended_at: r.get("ended_at"),
         error: r.get("error"),
+        scenario: serde_json::from_value(scenario).unwrap_or_default(),
     })
 }
 
@@ -101,13 +113,9 @@ impl Store {
         let ords: Vec<i32> = slots.iter().map(|s| s.ord).collect();
         let tasks: Vec<&str> = slots.iter().map(|s| s.task_id.as_str()).collect();
         let repeats: Vec<i32> = slots.iter().map(|s| s.repeat).collect();
-        let sql =
-            "WITH s AS (INSERT INTO suites (id, name, team, tasks, repeats, runner, benchmark)
-                               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id)
-                   INSERT INTO suite_runs (suite_id, ord, task_id, repeat)
-                   SELECT s.id, u.o, u.t, u.r
-                   FROM s, unnest($8::int[], $9::text[], $10::int[]) AS u(o, t, r)";
-        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 10] = [
+        let sql = INSERT_SUITE;
+        let scenario = serde_json::to_value(new.scenario)?;
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 11] = [
             &id,
             &new.name,
             &serde_json::to_value(new.team)?,
@@ -118,6 +126,7 @@ impl Store {
             &ords,
             &tasks,
             &repeats,
+            &scenario,
         ];
         self.client.execute(sql, &params).await?;
         self.suite(&id)

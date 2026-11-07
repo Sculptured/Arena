@@ -387,6 +387,7 @@ fn a_builtin_suite_left_running_is_stopped_when_arenad_starts_again() {
         let store = Store::open_named(&pg::admin(), &name).await.unwrap();
         let team: Team = serde_json::from_value(poker(1)).unwrap();
         let tasks = vec!["t1".to_string()];
+        let scenario = Default::default();
         let new = |runner| NewSuite {
             name: "s",
             team: &team,
@@ -394,6 +395,7 @@ fn a_builtin_suite_left_running_is_stopped_when_arenad_starts_again() {
             repeats: 1,
             runner,
             benchmark: "b",
+            scenario: &scenario,
         };
         let builtin = store.create_suite(new(Runner::Chain)).await.unwrap();
         let external = store.create_suite(new(Runner::External)).await.unwrap();

@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{Runner, Team};
+use crate::scenario::Scenario;
 
 pub use compare::{compare, Comparison, Verdict};
 pub use drive::{claim_external, spawn_builtin, ExternalClaim};
@@ -43,6 +44,9 @@ pub struct Suite {
     pub ended_at: Option<DateTime<Utc>>,
     /// Why a built-in suite stopped before its last run.
     pub error: Option<String>,
+    /// The expanded scenario every run of the suite starts in (empty: the tasks as they are).
+    #[serde(default)]
+    pub scenario: Scenario,
 }
 
 /// One task × repeat of a suite and the run that filled it.

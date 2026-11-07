@@ -11,6 +11,7 @@ use crate::{
     model::*,
     overhead::{self, Cat},
     prompts,
+    scenario::{self, Scenario},
     store::{BranchId, RunId},
     world::{self, Plan, World, WorldFrom},
 };
@@ -59,19 +60,33 @@ pub async fn start_run_with(
     team: Team,
     runner: Runner,
 ) -> Result<(RunId, BranchId)> {
-    let (run_id, ctx) = begin_run(state, task_id, team, Rules::new(runner)).await?;
+    start_run_in(state, task_id, team, runner, &Scenario::default()).await
+}
+
+/// `start_run_with` in `scenario` (its disruptions added to the task's setup).
+pub async fn start_run_in(
+    state: &Arc<AppState>,
+    task_id: &str,
+    team: Team,
+    runner: Runner,
+    scenario: &Scenario,
+) -> Result<(RunId, BranchId)> {
+    let rules = Rules::new(runner);
+    let (run_id, ctx) = begin_run(state, task_id, team, rules, scenario).await?;
     let branch_id = ctx.branch_id.clone();
     spawn_branch(state, Arc::new(ctx), StartPoint::default());
     Ok((run_id, branch_id))
 }
 
-/// Creates a run and its first branch, starts its world from the base save and records
-/// `RunStart` with `rules`: the branch, ready to be driven.
+/// Creates a run and its first branch, starts its world from the base save, records `RunStart`
+/// with `rules` and `scenario`, and makes the task's setup (with the scenario's disruptions): the
+/// branch, ready to be driven.
 pub async fn begin_run(
     state: &AppState,
     task_id: &str,
     team: Team,
     rules: Rules,
+    scenario: &Scenario,
 ) -> Result<(RunId, BranchCtx)> {
     let bench = state.bench().await?;
     if !bench.tasks.iter().any(|t| t.id == task_id) {
@@ -88,22 +103,40 @@ pub async fn begin_run(
         task_id,
         team: &team,
         rules,
+        scenario,
     };
     let started = start_world(state, &bench, planned, start).await;
-    let world = setup_or_infra_error(state, &branch_id, started).await?;
+    let (world, start_seq) = setup_or_infra_error(state, &branch_id, started).await?;
     let ctx = BranchCtx::new(branch_id, Arc::new(world), team, task_id.to_string());
     let ctx = ctx.with_rules(rules);
-    set_up_task(state, &bench, &ctx).await?;
+    set_up_task(state, &bench, &ctx, scenario, start_seq).await?;
     Ok((run_id, ctx))
 }
 
-/// Makes the task's setup calls on a new run's world; when one fails, stops the world and ends
-/// the branch `infra_error` with why.
-async fn set_up_task(state: &AppState, bench: &BenchDescribe, ctx: &BranchCtx) -> Result<()> {
+/// Makes the task's setup calls (with `scenario`'s disruptions) on a new run's world, then records
+/// the world's view after them (after `RunStart`, at `start_seq`, when nothing was written); when
+/// a call fails, stops the world and ends the branch `infra_error` with why.
+async fn set_up_task(
+    state: &AppState,
+    bench: &BenchDescribe,
+    ctx: &BranchCtx,
+    scenario: &Scenario,
+    start_seq: i64,
+) -> Result<()> {
     let task = bench.tasks.iter().find(|t| t.id == ctx.task_id);
-    let calls = task.map_or(&[][..], |t| &t.setup[..]);
-    let Err(e) = ToolExec::new(state.store.clone()).setup(ctx, calls).await else {
-        return Ok(());
+    let task_calls = task.map_or(&[][..], |t| &t.setup[..]);
+    let exec = ToolExec::new(state.store.clone());
+    let calls = scenario::setup_calls(task_calls, scenario, bench.scenario_options.as_ref());
+    let done = match calls {
+        Ok(calls) => exec.setup(ctx, &calls).await,
+        Err(e) => Err(e),
+    };
+    let e = match done {
+        Ok(wrote) => {
+            exec.record_view(ctx, wrote.unwrap_or(start_seq)).await;
+            return Ok(());
+        }
+        Err(e) => e,
     };
     ctx.world.stop().await;
     setup_failed(state, &ctx.branch_id, e.clone()).await;
@@ -116,6 +149,7 @@ struct RunStartOf<'a> {
     task_id: &'a str,
     team: &'a Team,
     rules: Rules,
+    scenario: &'a Scenario,
 }
 
 /// A new branch's setup result; a failed setup ends the branch `infra_error` with its message.
@@ -138,15 +172,16 @@ pub async fn setup_failed(state: &AppState, branch_id: &str, error: String) {
 
 /// Starts the first branch's world from the base save and records `RunStart`:
 /// `{task_id, team, benchmark, world, seed, base_seed, fingerprints, saves, runner, handoff,
-/// systems, tools}` (`saves` names only the parts that keep saves; `base_seed` is the seed the
-/// base save was made with; `runner` and `handoff` are the run's rules; `systems` and `tools` are
-/// what `World::systems` and `World::tool_info` say).
+/// systems, tools, scenario?}` (`saves` names only the parts that keep saves; `base_seed` is the
+/// seed the base save was made with; `runner` and `handoff` are the run's rules; `systems` and
+/// `tools` are what `World::systems` and `World::tool_info` say; `scenario` the expanded scenario,
+/// when the run has one). The world, and `RunStart`'s seq.
 async fn start_world(
     state: &AppState,
     bench: &BenchDescribe,
     planned: Plan,
     of: RunStartOf<'_>,
-) -> Result<World> {
+) -> Result<(World, i64)> {
     let branch_id = of.branch_id;
     let seed = new_seed();
     let hub = state.hub.clone();
@@ -154,20 +189,22 @@ async fn start_world(
     let world = World::start_planned(hub, bench, planned, branch_id, seed, WorldFrom::Base).await?;
     overhead::add_since(branch_id, Cat::Restore, since);
     let start = run_start(bench, &world, seed, &of);
-    if let Err(e) = state
+    match state
         .store
         .append(branch_id, None, EventKind::RunStart, start)
         .await
     {
-        world.stop().await;
-        return Err(e);
+        Ok(e) => Ok((world, e.seq)),
+        Err(e) => {
+            world.stop().await;
+            Err(e)
+        }
     }
-    Ok(world)
 }
 
 /// The payload of `RunStart` (see `start_world`).
 fn run_start(bench: &BenchDescribe, world: &World, seed: u64, of: &RunStartOf<'_>) -> Value {
-    json!({
+    let mut start = json!({
         "task_id": of.task_id,
         "team": of.team,
         "benchmark": bench.name,
@@ -180,7 +217,11 @@ fn run_start(bench: &BenchDescribe, world: &World, seed: u64, of: &RunStartOf<'_
         "handoff": of.rules.handoff_word(),
         "systems": world.systems(),
         "tools": world.tool_info(),
-    })
+    });
+    if !of.scenario.is_empty() {
+        start["scenario"] = json!(of.scenario);
+    }
+    start
 }
 
 /// Runs `run_branch` on its own task; a panic still ends the branch as `infra_error`. The branch

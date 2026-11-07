@@ -26,6 +26,7 @@ pub fn suite(id: &str, tasks: &[&str], repeats: i32) -> Suite {
         created_at: t0(),
         ended_at: None,
         error: None,
+        scenario: Default::default(),
     }
 }
 

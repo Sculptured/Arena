@@ -21,6 +21,7 @@ pub mod replay;
 pub mod restore;
 pub mod runner;
 pub mod saves;
+pub mod scenario;
 pub mod store;
 pub mod suite;
 pub mod ticker;

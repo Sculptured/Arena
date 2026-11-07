@@ -83,6 +83,9 @@ real product. Each tool's `effect` already says whether it reads or writes.
   part reports (an alarm, a shipment arriving) are recorded as world events.
 - `events` in a `call_tool` result are recorded as world events right after the call, for a part that has
   something to report at once (`advance` is the other way; parts without the clock have only this one).
+- A refused call (`error`) usually has empty `writes`. A part that changed anyway (a scheduled disruption fired
+  before it answered, see [Scheduled disruptions](#scheduled-disruptions)) names what it wrote and may give
+  `events`: arenad saves the part with that step, as for any write, so a fork after it keeps the change.
 - `save` reports `exact: false` when the save may not capture everything (an approximate save).
 - `inspect` with an empty `keys` list returns every key the part has for that target.
 - `usage` counts only what the part keeps outside `ARENA_SAVES` (databases, files elsewhere). arenad
@@ -99,11 +102,12 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket, setup?: [{part, tool, args}]}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket, setup?: [{part, tool, args}]}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool, scenario_options?: ScenarioOptions, view?: {docs: [part]}}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
 | `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?, safety?}]}` (`safety: true`: a hard safety check, an unsafe action rather than a missed goal, reported apart from the score) |
+| `view` (with `view`) | `{connections: {part: info}, docs: {part: {key: doc}}}` | `{view: TwinView}`: the world's digital twin now ([The world's view](#the-worlds-view)) |
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
   `Instructions` when it is absent.
@@ -159,6 +163,87 @@ start from the same base.
 - A tool a setup calls is the world's own: agents don't get it (as with links). A world is refused when a setup
   names a part it doesn't have or a tool that part doesn't list.
 - A task's gold save is made from the base with its setup calls first, then its gold actions.
+
+### A run's scenario
+
+A benchmark may let a run add disruptions to any of its tasks. `describe.scenario_options` lists them; a scenario
+builder shows them, and a run or suite names the ones it chose.
+
+```json
+{"base": ["cvx-2611-em-excursion", "..."],
+ "disruptions": [{"id": "courier-capacity", "label": "Usual courier loses capacity",
+                  "description": "Tundra has {capacity} shipments left after {after} quote(s); the agents are not told",
+                  "part": "logistics", "default": false,
+                  "params": [{"name": "after", "label": "After how many quote calls", "kind": "int", "min": 0, "max": 20, "default": 1},
+                             {"name": "capacity", "label": "Shipments left", "kind": "int", "min": 0, "max": 10, "default": 0}],
+                  "template": {"id": "courier-capacity", "when": {"after_calls": "{after}", "tool": "cold_chain_quotes"},
+                               "do": {"kind": "lane_capacity", "carrier": "Tundra Medical Courier", "origin": "US",
+                                      "destination": "US", "capacity": "{capacity}"},
+                               "text": "Tundra Medical Courier has {capacity} shipments left this week"}}],
+ "setup": {"logistics": {"tool": "logistics_scenario", "args": {"name": "base"}}}}
+```
+
+- `base` are the task ids a scenario may start from. A param is `kind: "int"` (with optional `min` and `max`) or
+  `kind: "choice"` (one of `choices`), and has a `default`. `default: true` on a disruption means a builder offers it
+  selected.
+- A run (`POST /api/runs`) or suite (`POST /api/suites`) asks for `scenario: {disruptions: [{id, params?}]}`. arenad
+  checks each choice (an option the benchmark lists, chosen once, its params known, in range or among the choices; a
+  param left out takes its default) and fills the option's `template`: in its strings, `{param}` is the param's
+  value; a string that is exactly one placeholder takes the value as it is (a number stays a number). The same
+  placeholders may appear in `label` and `description`, for a builder to fill the same way.
+- Each expanded disruption is appended to `args.disruptions` of the setup call of its `part` (the call of the tool
+  `setup` names for that part, else the part's last call). A task with no setup call of that part gets the call
+  `setup` gives for it. The tools `setup` names are the world's own, like any setup's. Several disruptions of one
+  part share its call.
+- The expanded scenario is recorded in the run's `RunStart` as `scenario: {disruptions: [{id, label, part, params,
+  disruption}]}` (`params` with the defaults filled in, `disruption` the filled template); a run without one has no
+  `scenario`. Forks and replays keep it: a fork's record starts with its parent's events (so with its `RunStart`), and
+  its parts restore from saves made after the setup or repeat the setup's recorded calls.
+
+### Scheduled disruptions
+
+The disruptions a scenario adds are scheduled inside simulated parts, and the agents are not told; they find out when
+they query or act. A part that offers them takes them in its scenario tool's `disruptions` (and its scenario's data
+may list more). The Python kit implements this convention (`arena_part.disruptions`, used by `jsonstate`).
+
+- A disruption is `{id, when: {after_calls, tool?}, do: {kind, ...}, text}`. `after_calls` counts the agents' tool calls
+  the part answered since setup (only calls of `tool`, when given); the world's own calls (a setup's, a link's) count
+  for nothing. It fires once, deterministically, **before** the part answers the counted call that crosses the count,
+  so that call already sees the changed world, and fires even if that call is then refused. One with `after_calls` 0
+  and no `tool` fires as it is armed, in the setup call.
+- When one fires, the call's `events` get `{kind: "disruption", text, data: {id, ...do}}`, which arenad records as a
+  world event at that moment. While one waits, each call it counts names `disruption/<id>` in `writes`, so arenad
+  saves the count with the step: the schedule is part of the part's state, so forks and replays meet the same
+  schedule. `inspect` shows `disruption/<id>` with its count (`seen`) and whether it `fired`.
+- `do.kind` is the part's own. pharma-logistics: `lane_capacity {carrier, origin, destination, capacity}`,
+  `lane_unavailable {carrier, origin, destination}`, `transit_delay {carrier, origin, destination, extra_days}`,
+  `reject_next {action, note?}` (the director rejects the next decision on that action). pharma-lims: `result_fails
+  {lot, test}` (the lot's test fails, so it can't be released).
+
+### The world's view
+
+A benchmark whose `describe` has `view: {docs: [part]}` draws the world's digital twin. After a run's setup, and after
+every step that wrote anything (an agent's, a link's or a setup's step, a disruption's included), arenad calls `view`
+and records an event `{kind: "world_view", payload: {seq_of, view}}` right after that step (and its world events and
+link steps): `seq_of` is the seq of the step the view follows (of `RunStart` when the setup wrote nothing). One view
+follows an agent's step and the link steps it set off. A failing or late (10 s) `view` is logged, records nothing and
+never fails the run. `GET /api/branches/{id}/views` lists a branch's views.
+
+`view` gets the world's `connections` (as a benchmark tool does) and, for each part `describe.view.docs` names, every
+doc of its live instance (`inspect` with no keys), as `docs: {part: {key: doc}}`. That is how it reads a part without
+`connect`, such as a simulated part kept in memory: those docs are cheap, and a part's `inspect` already says what
+its state is. A part with `connect` (a database, an ERP) is better read through it, with only what the view needs.
+`view` runs after every writing step, so keep it cheap (pharma's reads four ERP lists at once).
+
+```
+TwinView = {title, clock?: string,
+            areas: [{id, label, kind: "plant"|"lab"|"warehouse"|"customers"|"carriers"|"approvals"|string,
+                     items: [{id, label, status: string, abnormal: bool, detail?, qty?: number, unit?, due?, link?}]}],
+            flows: [{id, from: item id, to: item id, label, status: string, abnormal: bool}],
+            kpis: [{id, label, value: string, abnormal: bool}]}
+```
+
+Item ids are unique across the view, so flows and an item's `link` (an item it points at) can name them.
 
 ### Gates on tools
 

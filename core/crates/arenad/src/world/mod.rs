@@ -11,6 +11,7 @@ mod saving;
 mod scoring;
 mod standard;
 mod systems;
+mod view;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,7 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use parts::{
     proto::{
         BenchDescribe, BenchToolOutput, Describe, Effect, ExactKind, FromSave, Gate, Link, Mode,
-        ToolOutput, ToolSchema, WorldPart,
+        ToolOutput, ToolSchema, ViewInfo, WorldPart,
     },
     CallError, Client, Hub,
 };
@@ -205,6 +206,8 @@ pub struct World {
     tools: Vec<(ToolSchema, Route)>,
     links: Vec<Link>,
     gates: Vec<Gate>,
+    /// Present when the benchmark draws the world's view.
+    view: Option<ViewInfo>,
     connections: Map<String, Value>,
     track: Mutex<Track>,
 }
@@ -268,22 +271,16 @@ impl World {
         World::start_parts(hub, bench, planned, branch_id, seed, Some(&from)).await
     }
 
-    fn new(
-        hub: Arc<Hub>,
-        bench: &str,
-        bench_client: Option<Arc<Client>>,
-        tools: Vec<(ToolSchema, Route)>,
-        links: Vec<Link>,
-        gates: Vec<Gate>,
-    ) -> World {
+    fn new(hub: Arc<Hub>, bench: &str, bench_client: Option<Arc<Client>>, plan: Plan) -> World {
         World {
             hub,
             bench: bench.to_string(),
             bench_client,
             parts: vec![],
-            tools,
-            links,
-            gates,
+            tools: plan.tools,
+            links: plan.links,
+            gates: plan.gates,
+            view: plan.view,
             connections: Map::new(),
             track: Mutex::default(),
         }
@@ -299,14 +296,10 @@ impl World {
         seed: u64,
         from: Option<&StartSaves>,
     ) -> Result<World> {
-        let Plan {
-            parts,
-            tools,
-            links,
-            gates,
-        } = planned;
+        let mut planned = planned;
+        let parts = std::mem::take(&mut planned.parts);
         let bench_client = hub.client(&bench.name).await?;
-        let mut world = World::new(hub, &bench.name, Some(bench_client), tools, links, gates);
+        let mut world = World::new(hub, &bench.name, Some(bench_client), planned);
         for p in parts {
             if let Err(e) = world.add_part(p, branch_id, seed, from).await {
                 world.stop().await;
