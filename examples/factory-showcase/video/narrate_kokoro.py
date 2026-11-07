@@ -59,21 +59,23 @@ def caption_spans(sentence, start, length):
 
 
 def scene_audio(pipe, voice, speed, sc):
-    """The scene's samples and captions. Spoken and caption sentences pair up one to one."""
+    """The scene's samples, captions and sentence spans (for timing on-screen action to the voice).
+    Spoken and caption sentences pair up one to one."""
     shown, spoken = sentences(sc["text"]), sentences(sc.get("say", sc["text"]))
     if len(shown) != len(spoken):
         raise ValueError(f"{sc['id']}: `say` and `text` need the same number of sentences")
     pause = np.zeros(int(PAUSE_S * RATE), dtype=np.float32)
-    parts, caps, t = [], [], 0.0
+    parts, caps, spans, t = [], [], [], 0.0
     for i, (cap, say) in enumerate(zip(shown, spoken)):
         audio = synth(pipe, voice, speed, say)
         caps += caption_spans(cap, t, len(audio) / RATE)
+        spans.append({"start": round(t, 3), "end": round(t + len(audio) / RATE, 3)})
         parts.append(audio)
         t += len(audio) / RATE
         if i < len(shown) - 1:
             parts.append(pause)
             t += PAUSE_S
-    return np.concatenate(parts), caps
+    return np.concatenate(parts), caps, spans
 
 
 def narrate(script_path, out):
@@ -83,12 +85,12 @@ def narrate(script_path, out):
     out.mkdir(parents=True, exist_ok=True)
     scenes = []
     for sc in script["scenes"]:
-        audio, caps = scene_audio(pipe, voice, speed, sc)
+        audio, caps, spans = scene_audio(pipe, voice, speed, sc)
         wav = out / f"{sc['id']}.wav"
         sf.write(wav, audio, RATE)
         dur = len(audio) / RATE
         scenes.append({"id": sc["id"], "wav": str(wav), "duration": round(dur, 3),
-                       "text": sc["text"], "captions": caps})
+                       "text": sc["text"], "captions": caps, "sentences": spans})
         print(f"{sc['id']}: {dur:.1f}s", flush=True)
     (out / "timings.json").write_text(json.dumps({"scenes": scenes}, indent=1))
     print(f"total {sum(s['duration'] for s in scenes):.1f}s -> {out / 'timings.json'}")

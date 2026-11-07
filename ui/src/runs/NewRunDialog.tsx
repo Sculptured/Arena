@@ -87,7 +87,7 @@ export default function NewRunDialog({ open, onOpenChange }: { open: boolean; on
             </NativeSelect>
           </Field>
           <ScenarioBuilder s={scenario} busy={busy} />
-          <TeamSummary team={inputs.team} />
+          <TeamSummary team={inputs.team && teamForRun(inputs.team, runner)} />
           {inputs.error && <ErrorState error={inputs.error} hint="Nothing was started. Fix the cause and start again." />}
         </div>
         <DialogActions onCancel={() => onOpenChange(false)} onGo={start} disabled={busy || !selected || !!scenario.problem} label={busy ? 'Starting…' : 'Start run'} />

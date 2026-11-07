@@ -1,0 +1,18 @@
+# Summit video edit (build with examples/factory-showcase/video/build.py). Every clip is a
+# screencast of the real Arena UI on the demo arenad (record.mjs), driven by scripted agents.
+title: "Arena: rehearse the incident before it happens (scripted demo agents)"
+output: /home/alexsky2/sculptured-work-local/video/summit/out/summit-demo.mp4
+narration: /home/alexsky2/sculptured-work-local/video/summit/narration/timings.json
+watermark: "Demo · scripted agents · illustrative numbers"
+music: null
+scenes:
+  - {id: intro, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/intro.mp4, max_speed: 1.02, chapter: "Intro"}
+  - {id: world, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/world.mp4, max_speed: 1.02, chapter: "The digital twin"}
+  - {id: disrupt, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/disrupt.mp4, max_speed: 1.02, chapter: "Stage the incident"}
+  - {id: run, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/run.mp4, max_speed: 1.02, chapter: "Team v1 runs"}
+  - {id: fail, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/fail.mp4, max_speed: 1.02, chapter: "Refused, and a violation"}
+  - {id: rewind, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/rewind.mp4, max_speed: 1.02, chapter: "Rewind and swap"}
+  - {id: rerun, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/rerun.mp4, max_speed: 1.02, chapter: "Team v2 reruns"}
+  - {id: compare, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/compare.mp4, max_speed: 1.02, chapter: "Compare outcomes"}
+  - {id: batch, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/batch.mp4, max_speed: 1.02, chapter: "Batch: rates, not anecdotes"}
+  - {id: outro, type: clip, src: /home/alexsky2/sculptured-work-local/video/summit/media/outro.mp4, max_speed: 1.02, chapter: "Close"}
