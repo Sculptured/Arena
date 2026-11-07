@@ -277,8 +277,17 @@ export interface BenchmarkInfo {
   tasks?: number;
   world?: WorldPart[];
   error?: string;
-  /** The disruptions a run can be started with (absent when the benchmark offers none). */
-  scenario_options?: ScenarioOptions;
+}
+
+/** `GET /api/benchmark`: what the scenario builder and the world view need of the benchmark. */
+export interface BenchmarkDescription {
+  name: string;
+  version: string;
+  tasks: { id: string; reason: string }[];
+  /** The disruptions a run can be started with (null when the benchmark offers none). */
+  scenario_options: ScenarioOptions | null;
+  /** True when the benchmark draws the world's view. */
+  view: boolean;
 }
 
 export interface TaskSummary {
@@ -311,6 +320,8 @@ export interface CompareSide {
   tokens: number | null;
   cost_usd: number | null;
   cost_source: string | null;
+  /** The branch's own metrics, cost per agent included (absent in older answers). */
+  metrics?: Metrics;
 }
 
 export interface RowDiff {

@@ -58,7 +58,10 @@ fn combined_source(ends: &[AgentEndPayload]) -> Value {
     }
 }
 
-fn signature(e: &Event) -> (Option<&str>, EventKind, &Value, &Value) {
+/// What makes two steps the same: agent, kind, tool name and arguments.
+type Signature<'a> = (Option<&'a str>, EventKind, &'a Value, &'a Value);
+
+fn signature(e: &Event) -> Signature<'_> {
     (
         e.agent.as_deref(),
         e.kind,
@@ -67,17 +70,25 @@ fn signature(e: &Event) -> (Option<&str>, EventKind, &Value, &Value) {
     )
 }
 
-/// The first position at which the event lists differ in `(agent, kind, name, args)`; its seq
-/// (from `a`, else `b` when `a` is the shorter list). None when identical.
+/// Each step's seq and signature, the world's views left out.
+fn steps(evs: &[Event]) -> Vec<(i64, Signature<'_>)> {
+    (evs.iter().filter(|e| e.kind != EventKind::WorldView))
+        .map(|e| (e.seq, signature(e)))
+        .collect()
+}
+
+/// The first position at which the steps differ in `(agent, kind, name, args)`; its seq (from
+/// `a`, else `b` when `a` has fewer steps). The world's views are not steps and are skipped.
+/// None when identical.
 pub fn first_divergent_seq(a: &[Event], b: &[Event]) -> Option<i64> {
-    for (x, y) in a.iter().zip(b) {
-        if signature(x) != signature(y) {
-            return Some(x.seq);
-        }
+    let (a, b) = (steps(a), steps(b));
+    let differs = a.iter().zip(&b).find(|(x, y)| x.1 != y.1);
+    if let Some((x, _)) = differs {
+        return Some(x.0);
     }
     match a.len().cmp(&b.len()) {
-        std::cmp::Ordering::Less => Some(b[a.len()].seq),
-        std::cmp::Ordering::Greater => Some(a[b.len()].seq),
+        std::cmp::Ordering::Less => Some(b[a.len()].0),
+        std::cmp::Ordering::Greater => Some(a[b.len()].0),
         std::cmp::Ordering::Equal => None,
     }
 }
@@ -203,6 +214,15 @@ mod tests {
         assert_eq!(first_divergent_seq(&a, &b), Some(2));
         assert_eq!(first_divergent_seq(&a[..1], &a), Some(2));
         assert_eq!(first_divergent_seq(&a, &a[..1]), Some(2));
+        // A view only one side drew is not a step: the next step decides.
+        let view = |seq| ev(seq, "r", EventKind::WorldView, json!({"seq_of": 1}));
+        let viewed = vec![
+            call(1, "x", json!({"k": 1})),
+            view(2),
+            call(3, "y", json!({})),
+        ];
+        assert_eq!(first_divergent_seq(&a, &viewed), None);
+        assert_eq!(first_divergent_seq(&viewed, &b), Some(3));
     }
 
     fn branch() -> Branch {

@@ -50,9 +50,10 @@ export interface TwinView {
   kpis: TwinKpi[];
 }
 
-/** One entry of `GET /api/branches/{id}/views`. */
+/** One entry of `GET /api/branches/{id}/views`: the view after step `seq` (its `world_view` event is `event_seq`). */
 export interface BranchView {
   seq: number;
+  event_seq?: number;
   view: TwinView;
 }
 

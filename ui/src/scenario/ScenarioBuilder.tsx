@@ -3,7 +3,7 @@ import { scenarioOptions as fetchOptions } from '../api';
 import { Checkbox, Field, Input, NativeSelect } from '../components/ui/input';
 import { Tag } from '../components/ui/status';
 import { cn } from '@/lib/cn';
-import { type Selection, chosen, initialSelection, paramProblem, previewText, scenarioOf, scenarioProblem, toggled, withParam } from './scenario';
+import { type Selection, chosen, initialSelection, optionWords, paramProblem, previewText, scenarioOf, scenarioProblem, toggled, withParam } from './scenario';
 import type { DisruptionOption, ParamSpec, ParamValue, ScenarioOptions } from './types';
 
 /** The benchmark's `scenario_options`, loaded when a dialog opens; the selection starts at their defaults. */
@@ -42,13 +42,14 @@ function ParamInput({ spec, value, onChange, disabled }: { spec: ParamSpec; valu
 
 function DisruptionRow({ d, s, busy }: { d: DisruptionOption; s: ScenarioState; busy: boolean }) {
   const on = !!s.sel[d.id]?.on;
+  const words = optionWords(d, s.sel[d.id]?.params ?? {});
   return (
     <div className={cn('flex flex-col gap-2 border-b border-line px-2.5 py-2 last:border-b-0', on && 'bg-raised')}>
       <label className="flex cursor-pointer items-start gap-2">
         <Checkbox className="mt-0.5" checked={on} onChange={(e) => s.toggle(d.id, e.target.checked)} disabled={busy} />
         <span className="flex min-w-0 flex-col">
-          <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">{d.label}<Tag>{d.part}</Tag></span>
-          <span className="text-xs text-muted">{d.description}</span>
+          <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">{words.label}<Tag>{d.part}</Tag></span>
+          <span className="text-xs text-muted">{words.description}</span>
         </span>
       </label>
       {on && d.params.length > 0 && (

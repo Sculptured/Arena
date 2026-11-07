@@ -100,14 +100,19 @@ Logic lives in pure modules with tests, and components only render. For example:
   each. Tiles changed since the view before get an accent ring and a "what changed" line
   (`world/twin.ts`). The scrubber (`world/scrub.ts`) stops at each view, marks disruptions (▼) and
   refusals (▲), plays and pauses (space), and moves with ←/→. Rewind here opens the run page's fork
-  panel at the next agent step with "Swap architecture" chosen (`run/architecture.ts`). The selected
+  panel at the next agent step with "Swap architecture" chosen (`run/architecture.ts`): Team v2 adds its
+  rules to every agent's prompt; the single agent replaces the team (a fork's `team`, which only a run
+  an external system drives can take). The selected
   step is `?step=` in the address, shared by the run page, the process view and the world view. On
   phones the zones stack and flows are listed.
 - **Scenario builder** (`scenario/`). In the New run and New suite dialogs, from the benchmark's
-  `scenario_options`: a toggle and parameters per disruption, and a plain-words preview.
+  `scenario_options` (`GET /api/benchmark`): a toggle and parameters per disruption (label and
+  description filled with them, as arenad fills the template), and a plain-words preview.
 - **Outcome comparison** (`compare/`). At the top of the compare page: valid plan, safety
-  violations, orders on time, transport cost, agent cost and escalations for both branches, and a
-  divergence strip on one step axis.
+  violations, orders on time and transport cost (the twin's `orders_covered` and `transport_cost`
+  KPIs at the end), agent cost (as the agents reported it, labelled reported, and illustrative for
+  scripted usage) and escalations for both branches, and a divergence strip on one step axis. World
+  views are not steps: the timeline, run figures, process view and divergence skip them.
 - **Fixtures.** A build with `VITE_ARENA_FIXTURES=1` answers `/api` from the summit demo fixtures
   (`dev/fixtureApi.ts`), for screenshots without arenad.
 - **Trends.** Actions per minute for each system kind, tokens, cost and tool latency as sparklines,

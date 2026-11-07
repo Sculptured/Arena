@@ -8,39 +8,29 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 
 const isView = (v: unknown): v is TwinView => Array.isArray(obj(v).areas);
 
-/** A `world_view` event's payload (also accepted as a world event of kind `world_view`), or null. */
+/** A `world_view` event's payload, or null for any other event. */
 export function viewPayload(e: Event): WorldViewPayload | null {
   const p = obj(e.payload);
-  const inner = e.kind === 'world_event' && p.kind === 'world_view' ? obj(p.data) : p;
-  if (e.kind !== 'world_view' && !(e.kind === 'world_event' && p.kind === 'world_view')) return null;
-  if (!isView(inner.view)) return null;
-  return { seq_of: typeof inner.seq_of === 'number' ? inner.seq_of : e.seq, view: inner.view };
+  if (e.kind !== 'world_view' || !isView(p.view)) return null;
+  return { seq_of: typeof p.seq_of === 'number' ? p.seq_of : e.seq, view: p.view };
 }
 
 /** True for an event that is a view of the world, not a step. */
-export const isViewEvent = (e: Event) => viewPayload(e) !== null;
+export const isViewEvent = (e: Event) => e.kind === 'world_view';
 
 /** The views a branch's own events carry, keyed by the step each shows. */
 export function viewsFromEvents(events: Event[]): BranchView[] {
   const out: BranchView[] = [];
   for (const e of events) {
     const p = viewPayload(e);
-    if (p) out.push({ seq: p.seq_of, view: p.view });
+    if (p) out.push({ seq: p.seq_of, event_seq: e.seq, view: p.view });
   }
   return ordered(out);
 }
 
-/**
- * The views in step order, one per step: an entry keyed by its `world_view` event's own seq is
- * moved to the step it shows, so the view at a step is the latest one at or before it.
- */
-export function normalizeViews(raw: BranchView[], events: Event[]): BranchView[] {
-  const stepOf = new Map<number, number>();
-  for (const e of events) {
-    const p = viewPayload(e);
-    if (p && p.seq_of !== e.seq) stepOf.set(e.seq, p.seq_of);
-  }
-  return ordered(raw.filter((v) => isView(v.view)).map((v) => ({ seq: stepOf.get(v.seq) ?? v.seq, view: v.view })));
+/** `GET /api/branches/{id}/views` in step order, one per step (`seq` is the step each view follows). */
+export function normalizeViews(raw: BranchView[]): BranchView[] {
+  return ordered(raw.filter((v) => isView(v.view)));
 }
 
 function ordered(list: BranchView[]): BranchView[] {

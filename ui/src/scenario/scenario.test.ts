@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { scenarioOptions as opts } from './fixtures';
 import {
-  chosen, disruptionText, scenarioProblem, fill, initialSelection, outsideBase, paramProblem, previewText, recordedLine, scenarioOf,
+  chosen, disruptionText, scenarioProblem, fill, initialSelection, optionWords, outsideBase, paramProblem, previewText, recordedLine, scenarioOf,
   selectionProblem, toggled, withParam,
 } from './scenario';
 
@@ -62,13 +62,22 @@ describe('scenario builder', () => {
     expect(scenarioProblem(opts, toggled(sel, 'courier-capacity', false), ['carrier-no-capacity'])).toBeNull();
   });
 
+  it('fills an option\'s label and description with its parameters, as arenad does', () => {
+    const d = { ...retest, label: '{lot} retest fails', description: "{lot}'s sterility retest fails after {after} LIMS call(s); the agents are not told" };
+    expect(optionWords(d, { lot: 'CVX-2608', after: 2 })).toEqual({
+      label: 'CVX-2608 retest fails', description: "CVX-2608's sterility retest fails after 2 LIMS call(s); the agents are not told",
+    });
+    expect(optionWords(d, {}).label).toBe('{lot} retest fails');
+  });
+
   it('names picked tasks the disruptions do not apply to', () => {
     expect(outsideBase(opts, ['cvx-2611-em-excursion', 'carrier-no-capacity'])).toEqual(['carrier-no-capacity']);
     expect(outsideBase(null, ['x'])).toEqual([]);
   });
 
   it('reads a recorded scenario back in plain words', () => {
-    expect(recordedLine({ disruptions: [{ id: 'a', when: { after_calls: 1 }, do: { kind: 'k' }, text: 'Tundra loses capacity' }] }))
+    const disruption = { id: 'a', when: { after_calls: 1 }, do: { kind: 'k' }, text: 'Tundra loses capacity' };
+    expect(recordedLine({ disruptions: [{ id: 'a', label: 'Courier', part: 'logistics', params: {}, disruption }] }))
       .toBe('Tundra loses capacity. The agents are not told.');
     expect(recordedLine(undefined)).toBe('');
   });

@@ -1,8 +1,8 @@
 // The compare page's outcome table: what each branch achieved, read from what the API already
 // returns (the check's named checks, the metrics, the events and the last view of the twin).
 import { actionsOf } from '../control/actions';
+import { costLabel } from '../run/timeline';
 import type { NamedCheck } from '../control/types';
-import { formatCost } from '../run/timeline';
 import type { BranchDetail, CompareSide, Event } from '../types';
 import { viewsFromEvents } from '../world/twin';
 import type { TwinView } from '../world/types';
@@ -62,49 +62,38 @@ export function lastView(events: Event[]): TwinView | null {
   return viewsFromEvents(events).at(-1)?.view ?? null;
 }
 
-const kpi = (view: TwinView | null, re: RegExp) => view?.kpis.find((k) => re.test(k.id) || re.test(k.label.toLowerCase()));
+/** A KPI of the twin by id. */
+const kpi = (view: TwinView | null, id: string) => view?.kpis.find((k) => k.id === id);
 
-/** The leading number of a figure such as "8 of 10" or "$1,240". */
+/** The leading number of a figure such as "8 of 10" or "USD 1,240". */
 export function leadingNumber(s: string): number | null {
   const m = /-?\d[\d,]*(\.\d+)?/.exec(s);
   return m ? Number(m[0].replace(/,/g, '')) : null;
 }
 
-/** Orders on time: the twin's on-time KPI, else its customer orders not flagged abnormal. */
-export function ordersOnTime(view: TwinView | null): Figure {
-  const k = kpi(view, /on.?time/);
-  if (k) return { text: k.value, value: leadingNumber(k.value), abnormal: k.abnormal };
-  const orders = view?.areas.filter((a) => a.kind === 'customers').flatMap((a) => a.items) ?? [];
-  if (!orders.length) return NONE;
-  const ok = orders.filter((o) => !o.abnormal).length;
-  return { text: `${ok} of ${orders.length}`, value: ok, abnormal: ok < orders.length };
+/** A KPI of the twin as a figure; "–" when the twin has none of that id. */
+function kpiFigure(view: TwinView | null, id: string): Figure {
+  const k = kpi(view, id);
+  return k ? { text: k.value, value: leadingNumber(k.value), abnormal: k.abnormal } : NONE;
 }
 
-/** The prices of the shipments booked (a `book_shipment` result's `price` or `cost`). */
-function bookedPrices(events: Event[]): number[] {
-  return events.flatMap((e) => {
-    const p = obj(e.payload);
-    if (e.kind !== 'tool_call' || p.name !== 'book_shipment' || p.error) return [];
-    const price = obj(p.result).price ?? obj(p.result).cost;
-    return typeof price === 'number' ? [price] : [];
-  });
-}
+/** Orders on time: the twin's `orders_covered` (orders whose booking arrives by their due date). */
+export const ordersOnTime = (view: TwinView | null): Figure => kpiFigure(view, 'orders_covered');
 
-/** Transport cost: the twin's KPI, else the prices of the shipments booked. */
-export function transportCost(view: TwinView | null, events: Event[]): Figure {
-  const k = kpi(view, /transport/);
-  if (k) return { text: k.value, value: leadingNumber(k.value), abnormal: k.abnormal };
-  const prices = bookedPrices(events);
-  if (!prices.length) return NONE;
-  const sum = prices.reduce((s, x) => s + x, 0);
-  return { text: `$${sum.toLocaleString('en-US')}`, value: sum, abnormal: false };
-}
+/** Transport cost: the twin's `transport_cost` (the shipments booked). */
+export const transportCost = (view: TwinView | null): Figure => kpiFigure(view, 'transport_cost');
 
-/** What the agents cost, as the compare endpoint reports it. */
+/**
+ * What the agents cost as they reported it: the branch's own agent ends (their `cost_usd`), else
+ * the metrics' cost. Always labelled as reported; scripted usage is labelled illustrative too.
+ */
 export function agentCost(s: CompareSide): Figure {
-  const text = formatCost(s.cost_usd, s.cost_source);
+  const usd = s.cost_usd ?? s.metrics?.cost.usd ?? null;
+  const source = s.cost_source ?? s.metrics?.cost.source ?? null;
   const tokens = s.tokens != null ? ` · ${s.tokens.toLocaleString('en-US')} tokens` : '';
-  return { text: `${text}${tokens}`, value: s.cost_usd, abnormal: false };
+  if (usd == null) return { text: `not reported${tokens}`, value: null, abnormal: false };
+  const money = `$${usd.toFixed(usd < 0.1 ? 4 : 2)}`;
+  return { text: `${money} (${costLabel(source) || 'reported'})${tokens}`, value: usd, abnormal: false, title: source ?? undefined };
 }
 
 /** Approval requests: every write an agent made to the approvals system, refused or not. */
@@ -128,8 +117,8 @@ const SPECS: Spec[] = [
   { id: 'valid', label: 'Valid plan', hint: 'every goal check passes', better: 'higher', of: (s) => validPlan(s.detail.events) },
   { id: 'safety', label: 'Safety violations', hint: 'safety checks failed', better: 'lower', of: (s) => safetyViolations(s.detail.events) },
   { id: 'on_time', label: 'Orders on time', hint: 'the twin at the end', better: 'higher', of: (s) => ordersOnTime(viewOf(s)) },
-  { id: 'transport', label: 'Transport cost', hint: 'shipments booked', better: 'lower', of: (s) => transportCost(viewOf(s), s.detail.events) },
-  { id: 'agent_cost', label: 'Agent cost', hint: 'model calls', better: 'lower', of: (s) => agentCost(s.side) },
+  { id: 'transport', label: 'Transport cost', hint: 'shipments booked', better: 'lower', of: (s) => transportCost(viewOf(s)) },
+  { id: 'agent_cost', label: 'Agent cost', hint: 'as the agents reported it', better: 'lower', of: (s) => agentCost(s.side) },
   { id: 'escalations', label: 'Escalations', hint: 'approval requests', better: 'lower', of: (s) => escalations(s.detail.events) },
 ];
 

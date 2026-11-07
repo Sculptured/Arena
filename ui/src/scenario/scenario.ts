@@ -81,10 +81,15 @@ export function fill(template: unknown, params: Record<string, ParamValue>): unk
   return template;
 }
 
+/** An option's label and description with its `{param}` placeholders filled, as arenad fills them. */
+export function optionWords(d: DisruptionOption, params: Record<string, ParamValue>): { label: string; description: string } {
+  return { label: String(fill(d.label, params)), description: String(fill(d.description, params)) };
+}
+
 /** One chosen disruption in plain words: its filled template's `text`, else its label. */
 export function disruptionText(d: DisruptionOption, params: Record<string, ParamValue>): string {
   const filled = fill(d.template, params) as Partial<Disruption> | null;
-  const text = typeof filled?.text === 'string' && filled.text.trim() ? filled.text.trim() : d.label;
+  const text = typeof filled?.text === 'string' && filled.text.trim() ? filled.text.trim() : optionWords(d, params).label;
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
@@ -105,7 +110,7 @@ export function outsideBase(options: ScenarioOptions | null, tasks: string[]): s
 
 /** A recorded scenario in plain words, for the run header; empty when there was none. */
 export function recordedLine(s: RecordedScenario | undefined): string {
-  const texts = (s?.disruptions ?? []).map((d) => d.text?.trim()).filter((t): t is string => !!t);
+  const texts = (s?.disruptions ?? []).map((d) => (d.disruption?.text ?? d.label)?.trim()).filter((t): t is string => !!t);
   if (!texts.length) return '';
   return `${texts.map((t) => (/[.!?]$/.test(t) ? t : `${t}.`)).join(' ')} ${NOT_TOLD}`;
 }

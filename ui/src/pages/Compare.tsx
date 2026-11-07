@@ -101,8 +101,8 @@ interface Loaded {
 /** The branch's last view from `GET /api/branches/{id}/views`; undefined when the endpoint fails. */
 const endView = (id: string) => fetchViews(id).then((v) => v, () => undefined);
 
-const lastOf = (raw: BranchView[] | undefined, d: BranchDetail): TwinView | null | undefined =>
-  raw === undefined ? undefined : normalizeViews(raw, d.events).at(-1)?.view ?? null;
+const lastOf = (raw: BranchView[] | undefined): TwinView | null | undefined =>
+  raw === undefined ? undefined : normalizeViews(raw).at(-1)?.view ?? null;
 
 function useCompare(a: string, b: string) {
   const [got, setGot] = useState<Loaded | null>(null);
@@ -112,7 +112,7 @@ function useCompare(a: string, b: string) {
     let cancelled = false;
     setGot(null); setError(null);
     Promise.all([compare(a, b), fetchBranch(a), fetchBranch(b), endView(a), endView(b)])
-      .then(([data, x, y, rx, ry]) => { if (!cancelled) setGot({ data, a: x, b: y, va: lastOf(rx, x), vb: lastOf(ry, y) }); })
+      .then(([data, x, y, rx, ry]) => { if (!cancelled) setGot({ data, a: x, b: y, va: lastOf(rx), vb: lastOf(ry) }); })
       .catch((e) => { if (!cancelled) setError(String(e.message ?? e)); });
     return () => { cancelled = true; };
   }, [a, b, attempt]);

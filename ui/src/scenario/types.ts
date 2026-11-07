@@ -44,11 +44,19 @@ export interface DisruptionOption {
   template: unknown;
 }
 
+/** The setup call a part gets for a task that has none: the call disruptions are added to. */
+export interface SetupTemplate {
+  tool: string;
+  args: unknown;
+}
+
 /** `describe.scenario_options`. */
 export interface ScenarioOptions {
   /** The tasks the disruptions apply to. */
   base: string[];
   disruptions: DisruptionOption[];
+  /** Per part, its setup call for a task without one. */
+  setup?: Record<string, SetupTemplate>;
 }
 
 export type ParamValue = string | number;
@@ -58,7 +66,16 @@ export interface ScenarioChoice {
   disruptions: { id: string; params: Record<string, ParamValue> }[];
 }
 
+/** One chosen disruption as arenad expanded it: its option, params (defaults filled) and filled template. */
+export interface RecordedDisruption {
+  id: string;
+  label: string;
+  part: string;
+  params: Record<string, ParamValue>;
+  disruption: Disruption;
+}
+
 /** `run_start.scenario`: the scenario as arenad expanded it. */
 export interface RecordedScenario {
-  disruptions?: Disruption[];
+  disruptions?: RecordedDisruption[];
 }

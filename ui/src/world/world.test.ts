@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseStep, withStep } from '../run/useStepParam';
 import { drivenLine, stepHeadline, worldState } from './page';
-import { swapChanges, withRules, forkChoiceOf, ARCHITECTURES } from '../run/architecture';
+import { swapChanges, withRules, forkChoiceOf, singleTeam, teamSwapProblem, ARCHITECTURES } from '../run/architecture';
 import type { Event } from '../types';
 import { FORK_SEQ, RUN_ID, V1, baseView, team, v1Detail, v2Detail, views } from './fixtures';
 import { BUS_LANE, roundedPath, MIN_TILE_W, PROCESS_ORDER, TILE_H, TILE_H_CHANGED, arrowBetween, fitsSideBySide, splitAreas, twinLayout } from './layout';
@@ -17,12 +17,11 @@ describe('twin views', () => {
     expect(fromEvents[0].seq).toBe(1);
   });
 
-  it('moves an endpoint entry keyed by its event seq to the step it shows, and orders them', () => {
-    const viewEvent = v1Detail.events.find((e) => e.kind === 'world_view' && e.seq > 2)!;
-    const shown = (viewEvent.payload as { seq_of: number }).seq_of;
-    const raw = [{ seq: viewEvent.seq, view: baseView() }, { seq: 1, view: baseView() }];
-    expect(normalizeViews(raw, v1Detail.events).map((v) => v.seq)).toEqual([1, shown]);
-    expect(normalizeViews([{ seq: 3, view: {} as never }], [])).toEqual([]);
+  it('orders the endpoint\'s views by the step each follows and drops what is no view', () => {
+    const raw = [{ seq: 9, event_seq: 10, view: baseView() }, { seq: 1, event_seq: 2, view: baseView() }];
+    expect(normalizeViews(raw).map((v) => [v.seq, v.event_seq])).toEqual([[1, 2], [9, 10]]);
+    expect(normalizeViews([{ seq: 3, view: {} as never }])).toEqual([]);
+    expect(viewsFromEvents(v1Detail.events)[0].event_seq).toBe(2);
   });
 
   it('finds the view at a step: the latest at or before it, the last without a step', () => {
@@ -46,7 +45,7 @@ describe('twin views', () => {
     const i = v1Views.findIndex((v) => v.view.flows.length === 1);
     const d = diffViews(v1Views[i - 1].view, v1Views[i].view);
     expect(d.flows.map((f) => [f.from, f.to])).toEqual([['CVX-2604', 'PO-SBMC-4471']]);
-    expect(d.kpis.get('orders_at_risk')).toBe('8');
+    expect(d.kpis.get('orders_at_risk')).toBe('8 of 10');
     expect(d.items.find((c) => c.id === 'PO-SBMC-4471')!.short).toBe('at risk → late');
     const added = diffViews(baseView(), { ...baseView(), areas: [{ id: 'x', label: 'X', kind: 'lab', items: [{ id: 'n', label: 'NC-1', status: 'open', abnormal: false }] }] });
     expect(added.items.find((c) => c.id === 'n')!.line).toBe('NC-1: new · open');
@@ -192,6 +191,17 @@ describe('swap architecture', () => {
     expect(withRules(c.quality.prompt!, 'other')).toBe(`${team.agents[1].prompt}\n\nDeployment rules:\nother`);
     expect(withRules(c.quality.prompt!, '  ')).toBe(team.agents[1].prompt);
     expect(swapChanges(team, '')).toEqual({});
+  });
+
+  it('makes the single agent a new team of one, which only an external run can take', () => {
+    const single = ARCHITECTURES.find((a) => a.id === 'single')!;
+    expect(single.shape).toBe('team');
+    const t = singleTeam(team, single.rules);
+    expect(t.agents.map((a) => [a.id, a.kind, a.read_only])).toEqual([['operator', team.agents[0].kind, false]]);
+    expect(t.agents[0].prompt).toContain("every role's work");
+    const start = (runner: string): Event[] => [{ branch_id: 'b', seq: 1, at: '', agent: null, kind: 'run_start', payload: { runner } }];
+    expect(teamSwapProblem(start('external'))).toBeNull();
+    expect(teamSwapProblem(start('chain'))).toContain('Team v2');
   });
 
   it('opens on "Swap architecture" only when the address asks', () => {

@@ -73,10 +73,10 @@ export function baseView(): TwinView {
     areas: [...plantAndLab(), ...stock(), ...carriersAndCustomers(), { id: 'appr', label: 'Approvals', kind: 'approvals', items: [] }],
     flows: [],
     kpis: [
-      { id: 'orders_at_risk', label: 'Orders at risk', value: '8', abnormal: true },
-      { id: 'orders_on_time', label: 'Orders on time', value: '2 of 10', abnormal: false },
-      { id: 'violations', label: 'Violations so far', value: '0', abnormal: false },
-      { id: 'transport_cost', label: 'Transport cost', value: '$0', abnormal: false },
+      { id: 'orders_at_risk', label: 'Orders at risk', value: '8 of 10', abnormal: true },
+      { id: 'orders_covered', label: 'Orders covered', value: '2 of 10', abnormal: false },
+      { id: 'violations', label: 'Safety violations so far', value: '0', abnormal: false },
+      { id: 'transport_cost', label: 'Transport cost', value: 'USD 0', abnormal: false },
     ],
   };
 }
@@ -146,10 +146,10 @@ const v1Steps: Step[] = [
   disruption,
   propose('logistics', 'CHG-0003', 'Ship four orders by Borealis'),
   decide('CHG-0003', 'the supply director'),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(clock('2026-11-09 10:05'), ship('SHP-0001', 'CVX-2604', 'PO-SBMC-4471', 'Borealis', '11-11', true), kpi('orders_at_risk', '7', true), kpi('transport_cost', '$420'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(ship('SHP-0002', 'CVX-2589', 'PO-LCH-3307', 'Borealis', '11-11', false, true), kpi('orders_at_risk', '6', true), kpi('violations', '1', true), kpi('transport_cost', '$840'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(ship('SHP-0003', 'CVX-2604', 'PO-HVH-20931', 'Borealis', '11-11', true), kpi('orders_at_risk', '5', true), kpi('transport_cost', '$1,260'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 2150 } }, all(ship('SHP-0004', 'CVX-2598', 'PO-MSD-88102', 'Borealis air', '11-12', true), set('CVX-2598', { qty: 2800, detail: 'EU · 1,300 reserved' }), kpi('orders_at_risk', '4', true), kpi('orders_on_time', '2 of 10', true), kpi('transport_cost', '$3,410'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(clock('2026-11-09 10:05'), ship('SHP-0001', 'CVX-2604', 'PO-SBMC-4471', 'Borealis', '11-11', true), kpi('orders_at_risk', '7 of 10', true), kpi('transport_cost', 'USD 420'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(ship('SHP-0002', 'CVX-2589', 'PO-LCH-3307', 'Borealis', '11-11', false, true), kpi('orders_at_risk', '6 of 10', true), kpi('violations', '1', true), kpi('transport_cost', 'USD 840'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(ship('SHP-0003', 'CVX-2604', 'PO-HVH-20931', 'Borealis', '11-11', true), kpi('orders_at_risk', '5 of 10', true), kpi('transport_cost', 'USD 1,260'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-12' } }, all(ship('SHP-0004', 'CVX-2598', 'PO-MSD-88102', 'Borealis air', '11-12', true), set('CVX-2598', { qty: 2800, detail: 'EU · 1,300 reserved' }), kpi('orders_at_risk', '4 of 10', true), kpi('orders_covered', '2 of 10', true), kpi('transport_cost', 'USD 3,410'))),
   tool('logistics', 'send_customer_notice', 'logistics', {}, clock('2026-11-09 10:30')),
   { agent: 'coordinator', kind: 'agent_end', payload: { ok: true, error: null, tokens: null, cost_usd: null, cost_source: null, seconds: 41 } },
 ];
@@ -162,10 +162,10 @@ const v2Steps: Step[] = [
   disruption,
   propose('logistics', 'CHG-0003', 'Ship four orders, Glacier and Borealis'),
   decide('CHG-0003', 'the supply director'),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(clock('2026-11-09 10:02'), ship('SHP-0001', 'CVX-2604', 'PO-SBMC-4471', 'Borealis', '11-11', true), kpi('orders_at_risk', '7', true), kpi('transport_cost', '$420'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(ship('SHP-0002', 'CVX-2604', 'PO-LCH-3307', 'Borealis', '11-11'), kpi('orders_at_risk', '6', true), kpi('orders_on_time', '3 of 10'), kpi('transport_cost', '$840'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 420 } }, all(ship('SHP-0003', 'CVX-2589', 'PO-HVH-20931', 'Borealis', '11-11', true), kpi('orders_at_risk', '5', true), kpi('transport_cost', '$1,260'))),
-  tool('logistics', 'book_shipment', 'logistics', { result: { price: 3400 } }, all(ship('SHP-0004', 'CVX-2598', 'PO-MSD-88102', 'Glacier air', '11-11'), set('CVX-2598', { qty: 2800, detail: 'EU · 1,300 reserved' }), kpi('orders_at_risk', '4', true), kpi('orders_on_time', '4 of 10'), kpi('transport_cost', '$4,660'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(clock('2026-11-09 10:02'), ship('SHP-0001', 'CVX-2604', 'PO-SBMC-4471', 'Borealis', '11-11', true), kpi('orders_at_risk', '7 of 10', true), kpi('transport_cost', 'USD 420'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(ship('SHP-0002', 'CVX-2604', 'PO-LCH-3307', 'Borealis', '11-11'), kpi('orders_at_risk', '6 of 10', true), kpi('orders_covered', '3 of 10'), kpi('transport_cost', 'USD 840'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(ship('SHP-0003', 'CVX-2589', 'PO-HVH-20931', 'Borealis', '11-11', true), kpi('orders_at_risk', '5 of 10', true), kpi('transport_cost', 'USD 1,260'))),
+  tool('logistics', 'book_shipment', 'logistics', { result: { arrives: '2026-11-11' } }, all(ship('SHP-0004', 'CVX-2598', 'PO-MSD-88102', 'Glacier air', '11-11'), set('CVX-2598', { qty: 2800, detail: 'EU · 1,300 reserved' }), kpi('orders_at_risk', '4 of 10', true), kpi('orders_covered', '4 of 10'), kpi('transport_cost', 'USD 4,660'))),
   tool('logistics', 'send_customer_notice', 'logistics', {}, clock('2026-11-09 10:24')),
   { agent: 'coordinator', kind: 'agent_end', payload: { ok: true, error: null, tokens: null, cost_usd: null, cost_source: null, seconds: 38 } },
 ];
@@ -197,7 +197,8 @@ export const runStart: Event = {
       cold_chain_quotes: { effect: 'write', part: 'logistics' }, book_shipment: { effect: 'write', part: 'logistics' }, shipments: { effect: 'read', part: 'logistics' },
       send_customer_notice: { effect: 'write', part: 'logistics' },
     },
-    scenario: { disruptions: [{ id: 'courier-capacity', when: { after_calls: 1, tool: 'cold_chain_quotes' }, do: { kind: 'lane_capacity', carrier: 'Tundra Medical Courier', origin: 'US', destination: 'US', capacity: 0 }, text: 'Tundra Medical Courier loses capacity after its first quote.' }] },
+    scenario: { disruptions: [{ id: 'courier-capacity', label: 'Usual courier loses capacity', part: 'logistics', params: { after: 1, capacity: 0 },
+      disruption: { id: 'courier-capacity', when: { after_calls: 1, tool: 'cold_chain_quotes' }, do: { kind: 'lane_capacity', carrier: 'Tundra Medical Courier', origin: 'US', destination: 'US', capacity: 0 }, text: 'Tundra Medical Courier has 0 shipments left this week from the US plant' } }] },
   },
 };
 
@@ -217,7 +218,7 @@ function record(branch: string, steps: Step[], start: TwinView, from: number): {
     if (!s.patch) continue;
     view = structuredClone(view);
     s.patch(view);
-    views.push({ seq: stepSeq, view });
+    views.push({ seq: stepSeq, event_seq: seq, view });
     push(null, 'world_view', { seq_of: stepSeq, view });
   }
   return { events, views };
@@ -225,7 +226,7 @@ function record(branch: string, steps: Step[], start: TwinView, from: number): {
 
 /** Both branches: setup's view at step 1, the shared steps, then each branch's own from the fork. */
 function build() {
-  const first: BranchView = { seq: 1, view: baseView() };
+  const first: BranchView = { seq: 1, event_seq: 2, view: baseView() };
   const head: Event[] = [runStart, { branch_id: V1, seq: 2, at: at(2), agent: null, kind: 'world_view', payload: { seq_of: 1, view: first.view } }];
   const shared = record(V1, common, first.view, 3);
   const forkAt = (shared.events.at(-1)?.seq ?? 0) + 1;
@@ -271,8 +272,8 @@ export const runs: RunSummary[] = [{
 }];
 
 export const comparison: CompareResponse = {
-  a: { status: 'failed', seconds: 41, tokens: 0, cost_usd: null, cost_source: null },
-  b: { status: 'passed', seconds: 38, tokens: 0, cost_usd: null, cost_source: null },
+  a: { status: 'failed', seconds: 41, tokens: 61240, cost_usd: 0.2154, cost_source: 'illustrative scripted usage; no model billed' },
+  b: { status: 'passed', seconds: 38, tokens: 23410, cost_usd: 0.0861, cost_source: 'illustrative scripted usage; no model billed' },
   first_divergent_seq: FORK_SEQ,
   differing_rows: [{ key: 'logistics:shipment/SHP-0002', a: { lot: 'CVX-2589', order: 'PO-LCH-3307' }, b: { lot: 'CVX-2604', order: 'PO-LCH-3307' } }],
 };

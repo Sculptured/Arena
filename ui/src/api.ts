@@ -1,7 +1,7 @@
-import type { ScenarioChoice, ScenarioOptions } from './scenario/types';
+import type { ScenarioChoice } from './scenario/types';
 import type { BranchView } from './world/types';
 import type {
-  BenchmarkInfo, Branch, BranchDetail, Change, CompareResponse, Event, ForkResponse, Health, NewRunResponse,
+  BenchmarkDescription, Branch, BranchDetail, Change, CompareResponse, Event, ForkResponse, Health, NewRunResponse,
   ProviderStatus, RestoreMode, RestorePlan, RowsResponse, RunSummary, Runner, StatusEvent, TaskSummary, Team,
 } from './types';
 
@@ -43,23 +43,17 @@ export const runs = () => call<RunSummary[]>('/api/runs');
 export const branch = (id: string) => call<BranchDetail>(`/api/branches/${encodeURIComponent(id)}`);
 export const rows = (id: string, seq: number, keys: string[]) =>
   call<RowsResponse>(`/api/branches/${encodeURIComponent(id)}/rows?seq=${seq}&keys=${encodeURIComponent(keys.join(','))}`);
-export const fork = (id: string, at_seq: number, changes: Record<string, Change> = {}, restore: RestoreMode = 'exact') =>
-  post<ForkResponse>(`/api/branches/${encodeURIComponent(id)}/fork`, { at_seq, changes, restore });
+/** Forks at `at_seq` with agent `changes`, or with another `team` (a run an external system drives only). */
+export const fork = (id: string, at_seq: number, changes: Record<string, Change> = {}, restore: RestoreMode = 'exact', team?: Team) =>
+  post<ForkResponse>(`/api/branches/${encodeURIComponent(id)}/fork`, team ? { at_seq, restore, team } : { at_seq, changes, restore });
 /** How each part of a fork at `at_seq` would be restored; a 409 names the part that can't be. */
 export const restorePlan = (id: string, at_seq: number, restore: RestoreMode) =>
   call<RestorePlan>(`/api/branches/${encodeURIComponent(id)}/restore-plan?at_seq=${at_seq}&restore=${restore}`);
 /** The branch's digital twin after each step that wrote anything, inherited views included. */
 export const views = (id: string) => call<BranchView[]>(`/api/branches/${encodeURIComponent(id)}/views`);
 
-/** The disruptions new runs can be started with: `GET /api/benchmark`, else the benchmark `/api/health` describes. */
-export async function scenarioOptions(): Promise<ScenarioOptions | null> {
-  try {
-    return (await call<BenchmarkInfo>('/api/benchmark')).scenario_options ?? null;
-  } catch (e) {
-    if (!(e instanceof ApiError) || e.status !== 404) throw e;
-    return (await health()).benchmark?.scenario_options ?? null;
-  }
-}
+/** The disruptions new runs can be started with (`GET /api/benchmark`); null when it offers none. */
+export const scenarioOptions = async () => (await call<BenchmarkDescription>('/api/benchmark')).scenario_options ?? null;
 export const compare = (a: string, b: string) =>
   call<CompareResponse>(`/api/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
 

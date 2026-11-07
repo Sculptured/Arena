@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { cn } from '@/lib/cn';
-import { ARCHITECTURES, type ForkChoice, swapChanges } from './architecture';
+import { ARCHITECTURES, type ForkChoice, architectureOf, singleTeam, swapChanges, teamSwapProblem } from './architecture';
 import { fork } from '../api';
 import { changedFields } from './timeline';
 import { RestoreChoice, blockedReason, useRestorePlan } from './RestoreChoice';
@@ -94,8 +94,15 @@ function ChoiceSwitch({ choice, onChoice }: { choice: ForkChoice; onChoice: (c: 
   return <div className="mx-3 mb-2 flex gap-0.5 rounded-md border border-line bg-sunken p-0.5">{opt('architecture', 'Swap architecture')}{opt('agents', 'Edit agents')}</div>;
 }
 
-/** Pick a deployment; its rules (editable) go to every agent. */
+/** Where a deployment's rules go: every agent's prompt, or the one agent that replaces the team. */
+function rulesHint(team: Team, arch: string): string {
+  if (architectureOf(arch).shape === 'team') return `The team (${team.agents.map((a) => a.name).join(', ')}) becomes one agent with this prompt.`;
+  return `Added to the prompt of ${team.agents.map((a) => a.name).join(', ')}; earlier deployment rules are replaced.`;
+}
+
+/** Pick a deployment; its rules (editable) go to every agent, or to the single agent that replaces the team. */
 export function ArchitectureEdit({ team, arch, rules, onArch, onRules }: { team: Team; arch: string; rules: string; onArch: (id: string) => void; onRules: (r: string) => void }) {
+  const single = architectureOf(arch).shape === 'team';
   return (
     <div className="flex flex-col gap-2 border-t border-line px-3 py-2.5">
       <Field label="Architecture">
@@ -103,7 +110,7 @@ export function ArchitectureEdit({ team, arch, rules, onArch, onRules }: { team:
           {ARCHITECTURES.map((a) => <option key={a.id} value={a.id}>{a.label}: {a.summary}</option>)}
         </NativeSelect>
       </Field>
-      <Field label="Rules every agent gets" hint={`Added to the prompt of ${team.agents.map((a) => a.name).join(', ')}; earlier deployment rules are replaced.`}>
+      <Field label={single ? 'The single agent\'s prompt' : 'Rules every agent gets'} hint={rulesHint(team, arch)}>
         <Textarea rows={5} value={rules} onChange={(e) => onRules(e.target.value)} />
       </Field>
     </div>
@@ -129,13 +136,16 @@ function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) 
   const plan = useRestorePlan(branch.id, seq, restore);
   const { list } = useProviderList();
   const set = (id: string, patch: Change) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...patch } }));
-  const changes = choice === 'architecture' ? swapChanges(branch.team, architecture.rules) : changedFields(branch.team.agents, edits);
+  const swap = choice === 'architecture' ? architectureOf(architecture.arch) : null;
+  const team = swap?.shape === 'team' ? singleTeam(branch.team, architecture.rules) : undefined;
+  const changes = team ? {} : swap ? swapChanges(branch.team, architecture.rules) : changedFields(branch.team.agents, edits);
   const go = async () => {
     setBusy(true); setErr(null);
-    try { onForked(await fork(branch.id, seq, changes, restore)); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
+    try { onForked(await fork(branch.id, seq, changes, restore, team)); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };
-  const blocked = blockedReason(plan, branch.status === 'running') ?? forkProblem(branch.team.agents, changes, list);
-  return { choice, setChoice, architecture, edits, set, restore, setRestore, plan, list, changes, go, busy, err, blocked };
+  const teamProblem = team ? teamSwapProblem(branch.events) : null;
+  const blocked = blockedReason(plan, branch.status === 'running') ?? teamProblem ?? forkProblem(branch.team.agents, changes, list);
+  return { choice, setChoice, architecture, edits, set, restore, setRestore, plan, list, changes, team, go, busy, err, blocked };
 }
 
 export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents' }: {
@@ -164,7 +174,7 @@ export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'ag
       <div className="flex flex-col gap-3 border-t border-line px-3 py-2.5">
         <RestoreChoice mode={f.restore} onMode={f.setRestore} plan={f.plan} />
         {f.err && <ErrorState error={f.err} hint="Nothing was started. Fix the cause and try again." />}
-        <ForkActions blocked={f.blocked} busy={f.busy} changes={Object.keys(f.changes).length} onGo={f.go} />
+        <ForkActions blocked={f.blocked} busy={f.busy} changes={f.team ? 1 : Object.keys(f.changes).length} onGo={f.go} />
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ const branches = { [v1Detail.id]: v1Detail, [v2Detail.id]: v2Detail };
 const health: Health = {
   open_available: false, claude: false, codex: false, providers: [],
   disk: { bytes: 0.4 * 2 ** 30, limit_bytes: 20 * 2 ** 30 },
-  benchmark: { name: 'pharma', version: '0.1.0', tasks: 5, scenario_options: scenarioOptions },
+  benchmark: { name: 'pharma', version: '0.1.0', tasks: 5 },
 };
 
 const tasks = [
@@ -25,7 +25,7 @@ type Route = [RegExp, (m: RegExpExecArray, url: URL) => unknown];
 
 const ROUTES: Route[] = [
   [/^\/api\/health$/, () => health],
-  [/^\/api\/benchmark$/, () => health.benchmark],
+  [/^\/api\/benchmark$/, () => ({ name: 'pharma', version: '0.1.0', tasks, scenario_options: scenarioOptions, view: true })],
   [/^\/api\/providers$/, () => []],
   [/^\/api\/tasks$/, () => tasks],
   [/^\/api\/team\/default$/, () => team],

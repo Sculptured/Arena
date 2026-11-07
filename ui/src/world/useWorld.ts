@@ -23,7 +23,7 @@ export function useViews(branchId: string, detail: BranchDetail | null) {
   }, [branchId, count]);
   const views = useMemo(() => {
     if (!detail) return [];
-    return raw ? normalizeViews(raw, detail.events) : viewsFromEvents(detail.events);
+    return raw ? normalizeViews(raw) : viewsFromEvents(detail.events);
   }, [raw, detail]);
   return { views, error };
 }
