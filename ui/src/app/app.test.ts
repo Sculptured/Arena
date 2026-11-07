@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ListedSuite } from '../control/types';
 import type { Branch, RunSummary } from '../types';
-import { itemsFor, placeholderOf } from './palette';
+import { hereOf, itemsFor, placeholderOf } from './palette';
 import { nextPref, parsePref, resolveTheme } from './themeModel';
 
 const branch = (id: string, status: Branch['status'], parent: string | null = null, at = '2026-11-06T10:00:00Z'): Branch =>
@@ -31,6 +31,16 @@ describe('command palette', () => {
   });
   it('compares two suites', () => {
     expect(itemsFor({ kind: 'compare-suites', first: 's1' }, runs, suites).map((i) => i.action)).toEqual([{ go: '/suites/compare/s1/s2' }]);
+  });
+  it('opens any run branch\'s world view, and the current run\'s first', () => {
+    expect(itemsFor({ kind: 'world' }, runs, suites).map((i) => i.action)).toEqual([{ go: '/world/r1/b1' }, { go: '/world/r1/b2' }]);
+    expect(itemsFor({ kind: 'root' }, runs, suites).find((i) => i.id === 'world')!.action).toEqual({ mode: { kind: 'world' } });
+    const here = hereOf('/runs/r1/b2');
+    expect(here).toEqual({ page: 'runs', runId: 'r1', branchId: 'b2' });
+    expect(itemsFor({ kind: 'root' }, runs, suites, here)[0]).toMatchObject({ id: 'world-here', action: { go: '/world/r1/b2' } });
+    expect(itemsFor({ kind: 'root' }, runs, suites, hereOf('/world/r1/b2'))[0].id).toBe('go-runs');
+    expect(hereOf('/suites/s1')).toBeNull();
+    expect(placeholderOf({ kind: 'world' })).toBe('Pick the run whose world to open…');
   });
 });
 

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { parseStep, withStep } from '../run/useStepParam';
+import { drivenLine, stepHeadline, worldState } from './page';
 import { swapChanges, withRules, forkChoiceOf, ARCHITECTURES } from '../run/architecture';
 import type { Event } from '../types';
 import { FORK_SEQ, RUN_ID, V1, baseView, team, v1Detail, v2Detail, views } from './fixtures';
@@ -173,5 +175,40 @@ describe('swap architecture', () => {
   it('opens on "Swap architecture" only when the address asks', () => {
     expect(forkChoiceOf('architecture')).toBe('architecture');
     expect(forkChoiceOf(null)).toBe('agents');
+  });
+});
+
+describe('world view state', () => {
+  const input = { views: v1Views, step: null, events: v1Detail.events, team, startSeq: null, runId: RUN_ID, branchId: V1, running: false };
+  it('shows the last view when the address names no step', () => {
+    const s = worldState(input);
+    expect(s.index).toBe(v1Views.length - 1);
+    expect(s.current).toBe(v1Views.at(-1)!.seq);
+    expect(s.rewind.seq).toBe(v1Detail.events.find((e) => e.kind === 'agent_end')!.seq);
+    expect(worldState({ ...input, events: v1Detail.events.filter((e) => e.kind !== 'agent_end') }).rewind).toMatchObject({ href: null, why: 'Nothing after this step to rerun.' });
+  });
+
+  it('at the step before the bad decision, offers to rewind from exactly there', () => {
+    const before = v1Views.filter((v) => v.seq < FORK_SEQ).at(-1)!.seq;
+    const s = worldState({ ...input, step: before });
+    expect(s.current).toBe(before);
+    expect(s.headline).toBe(`Step ${before} · Logistics · cold_chain_quotes`);
+    expect(s.rewind).toMatchObject({ seq: FORK_SEQ, href: rewindLink(RUN_ID, V1, FORK_SEQ) });
+    expect(worldState({ ...input, step: before, running: true }).rewind.href).toBeNull();
+    expect(worldState({ ...input, views: [] }).view).toBeNull();
+  });
+
+  it('says the agents are scripted when an external runner made no model call', () => {
+    expect(drivenLine(v1Detail.events)).toBe('Scripted agents · no model calls');
+    expect(drivenLine([])).toBe('No model calls');
+    expect(drivenLine([{ branch_id: 'b', seq: 2, at: '', agent: 'a', kind: 'model_call', payload: {} }])).toBe('');
+    expect(stepHeadline(v1Detail.events, team, 1)).toBe('Step 1 · after setup');
+    expect(stepHeadline(v1Detail.events, team, null)).toBe('No step');
+  });
+
+  it('keeps the step in the address', () => {
+    expect([parseStep('12'), parseStep(''), parseStep('x'), parseStep(null)]).toEqual([12, null, null, null]);
+    expect(withStep('/world/r/b', 9)).toBe('/world/r/b?step=9');
+    expect(withStep('/world/r/b', null)).toBe('/world/r/b');
   });
 });

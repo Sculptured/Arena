@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { cn } from '@/lib/cn';
+import { ARCHITECTURES, type ForkChoice, swapChanges } from './architecture';
 import { fork } from '../api';
 import { changedFields } from './timeline';
 import { RestoreChoice, blockedReason, useRestorePlan } from './RestoreChoice';
@@ -7,7 +9,7 @@ import { Button } from '../components/ui/button';
 import { Field, NativeSelect, Textarea } from '../components/ui/input';
 import { ErrorState } from '../components/ui/state';
 import { MODE_LABEL, modelProblem, providerId, providerOf, useProviderList } from '../providers';
-import type { AgentKind, AgentSpec, BranchDetail, Change, ForkResponse, ProviderStatus, RestoreMode } from '../types';
+import type { AgentKind, AgentSpec, BranchDetail, Change, ForkResponse, ProviderStatus, RestoreMode, Team } from '../types';
 
 const MODES: AgentKind[] = ['claude_code', 'codex', 'open'];
 
@@ -83,8 +85,43 @@ export function ForkActions({ blocked, busy, changes: n, onGo }: { blocked: stri
   );
 }
 
+/** "Swap architecture" or "Edit agents": how the fork changes the team. */
+function ChoiceSwitch({ choice, onChoice }: { choice: ForkChoice; onChoice: (c: ForkChoice) => void }) {
+  const opt = (c: ForkChoice, label: string) => (
+    <button type="button" aria-pressed={choice === c} onClick={() => onChoice(c)}
+      className={cn('flex-1 rounded-sm px-2 py-1 text-xs font-medium', choice === c ? 'bg-raised text-fg shadow-panel' : 'text-muted hover:text-fg')}>{label}</button>
+  );
+  return <div className="mx-3 mb-2 flex gap-0.5 rounded-md border border-line bg-sunken p-0.5">{opt('architecture', 'Swap architecture')}{opt('agents', 'Edit agents')}</div>;
+}
+
+/** Pick a deployment; its rules (editable) go to every agent. */
+export function ArchitectureEdit({ team, arch, rules, onArch, onRules }: { team: Team; arch: string; rules: string; onArch: (id: string) => void; onRules: (r: string) => void }) {
+  return (
+    <div className="flex flex-col gap-2 border-t border-line px-3 py-2.5">
+      <Field label="Architecture">
+        <NativeSelect value={arch} onChange={(e) => onArch(e.target.value)}>
+          {ARCHITECTURES.map((a) => <option key={a.id} value={a.id}>{a.label}: {a.summary}</option>)}
+        </NativeSelect>
+      </Field>
+      <Field label="Rules every agent gets" hint={`Added to the prompt of ${team.agents.map((a) => a.name).join(', ')}; earlier deployment rules are replaced.`}>
+        <Textarea rows={5} value={rules} onChange={(e) => onRules(e.target.value)} />
+      </Field>
+    </div>
+  );
+}
+
+/** The architecture chosen and its rules. */
+function useArchitecture() {
+  const [arch, setArch] = useState(ARCHITECTURES[0].id);
+  const [rules, setRules] = useState(ARCHITECTURES[0].rules);
+  const pick = (id: string) => { setArch(id); setRules(ARCHITECTURES.find((a) => a.id === id)?.rules ?? ''); };
+  return { arch, rules, pick, setRules };
+}
+
 /** Edits to the team, the restore and the start button, kept for one step. */
-function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void) {
+function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void, initial: ForkChoice) {
+  const [choice, setChoice] = useState<ForkChoice>(initial);
+  const architecture = useArchitecture();
   const [edits, setEdits] = useState<Record<string, Change>>({});
   const [restore, setRestore] = useState<RestoreMode>('exact');
   const [busy, setBusy] = useState(false);
@@ -92,32 +129,38 @@ function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) 
   const plan = useRestorePlan(branch.id, seq, restore);
   const { list } = useProviderList();
   const set = (id: string, patch: Change) => setEdits((e) => ({ ...e, [id]: { ...e[id], ...patch } }));
-  const changes = changedFields(branch.team.agents, edits);
+  const changes = choice === 'architecture' ? swapChanges(branch.team, architecture.rules) : changedFields(branch.team.agents, edits);
   const go = async () => {
     setBusy(true); setErr(null);
     try { onForked(await fork(branch.id, seq, changes, restore)); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };
   const blocked = blockedReason(plan, branch.status === 'running') ?? forkProblem(branch.team.agents, changes, list);
-  return { edits, set, restore, setRestore, plan, list, changes, go, busy, err, blocked };
+  return { choice, setChoice, architecture, edits, set, restore, setRestore, plan, list, changes, go, busy, err, blocked };
 }
 
-export default function ForkPanel({ branch, seq, onForked, onClose }: {
+export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents' }: {
   branch: BranchDetail;
   seq: number;
   onForked: (r: ForkResponse) => void;
   onClose?: () => void;
+  /** Which change the panel opens with ("Rewind here" in the world view opens "Swap architecture"). */
+  choice?: ForkChoice;
 }) {
-  const f = useFork(branch, seq, onForked);
+  const f = useFork(branch, seq, onForked, choice);
+  const a = f.architecture;
   return (
     <div className="flex flex-col">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold">Change and rerun from step {seq}</h3>
-          <p className="text-xs text-muted">Only fields you edit are changed. Everything before this step is reused.</p>
+          <p className="text-xs text-muted">Only what you change is changed. Everything before this step is reused.</p>
         </div>
         {onClose && <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>}
       </div>
-      {branch.team.agents.map((a) => <AgentEdit key={a.id} agent={a} edit={f.edits[a.id] ?? {}} list={f.list} onEdit={(p) => f.set(a.id, p)} />)}
+      <ChoiceSwitch choice={f.choice} onChoice={f.setChoice} />
+      {f.choice === 'architecture'
+        ? <ArchitectureEdit team={branch.team} arch={a.arch} rules={a.rules} onArch={a.pick} onRules={a.setRules} />
+        : branch.team.agents.map((ag) => <AgentEdit key={ag.id} agent={ag} edit={f.edits[ag.id] ?? {}} list={f.list} onEdit={(p) => f.set(ag.id, p)} />)}
       <div className="flex flex-col gap-3 border-t border-line px-3 py-2.5">
         <RestoreChoice mode={f.restore} onMode={f.setRestore} plan={f.plan} />
         {f.err && <ErrorState error={f.err} hint="Nothing was started. Fix the cause and try again." />}
