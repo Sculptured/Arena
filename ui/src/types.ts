@@ -1,4 +1,5 @@
 // Mirrors arenad's model.rs / fork.rs / compare.rs / recorded.rs (serde snake_case).
+import type { Board } from './board/board';
 import type { RecordedScenario, ScenarioOptions } from './scenario/types';
 
 export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external';
@@ -109,6 +110,8 @@ export interface Team {
   id: string;
   name: string;
   agents: AgentSpec[];
+  /** A Sculptured design's board (groups, places, arrows), kept in this browser; never sent to arenad. */
+  board?: Board;
 }
 
 export interface Change {
@@ -251,8 +254,6 @@ export interface Metrics {
 export interface BranchDetail extends Branch {
   events: Event[];
   metrics?: Metrics;
-  /** True while the live branch is paused (absent from older arenads). */
-  paused?: boolean;
 }
 
 export interface RunSummary {
