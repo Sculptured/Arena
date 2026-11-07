@@ -411,3 +411,30 @@ fn a_builtin_suite_left_running_is_stopped_when_arenad_starts_again() {
         );
     });
 }
+
+/// A suite keeps the expanded scenario its runs start in.
+#[test]
+fn a_suite_keeps_its_scenario() {
+    run(async {
+        let (name, _clean) = fresh_db();
+        let store = Store::open_named(&pg::admin(), &name).await.unwrap();
+        let team: Team = serde_json::from_value(poker(1)).unwrap();
+        let tasks = vec!["t1".to_string()];
+        let one = json!({"id": "jam", "label": "Jam", "part": "box", "params": {"after": 2},
+                         "disruption": {"id": "jam-2"}});
+        let scenario = serde_json::from_value(json!({"disruptions": [one]})).unwrap();
+        let new = NewSuite {
+            name: "s",
+            team: &team,
+            tasks: &tasks,
+            repeats: 1,
+            runner: Runner::External,
+            benchmark: "b",
+            scenario: &scenario,
+        };
+        let id = store.create_suite(new).await.unwrap().id;
+        let again = store.suite(&id).await.unwrap().unwrap();
+        assert_eq!(again.scenario, scenario);
+        assert_eq!(again.scenario.disruptions[0].params["after"], 2);
+    });
+}
