@@ -13,6 +13,7 @@
 """
 import argparse
 import json
+import shutil
 import sys
 import time
 import urllib.request
@@ -28,6 +29,7 @@ from teams import DISCLOSURE, fork_body, team
 URL = "http://127.0.0.1:4513"
 STATE = Path("/home/alexsky2/sculptured-work-local/summit-demo")
 CLAIMS = STATE / "claims"
+MIN_FREE_GB = 21
 LIVE_PREFIX = "Summit live"
 WORLD_PREFIX = "Summit world"
 # The batch: every task, in each of these disruption scenarios, twice (v1's mistake differs by repeat).
@@ -182,15 +184,25 @@ def duplicate(api, args):
     return started
 
 
+def free_gb():
+    return shutil.disk_usage("/").free / 1e9
+
+
 def batch(api, args):
+    """A new batch suite, or with --resume the one recorded before (its unclaimed runs). Stops
+    before a run when the disk has less than MIN_FREE_GB free."""
     STATE.mkdir(parents=True, exist_ok=True)
     out = STATE / f"batch-{args.deployment}.json"
-    suite = api.request("/api/suites", {
-        "name": f"Summit batch: {NAMES[args.deployment]} · {DISCLOSURE}", "team": team(args.deployment),
-        "tasks": list(TASKS), "repeats": args.repeats, "runner": "external", "scenarios": BATCH_SCENARIOS})
-    record = {"suite": suite["id"], "runs": []}
+    if args.resume:
+        record = json.loads(out.read_text())
+        suite = {"id": record["suite"]}
+    else:
+        suite = api.request("/api/suites", {
+            "name": f"Summit batch: {NAMES[args.deployment]} · {DISCLOSURE}", "team": team(args.deployment),
+            "tasks": list(TASKS), "repeats": args.repeats, "runner": "external", "scenarios": BATCH_SCENARIOS})
+        record = {"suite": suite["id"], "runs": []}
     out.write_text(json.dumps(record, indent=2))
-    while not (started := api.request(f"/api/suites/{suite['id']}/claim", {}))["done"]:
+    while free_gb() >= MIN_FREE_GB and not (started := api.request(f"/api/suites/{suite['id']}/claim", {}))["done"]:
         claim(started["branch_id"])
         name_run(api, started["run_id"], f"Summit batch: {NAMES[args.deployment]} / {started['task_id']} / "
                  f"scenario {started['variant'] + 1} / repeat {started['repeat']} · {DISCLOSURE}")
@@ -253,6 +265,7 @@ def main():
     p.add_argument("--at", type=int, help="fork: the step to fork at")
     p.add_argument("--repeats", type=int, default=2)
     p.add_argument("--fast", action="store_true", help="no pacing")
+    p.add_argument("--resume", action="store_true", help="batch: go on with the suite recorded before")
     args = p.parse_args()
     if args.command == "fork" and (args.branch is None or args.at is None):
         p.error("fork needs --branch and --at")
