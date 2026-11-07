@@ -1,20 +1,22 @@
-import { useCallback, useState } from 'react';
+import { Suspense, lazy, useCallback, useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import CommandPalette, { usePaletteShortcut } from './app/CommandPalette';
 import StatusBar from './app/StatusBar';
 import TopBar from './app/TopBar';
-import { EmptyState } from './components/ui/state';
+import { EmptyState, LoadingState } from './components/ui/state';
 import { Toaster } from './components/ui/toaster';
 import { TooltipProvider } from './components/ui/tooltip';
 import { PageBody, PageHeader } from './components/ui/page';
-import ProcessPage from './control/ProcessPage';
-import SuiteComparePage from './control/SuiteComparePage';
-import SuitePage from './control/SuitePage';
-import SuitesPage from './control/SuitesPage';
-import Compare from './pages/Compare';
-import Run from './pages/Run';
 import Runs from './pages/Runs';
-import Team from './pages/Team';
+
+// Pages other than the runs list load on first visit (React Flow and uPlot stay out of the first load).
+const ProcessPage = lazy(() => import('./control/ProcessPage'));
+const SuiteComparePage = lazy(() => import('./control/SuiteComparePage'));
+const SuitePage = lazy(() => import('./control/SuitePage'));
+const SuitesPage = lazy(() => import('./control/SuitesPage'));
+const Compare = lazy(() => import('./pages/Compare'));
+const Run = lazy(() => import('./pages/Run'));
+const Team = lazy(() => import('./pages/Team'));
 
 function NotFound() {
   return (
@@ -27,17 +29,19 @@ function NotFound() {
 
 function AppRoutes() {
   return (
-    <Routes>
-      <Route path="/" element={<Runs />} />
-      <Route path="/team" element={<Team />} />
-      <Route path="/runs/:runId/:branchId" element={<Run />} />
-      <Route path="/compare/:a/:b" element={<Compare />} />
-      <Route path="/suites" element={<SuitesPage />} />
-      <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
-      <Route path="/suites/:id" element={<SuitePage />} />
-      <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+    <Suspense fallback={<PageBody><LoadingState label="Loading the page…" /></PageBody>}>
+      <Routes>
+        <Route path="/" element={<Runs />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/runs/:runId/:branchId" element={<Run />} />
+        <Route path="/compare/:a/:b" element={<Compare />} />
+        <Route path="/suites" element={<SuitesPage />} />
+        <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
+        <Route path="/suites/:id" element={<SuitePage />} />
+        <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Suspense>
   );
 }
 

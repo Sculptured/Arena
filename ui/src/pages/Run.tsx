@@ -18,7 +18,7 @@ import EventLog from '../run/EventLog';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
 import MetricsPanel from '../run/Metrics';
-import { runStats } from '../run/runStats';
+import { checkMark, runStats, safetyLine } from '../run/runStats';
 import { formatCost, summarize } from '../run/timeline';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
@@ -90,7 +90,8 @@ function Stats({ detail }: { detail: BranchDetail }) {
       <Stat label="Steps" value={st.steps} />
       <Stat label="Reads · writes" value={`${st.reads} · ${st.writes}`} />
       <Stat label="Refused / errors" value={st.abnormal ? `⚠ ${st.abnormal}` : '0'} abnormal={st.abnormal > 0} />
-      {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={st.check.passed ? { glyph: '✓', word: `passed${st.check.total ? ` ${st.check.ok}/${st.check.total}` : ''}`, abnormal: false } : { glyph: '✕', word: `failed${st.check.total ? ` ${st.check.ok}/${st.check.total}` : ''}`, abnormal: true }} />} />}
+      {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={checkMark(st.check)} />} />}
+      {st.safety && <Stat label="Safety" value={safetyLine(st.safety)} abnormal={st.safety.violated > 0} />}
       {sm.scope && <span className="col-span-3 text-xs text-muted sm:ml-auto">{sm.scope}</span>}
     </div>
   );
@@ -153,7 +154,6 @@ function Main({ detail, selected, onSelect, models, setModels }: {
         </Tabs>
       </Panel>
       <Panel><PanelHeader title="Trace" meta="the selected step's turn" /><Waterfall events={detail.events} selected={selected} onSelect={onSelect} /></Panel>
-      {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
     </div>
   );
 }
@@ -193,6 +193,7 @@ export default function Run() {
         {detail.error && <ErrorState error={detail.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
         <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
           side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} />} />
+        {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
       </PageBody>
     </>
   );

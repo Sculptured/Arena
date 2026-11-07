@@ -1,4 +1,4 @@
-import { ArrowRight, GitCompare, Play, Search } from 'lucide-react';
+import { ArrowRight, GitCompare, Layers, ListTree, Monitor, Play } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { runs as fetchRuns } from '../api';
@@ -41,7 +41,8 @@ function iconOf(item: Item) {
   if (item.id.startsWith('new-')) return <Play aria-hidden="true" />;
   if (item.id.startsWith('cmp-') || item.group === 'Compare with') return <GitCompare aria-hidden="true" />;
   if (item.group === 'Go to') return <ArrowRight aria-hidden="true" />;
-  return <Search aria-hidden="true" />;
+  if (item.id === 'theme') return <Monitor aria-hidden="true" />;
+  return item.id.startsWith('suite-') ? <Layers aria-hidden="true" /> : <ListTree aria-hidden="true" />;
 }
 
 function groupsOf(items: Item[]): [string, Item[]][] {

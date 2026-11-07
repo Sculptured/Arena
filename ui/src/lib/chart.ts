@@ -9,6 +9,9 @@ export interface ChartColors {
   alarm: string;
 }
 
+/** "12k", "950": an axis value in few characters. */
+export const compact = (v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 100) / 10}k` : `${Math.round(v)}`);
+
 /** A sparkline: one line, no axes, no legend, no cursor. */
 export function sparkOptions(width: number, height: number, c: ChartColors): uPlot.Options {
   return {
@@ -25,7 +28,7 @@ export function lineOptions(width: number, height: number, c: ChartColors, label
   return {
     width, height, legend: { show: false }, cursor: { y: false, points: { size: 5 } },
     scales: { x: { time: false } },
-    axes: [{ ...axis, values: (_u, v) => v.map((s) => `${Math.round(s)} s`) }, { ...axis, size: 44 }],
+    axes: [{ ...axis, values: (_u, v) => v.map((s) => `${Math.round(s)} s`) }, { ...axis, size: 48, values: (_u, v) => v.map(compact) }],
     series: [{ label: 'time' }, { label, stroke: c.series, width: 1.25, points: { show: false } }],
   };
 }

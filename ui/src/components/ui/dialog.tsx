@@ -17,16 +17,14 @@ export function DialogContent({ title, description, className, children, bare = 
       <DialogPrimitive.Content
         className={cn('fixed top-[12vh] left-1/2 z-50 flex max-h-[80vh] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-pop', className)}
         {...props}>
-        <div className={cn('flex items-start gap-3 border-b border-line px-4 py-3', bare && 'sr-only')}>
-          <div className="min-w-0 flex-1">
-            <DialogPrimitive.Title className="text-base font-semibold">{title}</DialogPrimitive.Title>
-            {description
-              ? <DialogPrimitive.Description className="text-xs text-muted">{description}</DialogPrimitive.Description>
-              : <DialogPrimitive.Description className="sr-only">{title}</DialogPrimitive.Description>}
-          </div>
-          <DialogPrimitive.Close className="rounded-sm p-1 text-muted hover:bg-hover hover:text-fg" aria-label="Close"><X className="size-4" /></DialogPrimitive.Close>
+        <div className={cn('border-b border-line py-3 pr-12 pl-4', bare && 'sr-only')}>
+          <DialogPrimitive.Title className="text-base font-semibold">{title}</DialogPrimitive.Title>
+          {description
+            ? <DialogPrimitive.Description className="text-xs text-muted">{description}</DialogPrimitive.Description>
+            : <DialogPrimitive.Description className="sr-only">{title}</DialogPrimitive.Description>}
         </div>
         {children}
+        {!bare && <DialogPrimitive.Close className="absolute top-2.5 right-3 rounded-sm p-1 text-muted hover:bg-hover hover:text-fg" aria-label="Close"><X className="size-4" /></DialogPrimitive.Close>}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );

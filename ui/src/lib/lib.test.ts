@@ -54,5 +54,7 @@ describe('chart options', () => {
     const values = o.axes![0].values as (u: unknown, v: number[]) => string[];
     expect(values(null, [0, 12.4])).toEqual(['0 s', '12 s']);
     expect(o.series[1].label).toBe('context');
+    const y = o.axes![1].values as (u: unknown, v: number[]) => string[];
+    expect(y(null, [0, 950, 10000, 12500])).toEqual(['0', '950', '10k', '12.5k']);
   });
 });

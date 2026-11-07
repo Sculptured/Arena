@@ -4,8 +4,8 @@ import type { Edge, Node } from '@xyflow/react';
 import { type Equipment, type Flow, type ProcessView, type Unit, abnormal } from './process';
 
 export const UNIT_W = 232;
-export const EQUIP_W = 264;
-export const ROW_H = 84;
+export const EQUIP_W = 300;
+export const ROW_H = 92;
 const GAP_X = 260;
 
 export type UnitNode = Node<{ unit: Unit }, 'unit'>;

@@ -71,8 +71,8 @@ export default function MetricsPanel({ m }: { m: Metrics }) {
     <div className="flex flex-col gap-3 p-3">
       <p className="text-sm"><span className="text-2xs font-medium tracking-wide text-muted uppercase">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <div className="rounded-md border border-line"><OverheadTable lines={overheadLines(m.overhead_ms)} /></div>
-        <div className="rounded-md border border-line"><AgentsTable m={m} /></div>
+        <div className="min-w-0 rounded-md border border-line"><OverheadTable lines={overheadLines(m.overhead_ms)} /></div>
+        <div className="min-w-0 rounded-md border border-line"><AgentsTable m={m} /></div>
       </div>
       <p className="text-xs text-muted">Total: {m.tokens} tokens · {costText(m.cost)}. Only this branch's own steps count.</p>
     </div>

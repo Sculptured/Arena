@@ -125,12 +125,15 @@ function useWidth() {
   return { ref, width };
 }
 
-/** Keeps the selected mark in view as the selection moves. */
-function useFollow(box: React.RefObject<HTMLDivElement | null>, selected: number | null) {
+/** Scrolls the track sideways so the selected mark sits in the middle of the visible part, past the lane names. */
+function useFollow(box: React.RefObject<HTMLDivElement | null>, selected: number | null, layout: Layout | null, labelW: number) {
   useEffect(() => {
-    if (selected == null) return;
-    box.current?.querySelector(`[data-seq="${selected}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center' });
-  }, [box, selected]);
+    const el = box.current;
+    const x = layout?.placed.find((p) => p.mark.seq === selected)?.x;
+    if (!el || x == null) return;
+    const visible = el.clientWidth - labelW;
+    if (x < el.scrollLeft + 24 || x > el.scrollLeft + visible - 24) el.scrollLeft = Math.max(0, x - visible / 2);
+  }, [box, selected, layout, labelW]);
 }
 
 export interface TimelineProps {
@@ -174,11 +177,11 @@ function Legend() {
 export default function ActionTimeline({ lanes, team, span, selected, onSelect, models, onModels }: TimelineProps) {
   const [zoom, setZoom] = useState(1);
   const box = useWidth();
-  useFollow(box.ref, selected);
   const labelW = box.width && box.width < 640 ? 112 : 184;
   // A phone gets a track wider than the screen, to scroll; a desktop fits the run at 1×.
   const trackW = Math.max(box.width < 640 ? 640 : 240, (box.width - labelW) * zoom);
   const layout = useMemo(() => (span ? layoutTimeline(lanes, span, trackW, models) : null), [lanes, span, trackW, models]);
+  useFollow(box.ref, selected, layout, labelW);
   return (
     <div className="flex min-w-0 flex-col">
       <Toolbar zoom={zoom} setZoom={setZoom} models={models} onModels={onModels} />

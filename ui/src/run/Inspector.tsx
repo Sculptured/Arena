@@ -160,9 +160,10 @@ function Check({ p }: { p: Payload }) {
       {checks.length > 0 && (
         <Section title={`Checks (${checks.filter((c) => c.passed).length}/${checks.length})`}>
           <ul className="flex flex-col gap-0.5">{checks.map((c) => (
-            <li key={c.name} className="flex items-center gap-2 text-xs" title={c.detail}>
+            <li key={c.name} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs" title={c.detail}>
               <StatusMark mark={c.passed ? { glyph: '✓', word: 'pass', abnormal: false } : { glyph: '✕', word: 'fail', abnormal: true }} />
               <span className="font-mono text-2xs">{c.name}</span>{c.safety && <Tag tone={c.passed ? undefined : 'alarm'}>◆ safety</Tag>}
+              {!c.passed && c.detail && <span className="w-full pl-6 text-2xs text-muted">{c.detail}</span>}
             </li>
           ))}</ul>
         </Section>

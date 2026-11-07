@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { StatusMark, Tag } from '../components/ui/status';
 import { cn } from '@/lib/cn';
 import { kindWord, systemLine } from './actions';
-import { type EquipNode, type EquipShape, type UnitNode, equipShape, flowGraph } from './flowLayout';
+import { EQUIP_W, type EquipNode, type EquipShape, UNIT_W, type UnitNode, equipShape, flowGraph } from './flowLayout';
 import { type Counts, type ProcessView, type UnitState, abnormal, countsLine } from './process';
 
 const STATE: Record<UnitState, { glyph: string; word: string; abnormal: boolean }> = {
@@ -37,7 +37,7 @@ function ShapeGlyph({ shape }: { shape: EquipShape }) {
 function UnitBox({ data }: NodeProps<UnitNode>) {
   const u = data.unit;
   return (
-    <div className={cn('flex flex-col gap-0.5 rounded-md border bg-raised px-2.5 py-1.5 shadow-panel', abnormal(u) ? 'border-alarm' : 'border-line-strong')} style={{ width: 232 }}>
+    <div className={cn('flex flex-col gap-0.5 rounded-md border bg-raised px-2.5 py-1.5 shadow-panel', abnormal(u) ? 'border-alarm' : 'border-line-strong')} style={{ width: UNIT_W }}>
       <span className="truncate text-sm font-medium" title={u.id}>{u.name}</span>
       <span className="flex flex-wrap items-center gap-1.5 text-xs">
         <StatusMark mark={STATE[u.state]} /><span className="font-mono text-2xs text-muted">{countsLine(u)}</span><Alarm c={u} />
@@ -50,7 +50,7 @@ function UnitBox({ data }: NodeProps<UnitNode>) {
 function EquipBox({ data }: NodeProps<EquipNode>) {
   const e = data.equipment;
   return (
-    <div className={cn('flex items-start gap-2 rounded-sm border bg-surface px-2 py-1.5', abnormal(e) ? 'border-alarm' : 'border-equip-line')} style={{ width: 264 }} title={systemLine(e.system)}>
+    <div className={cn('flex items-start gap-2 rounded-sm border bg-surface px-2 py-1.5', abnormal(e) ? 'border-alarm' : 'border-equip-line')} style={{ width: EQUIP_W }} title={systemLine(e.system)}>
       <Handle type="target" position={Position.Left} className="!size-1.5 !border-0 !bg-line-strong" isConnectable={false} />
       <ShapeGlyph shape={equipShape(e.system?.kind)} />
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -68,11 +68,14 @@ const NODE_TYPES = { unit: UnitBox, equipment: EquipBox };
 export default function ProcessDiagram({ view }: { view: ProcessView }) {
   const g = useMemo(() => flowGraph(view), [view]);
   return (
-    <div className="w-full" style={{ height: Math.max(220, g.height + 40) }}>
-      <ReactFlowProvider>
-        <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} fitView fitViewOptions={{ padding: 0.08 }} proOptions={{ hideAttribution: true }}
-          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnScroll={false} preventScrolling={false} minZoom={0.4} maxZoom={1.5} />
-      </ReactFlowProvider>
+    // Narrow screens scroll the diagram sideways rather than shrink it past reading.
+    <div className="w-full overflow-x-auto">
+      <div className="w-full min-w-[720px]" style={{ height: Math.max(220, g.height + 40) }}>
+        <ReactFlowProvider>
+          <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} fitView fitViewOptions={{ padding: 0.08 }} proOptions={{ hideAttribution: true }}
+            nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnScroll={false} preventScrolling={false} minZoom={0.4} maxZoom={1.5} />
+        </ReactFlowProvider>
+      </div>
     </div>
   );
 }

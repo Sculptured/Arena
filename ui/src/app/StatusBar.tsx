@@ -48,7 +48,8 @@ export default function StatusBar() {
   const checked = useCheckedProviders();
   if (!h) return <footer className="h-7 border-t border-line bg-surface" />;
   return (
-    <footer className="bottom-0 z-40 flex min-h-7 flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-line bg-surface px-3 py-0.5 text-xs text-muted sm:sticky">
+    // `status-line`: the hook the capture scripts (examples/*/capture) hide the bar by.
+    <footer className="status-line bottom-0 z-40 flex min-h-7 flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-line bg-surface px-3 py-0.5 text-xs text-muted sm:sticky">
       <span className="truncate" title="Agent CLIs found on this machine"><span className="text-faint">CLI</span> {modesLine(h)}</span>
       <ApiMode statuses={bestProviders(checked.list, h.providers)} />
       <span className="ml-auto"><Disk h={h} /></span>
