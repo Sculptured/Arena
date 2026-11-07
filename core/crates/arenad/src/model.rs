@@ -138,6 +138,8 @@ pub enum BranchStatus {
     Failed,
     InfraError,
     Interrupted,
+    /// Someone stopped the run before it ended; it is not scored.
+    Stopped,
 }
 
 /// `text` trimmed, `None` when that leaves nothing: what a blank provider or model means.
@@ -159,6 +161,7 @@ impl BranchStatus {
             BranchStatus::Failed => "failed",
             BranchStatus::InfraError => "infra_error",
             BranchStatus::Interrupted => "interrupted",
+            BranchStatus::Stopped => "stopped",
         }
     }
 
@@ -169,6 +172,7 @@ impl BranchStatus {
             "failed" => BranchStatus::Failed,
             "infra_error" => BranchStatus::InfraError,
             "interrupted" => BranchStatus::Interrupted,
+            "stopped" => BranchStatus::Stopped,
             _ => return None,
         })
     }
@@ -188,6 +192,10 @@ pub enum EventKind {
     WorldEvent,
     /// The world's view after a step (`{seq_of, view}`), when the benchmark draws one.
     WorldView,
+    /// Someone paused the branch: its calls wait and its clock stands still until `Resume`.
+    Pause,
+    /// The branch goes on after a `Pause` (`{paused_ms}`).
+    Resume,
 }
 
 impl EventKind {
@@ -203,6 +211,8 @@ impl EventKind {
             EventKind::Check => "check",
             EventKind::WorldEvent => "world_event",
             EventKind::WorldView => "world_view",
+            EventKind::Pause => "pause",
+            EventKind::Resume => "resume",
         }
     }
 
@@ -218,6 +228,8 @@ impl EventKind {
             "check" => EventKind::Check,
             "world_event" => EventKind::WorldEvent,
             "world_view" => EventKind::WorldView,
+            "pause" => EventKind::Pause,
+            "resume" => EventKind::Resume,
             _ => return None,
         })
     }

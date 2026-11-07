@@ -33,6 +33,8 @@ pub enum Cat {
     Wait,
     /// Saving the final world and scoring it after the agents are done.
     Score,
+    /// Someone paused the branch: nothing ran meanwhile.
+    Pause,
 }
 
 /// Milliseconds per kind of arena work; a kind with none is left out.
@@ -56,6 +58,8 @@ pub struct Overhead {
     pub wait: f64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub score: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pause: f64,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -74,6 +78,7 @@ impl Overhead {
             Cat::Mcp => &mut self.mcp,
             Cat::Wait => &mut self.wait,
             Cat::Score => &mut self.score,
+            Cat::Pause => &mut self.pause,
         }
     }
 
@@ -89,7 +94,7 @@ impl Overhead {
     }
 
     /// Each kind and its milliseconds.
-    pub fn parts(&self) -> [(Cat, f64); 9] {
+    pub fn parts(&self) -> [(Cat, f64); 10] {
         [
             (Cat::Save, self.save),
             (Cat::Restore, self.restore),
@@ -100,6 +105,7 @@ impl Overhead {
             (Cat::Mcp, self.mcp),
             (Cat::Wait, self.wait),
             (Cat::Score, self.score),
+            (Cat::Pause, self.pause),
         ]
     }
 
