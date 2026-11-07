@@ -1,0 +1,31 @@
+[project]
+name = "arena-sdk"
+version = "0.1.0"
+description = "Build, drive, observe and export Arena environments from Python"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.27"]
+keywords = ["multi-agent", "agents", "llm", "evaluation", "benchmark", "reinforcement-learning", "mcp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Sculptured/Arena"
+Documentation = "https://github.com/Sculptured/Arena/blob/main/docs/sdk.md"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arena"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["core: needs a running or startable arenad (skipped when there is none)"]
