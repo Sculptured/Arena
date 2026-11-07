@@ -28,9 +28,6 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
-/// Nothing listens here: a model call that is let through fails to connect.
-const CLOSED_PROVIDER: &str = "http://127.0.0.1:9";
-
 struct Fx {
     state: Arc<AppState>,
     _hub: TestHub,
@@ -42,8 +39,7 @@ struct Fx {
 async fn setup(tag: &str) -> Fx {
     let hub = TestHub::new(&[]);
     let (store, clean) = app_support::meta_store("pause", tag).await;
-    let (state, base) =
-        app_support::open_app(store, hub.hub.clone(), CLOSED_PROVIDER, |_| {}).await;
+    let (state, base) = app_support::idle_app(store, hub.hub.clone(), None, |_| {}).await;
     Fx {
         state,
         _hub: hub,
