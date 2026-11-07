@@ -28,6 +28,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 /// An app whose benchmark is the toy `toybench`; its hub, metadata database and packages are
 /// dropped with it.
 struct Fx {
@@ -57,7 +64,8 @@ async fn setup(tag: &str, integrations: Vec<Package>, parts: &[&str]) -> Fx {
     let root = packages::package_root(tag, &all);
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("world", tag).await;
-    let (state, base) = app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
+    let (state, base) =
+        app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
     Fx {
         state,
         hub,
@@ -350,21 +358,23 @@ fn gc_reports_failing_integration() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_gc_refused_right_after_run_starts() {
-    let Some(live) = Live::any("live_gc_refused_right_after_run_starts") else {
-        return;
-    };
-    run(async {
-        let part = integration("toy-a", &["--gc"]);
-        let fx = setup("gcnow", vec![part], &["box=toy-a"]).await;
-        let team = live.team(vec![live.agent("a", "Call the peek tool once, then stop.")]);
-        let client = reqwest::Client::new();
-        let req = client.post(format!("{}/api/runs", fx.base));
-        let (st, v) = app_support::send(req.json(&json!({"task_id": "t1", "team": team}))).await;
-        assert_eq!(st, 200, "{v}");
-        let branch = v["branch_id"].as_str().unwrap().to_string();
-        let (st, v) = fx.post("/api/gc").await;
-        assert_eq!(st, 409, "{v}");
-        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
-        live::assert_recorded(&b, &evs, &live);
-    })
+    run_live(
+        Live::any("live_gc_refused_right_after_run_starts"),
+        gc_refused_right_after_run_starts,
+    );
+}
+
+async fn gc_refused_right_after_run_starts(live: Live) {
+    let part = integration("toy-a", &["--gc"]);
+    let fx = setup("gcnow", vec![part], &["box=toy-a"]).await;
+    let team = live.team(vec![live.agent("a", "Call the peek tool once, then stop.")]);
+    let client = reqwest::Client::new();
+    let req = client.post(format!("{}/api/runs", fx.base));
+    let (st, v) = app_support::send(req.json(&json!({"task_id": "t1", "team": team}))).await;
+    assert_eq!(st, 200, "{v}");
+    let branch = v["branch_id"].as_str().unwrap().to_string();
+    let (st, v) = fx.post("/api/gc").await;
+    assert_eq!(st, 409, "{v}");
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
 }

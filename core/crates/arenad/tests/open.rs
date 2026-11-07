@@ -36,6 +36,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 /// An open agent on the default provider that names `model`.
 fn agent(id: &str, model: Option<&str>) -> AgentSpec {
     AgentSpec {
@@ -230,11 +237,16 @@ fn assert_tool_calls_answer_the_model(evs: &[Event]) {
         }
         let tc: ToolCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
         let id = tc.tool_call_id.expect("an open agent's call names its id");
-        assert!(chosen.contains(&id), "{id} not chosen by the model call before it");
+        assert!(
+            chosen.contains(&id),
+            "{id} not chosen by the model call before it"
+        );
         let next = evs[i..].iter().find(|n| n.kind == EventKind::ModelCall);
         if let Some(n) = next {
             let msgs = n.payload["request"]["messages"].as_array().unwrap();
-            let back = msgs.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == id);
+            let back = msgs
+                .iter()
+                .any(|m| m["role"] == "tool" && m["tool_call_id"] == id);
             assert!(back, "the result of {id} went back to the model");
         }
     }
@@ -245,8 +257,14 @@ fn assert_tool_calls_answer_the_model(evs: &[Event]) {
 fn assert_first_request(evs: &[Event], prompt: &str, input: &str) {
     let first = evs.iter().find(|e| e.kind == EventKind::ModelCall).unwrap();
     let req = &first.payload["request"];
-    assert_eq!(req["messages"][0], json!({"role": "system", "content": prompt}));
-    assert_eq!(req["messages"][1], json!({"role": "user", "content": input}));
+    assert_eq!(
+        req["messages"][0],
+        json!({"role": "system", "content": prompt})
+    );
+    assert_eq!(
+        req["messages"][1],
+        json!({"role": "user", "content": input})
+    );
     let tools = live::offered_tools(evs, "solo").unwrap();
     assert!(tools.iter().any(|t| t == "get_order_details"), "{tools:?}");
     assert!(!tools.iter().any(|t| t == "handoff"), "{tools:?}");
@@ -258,37 +276,43 @@ fn assert_first_request(evs: &[Event], prompt: &str, input: &str) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_open_agent_records_every_model_and_tool_call() {
-    let Some(live) = Live::api("live_open_agent_records_every_model_and_tool_call") else {
-        return;
-    };
-    run(async {
-        let prompt = "You are a retail support agent. Use the tools to answer.";
-        let input = "What is the status of order #W7181492? Look it up with get_order_details.";
-        let fx = setup("live", vec![live.agent("solo", prompt)], env_providers()).await;
-        let r = OpenDriver::new(fx.state.clone())
-            .run(agent_run(&fx, 0, input, None))
-            .await;
-        assert!(r.ok || r.failure.is_some(), "{:?}", r.error);
-        let evs = events(&fx).await;
-        let b = fx.state.store.branch(&fx.ctx.branch_id).await.unwrap();
-        for e in evs.iter().filter(|e| e.kind == EventKind::ModelCall) {
-            let mc: ModelCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
-            assert_eq!(mc.request["model"], live.model());
-            assert_eq!(mc.provider.as_deref(), live.provider());
-            assert_eq!(e.agent.as_deref(), Some("solo"));
-            assert!(mc.usage["prompt_tokens"].as_i64().unwrap_or(0) > 0, "{}", mc.usage);
-        }
-        assert_eq!(b.team.agents[0].id, "solo");
-        assert_first_request(&evs, prompt, input);
-        assert_tool_calls_answer_the_model(&evs);
-        let summed: i64 = evs
-            .iter()
-            .filter(|e| e.kind == EventKind::ModelCall)
-            .map(|e| e.payload["usage"]["total_tokens"].as_i64().unwrap_or(0))
-            .sum();
-        assert_eq!(r.tokens["total_tokens"], summed);
-        teardown(fx).await;
-    })
+    run_live(
+        Live::api("live_open_agent_records_every_model_and_tool_call"),
+        open_agent_records_every_model_and_tool_call,
+    );
+}
+
+/// Every model call is the solo agent's, with its model and provider and its usage.
+fn assert_model_calls_named(evs: &[Event], live: &Live) {
+    for e in evs.iter().filter(|e| e.kind == EventKind::ModelCall) {
+        let mc: ModelCallPayload = serde_json::from_value(e.payload.clone()).unwrap();
+        assert_eq!(mc.request["model"], live.model());
+        assert_eq!(mc.provider.as_deref(), live.provider());
+        assert_eq!(e.agent.as_deref(), Some("solo"));
+        let prompt = mc.usage["prompt_tokens"].as_i64().unwrap_or(0);
+        assert!(prompt > 0, "{}", mc.usage);
+    }
+}
+
+async fn open_agent_records_every_model_and_tool_call(live: Live) {
+    let prompt = "You are a retail support agent. Use the tools to answer.";
+    let input = "What is the status of order #W7181492? Look it up with get_order_details.";
+    let fx = setup("live", vec![live.agent("solo", prompt)], env_providers()).await;
+    let r = OpenDriver::new(fx.state.clone())
+        .run(agent_run(&fx, 0, input, None))
+        .await;
+    assert!(r.ok || r.failure.is_some(), "{:?}", r.error);
+    let evs = events(&fx).await;
+    assert_model_calls_named(&evs, &live);
+    assert_first_request(&evs, prompt, input);
+    assert_tool_calls_answer_the_model(&evs);
+    let summed: i64 = evs
+        .iter()
+        .filter(|e| e.kind == EventKind::ModelCall)
+        .map(|e| e.payload["usage"]["total_tokens"].as_i64().unwrap_or(0))
+        .sum();
+    assert_eq!(r.tokens["total_tokens"], summed);
+    teardown(fx).await;
 }
 
 /// A resumed agent gets its new system prompt over the recorded conversation, an agent before
@@ -296,42 +320,54 @@ fn live_open_agent_records_every_model_and_tool_call() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_resume_replaces_the_system_prompt_and_a_handoff_stops_the_loop() {
-    let Some(live) = Live::api("live_resume_replaces_the_system_prompt_and_a_handoff_stops_the_loop")
-    else {
+    run_live(
+        Live::api("live_resume_replaces_the_system_prompt_and_a_handoff_stops_the_loop"),
+        resume_replaces_the_system_prompt_and_a_handoff_stops_the_loop,
+    );
+}
+
+/// When the agent handed off, it ended well right there, its note kept.
+fn assert_handoff_stopped_the_loop(fx: &Fx, evs: &[Event], ok: bool) {
+    let Some(i) = evs.iter().position(|e| e.kind == EventKind::Handoff) else {
+        eprintln!("note: the model did not hand off this time; the handoff part was not exercised");
         return;
     };
-    run(async {
-        let prompt = "You are triage. Do not call any other tool: call handoff at once with a short note for the resolver.";
-        let agents = vec![live.agent("triage", prompt), live.agent("resolver", "r")];
-        let fx = setup("handoff", agents, env_providers()).await;
-        let history = vec![
-            json!({"role": "system", "content": "OLD PROMPT"}),
-            json!({"role": "user", "content": "The customer wants a new address on her account."}),
-        ];
-        let r = OpenDriver::new(fx.state.clone())
-            .run(agent_run(&fx, 0, "unused", Some(history)))
-            .await;
-        assert!(r.ok || r.failure.is_some(), "{:?}", r.error);
-        let evs = events(&fx).await;
-        let first = &evs.iter().find(|e| e.kind == EventKind::ModelCall).unwrap().payload;
-        let msgs = first["request"]["messages"].as_array().unwrap();
-        assert_eq!(msgs[0], json!({"role": "system", "content": prompt}));
-        assert_eq!(msgs[1]["content"], "The customer wants a new address on her account.");
-        assert_eq!(msgs.len(), 2, "the recorded conversation, not the input");
-        let tools = live::offered_tools(&evs, "triage").unwrap();
-        assert!(tools.iter().any(|t| t == "handoff"), "{tools:?}");
-        if live.provider() != Some("openrouter") {
-            assert_eq!(first["request"].get("usage"), None);
-        }
-        match evs.iter().position(|e| e.kind == EventKind::Handoff) {
-            Some(i) => {
-                assert!(r.ok, "{:?}", r.error);
-                assert!(evs[i + 1..].iter().all(|e| e.kind != EventKind::ModelCall), "the loop stopped");
-                let note = fx.ctx.handoff_note("triage").expect("the note is kept");
-                assert_eq!(json!(note), evs[i].payload["note"]);
-            }
-            None => eprintln!("note: the model did not hand off this time; the handoff part was not exercised"),
-        }
-        teardown(fx).await;
-    })
+    assert!(ok);
+    let stopped = evs[i + 1..].iter().all(|e| e.kind != EventKind::ModelCall);
+    assert!(stopped, "the loop stopped");
+    let note = fx.ctx.handoff_note("triage").expect("the note is kept");
+    assert_eq!(json!(note), evs[i].payload["note"]);
+}
+
+/// The first request carries the new system prompt over the recorded conversation (not the
+/// input), as the canonical request (no provider's own fields).
+fn assert_resumed_request(evs: &[Event], prompt: &str) {
+    let first = evs.iter().find(|e| e.kind == EventKind::ModelCall).unwrap();
+    let request = &first.payload["request"];
+    let msgs = request["messages"].as_array().unwrap();
+    assert_eq!(msgs[0], json!({"role": "system", "content": prompt}));
+    let recorded = "The customer wants a new address on her account.";
+    assert_eq!(msgs[1]["content"], recorded);
+    assert_eq!(msgs.len(), 2, "the recorded conversation, not the input");
+    assert_eq!(request.get("usage"), None);
+}
+
+async fn resume_replaces_the_system_prompt_and_a_handoff_stops_the_loop(live: Live) {
+    let prompt = "You are triage. Do not call any other tool: call handoff at once with a short note for the resolver.";
+    let agents = vec![live.agent("triage", prompt), live.agent("resolver", "r")];
+    let fx = setup("handoff", agents, env_providers()).await;
+    let history = vec![
+        json!({"role": "system", "content": "OLD PROMPT"}),
+        json!({"role": "user", "content": "The customer wants a new address on her account."}),
+    ];
+    let r = OpenDriver::new(fx.state.clone())
+        .run(agent_run(&fx, 0, "unused", Some(history)))
+        .await;
+    assert!(r.ok || r.failure.is_some(), "{:?}", r.error);
+    let evs = events(&fx).await;
+    assert_resumed_request(&evs, prompt);
+    let tools = live::offered_tools(&evs, "triage").unwrap();
+    assert!(tools.iter().any(|t| t == "handoff"), "{tools:?}");
+    assert_handoff_stopped_the_loop(&fx, &evs, r.ok);
+    teardown(fx).await;
 }

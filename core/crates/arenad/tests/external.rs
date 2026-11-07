@@ -31,6 +31,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 struct Fx {
     state: Arc<AppState>,
     _hub: TestHub,
@@ -122,7 +129,11 @@ fn only_external_runs_take_registrations() {
         let unknown = fx.on(&branch, "agents/nobody/usage", json!({"input_tokens": 1}));
         assert_eq!(unknown.await.0, 404);
         assert_eq!(fx.finish(&branch).await.0, 200);
-        assert_eq!(fx.finish(&branch).await.0, 404, "a finished branch is no longer live");
+        assert_eq!(
+            fx.finish(&branch).await.0,
+            404,
+            "a finished branch is no longer live"
+        );
     })
 }
 
@@ -138,14 +149,22 @@ async fn ticket(fx: &Fx) -> String {
 /// Registers `id` and runs Claude Code as it on the ticket through its MCP endpoint, reporting
 /// each model call the client saw and the agent's end, as a design does. The registration and
 /// what was reported.
-async fn work(fx: &Fx, live: &Live, branch: &str, join: Value, task: &str) -> (Value, live::ExternalRun) {
+async fn work(
+    fx: &Fx,
+    live: &Live,
+    branch: &str,
+    join: Value,
+    task: &str,
+) -> (Value, live::ExternalRun) {
     let id = join["id"].as_str().unwrap().to_string();
     let reg = register(fx, branch, join).await;
     let mcp = reg["mcp_url"].as_str().unwrap();
     let prompt = format!("You are a retail support agent. Use your tools to handle this ticket, then stop.\n\n{task}");
     let ran = live::run_claude(live, "retail", mcp, &prompt).await;
     for r in &ran.reports {
-        let (status, v) = fx.on(branch, &format!("agents/{id}/usage"), r.clone()).await;
+        let (status, v) = fx
+            .on(branch, &format!("agents/{id}/usage"), r.clone())
+            .await;
         assert_eq!(status, 200, "{v}");
     }
     let ok = ran.result["is_error"] == false;
@@ -156,23 +175,69 @@ async fn work(fx: &Fx, live: &Live, branch: &str, join: Value, task: &str) -> (V
     (reg, ran)
 }
 
+/// A reported call's whole input: fresh, cache-written and cache-read tokens.
+fn whole_input(r: &Value) -> i64 {
+    [
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ]
+    .iter()
+    .map(|k| r[k].as_i64().unwrap())
+    .sum()
+}
+
+/// A read-only agent that joins later is offered no write tool, by registration or by its MCP
+/// endpoint.
+async fn assert_reviewer_reads_only(fx: &Fx, branch: &str) {
+    let reviewer = register(fx, branch, json!({"id": "reviewer", "read_only": true})).await;
+    let write = "exchange_delivered_order_items";
+    assert!(!reviewer["tools"].to_string().contains(write));
+    let offered = live::mcp_tools(reviewer["mcp_url"].as_str().unwrap()).await;
+    assert!(!offered.iter().any(|t| t == write), "{offered:?}");
+}
+
+/// Finishing the run scores it and records its check, after everything the system did.
+async fn assert_finished(fx: &Fx, live: &Live, branch: &str) {
+    let (status, v) = fx.finish(branch).await;
+    assert_eq!(status, 200, "{v}");
+    let b = fx.state.store.branch(branch).await.unwrap();
+    let scored = matches!(b.status, BranchStatus::Passed | BranchStatus::Failed);
+    assert!(scored, "{:?}", b.status);
+    assert_eq!(v["status"], json!(b.status));
+    let evs = fx.events(branch).await;
+    live::assert_recorded(&b, &evs, live);
+    assert_eq!(evs[0].payload["runner"], "external");
+    let k = kinds(&evs);
+    assert_eq!(k[..2], [EventKind::RunStart, EventKind::AgentStart]);
+    assert_eq!(k.last(), Some(&EventKind::Check));
+    let ids: Vec<_> = b.team.agents.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, ["solo", "reviewer"]);
+    assert!(b.team.agents.iter().all(|a| a.kind == AgentKind::External));
+}
+
 /// The agent's model calls as its client reported them: one per message, each with its usage,
 /// and the metrics' count and peak context are theirs.
 async fn assert_reported(fx: &Fx, branch: &str, ran: &live::ExternalRun) {
     let evs = fx.events(branch).await;
-    let calls: Vec<&Event> = evs.iter().filter(|e| e.kind == EventKind::ModelCall).collect();
+    let calls: Vec<&Event> = evs
+        .iter()
+        .filter(|e| e.kind == EventKind::ModelCall)
+        .collect();
     assert_eq!(calls.len(), ran.reports.len());
-    assert!(!calls.is_empty(), "Claude Code made at least one model call");
+    assert!(
+        !calls.is_empty(),
+        "Claude Code made at least one model call"
+    );
     for (c, r) in calls.iter().zip(&ran.reports) {
         assert_eq!(c.payload["reported_by"], "client");
         assert_eq!(c.payload["message_id"], r["message_id"]);
-        let whole = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
-            .iter()
-            .map(|k| r[k].as_i64().unwrap())
-            .sum::<i64>();
-        assert_eq!(c.payload["usage"]["prompt_tokens"], whole);
+        assert_eq!(c.payload["usage"]["prompt_tokens"], whole_input(r));
     }
-    let peak = calls.iter().map(|c| c.payload["usage"]["prompt_tokens"].as_i64().unwrap()).max();
+    let peak = calls
+        .iter()
+        .map(|c| c.payload["usage"]["prompt_tokens"].as_i64().unwrap())
+        .max();
     let a = fx.metrics_of(branch).await["agents"][0].clone();
     assert_eq!(a["model_calls"], json!(calls.len()));
     assert_eq!(a["peak_prompt_tokens"], json!(peak.unwrap()));
@@ -185,37 +250,34 @@ async fn assert_reported(fx: &Fx, branch: &str, ran: &live::ExternalRun) {
 #[test]
 #[ignore = "live: runs Claude Code (support/live.rs)"]
 fn live_an_external_system_drives_a_run_and_arena_records_it() {
-    let Some(live) = Live::claude("live_an_external_system_drives_a_run_and_arena_records_it") else {
-        return;
-    };
-    run(async {
-        let fx = setup("drive").await;
-        let branch = start(&fx).await;
-        let task = ticket(&fx).await;
-        let (reg, ran) = work(&fx, &live, &branch, json!({"id": "solo", "model": live.model()}), &task).await;
-        let tools = reg["tools"].to_string();
-        assert!(tools.contains("exchange_delivered_order_items") && tools.contains("\"inbox\""));
-        let reviewer = register(&fx, &branch, json!({"id": "reviewer", "read_only": true})).await;
-        assert!(!reviewer["tools"].to_string().contains("exchange_delivered_order_items"));
-        let offered = live::mcp_tools(reviewer["mcp_url"].as_str().unwrap()).await;
-        assert!(!offered.iter().any(|t| t == "exchange_delivered_order_items"), "{offered:?}");
-        assert_reported(&fx, &branch, &ran).await;
-        let (status, v) = fx.finish(&branch).await;
-        assert_eq!(status, 200, "{v}");
-        let b = fx.state.store.branch(&branch).await.unwrap();
-        assert!(matches!(b.status, BranchStatus::Passed | BranchStatus::Failed), "{:?}", b.status);
-        assert_eq!(v["status"], json!(b.status));
-        let evs = fx.events(&branch).await;
-        live::assert_recorded(&b, &evs, &live);
-        assert_eq!(evs[0].payload["runner"], "external");
-        let k = kinds(&evs);
-        assert_eq!(k[..2], [EventKind::RunStart, EventKind::AgentStart]);
-        assert_eq!(k.last(), Some(&EventKind::Check));
-        let ids: Vec<_> = b.team.agents.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, ["solo", "reviewer"]);
-        assert!(b.team.agents.iter().all(|a| a.kind == AgentKind::External));
-        assert_eq!(fx.finish(&branch).await.0, 404, "a finished branch is no longer live");
-    })
+    run_live(
+        Live::claude("live_an_external_system_drives_a_run_and_arena_records_it"),
+        an_external_system_drives_a_run_and_arena_records_it,
+    );
+}
+
+async fn an_external_system_drives_a_run_and_arena_records_it(live: Live) {
+    let fx = setup("drive").await;
+    let branch = start(&fx).await;
+    let task = ticket(&fx).await;
+    let (reg, ran) = work(
+        &fx,
+        &live,
+        &branch,
+        json!({"id": "solo", "model": live.model()}),
+        &task,
+    )
+    .await;
+    let tools = reg["tools"].to_string();
+    assert!(tools.contains("exchange_delivered_order_items") && tools.contains("\"inbox\""));
+    assert_reviewer_reads_only(&fx, &branch).await;
+    assert_reported(&fx, &branch, &ran).await;
+    assert_finished(&fx, &live, &branch).await;
+    assert_eq!(
+        fx.finish(&branch).await.0,
+        404,
+        "a finished branch is no longer live"
+    );
 }
 
 /// A fork of an external run hands the system each agent's history up to the fork point and its
@@ -224,49 +286,70 @@ fn live_an_external_system_drives_a_run_and_arena_records_it() {
 #[test]
 #[ignore = "live: runs Claude Code (support/live.rs)"]
 fn live_a_fork_of_an_external_run_hands_back_each_agents_history() {
-    let Some(live) = Live::claude("live_a_fork_of_an_external_run_hands_back_each_agents_history") else {
-        return;
-    };
-    run(async {
-        let fx = setup("fork").await;
-        let branch = start(&fx).await;
-        let task = ticket(&fx).await;
-        work(&fx, &live, &branch, json!({"id": "solo", "model": live.model()}), &task).await;
-        register(&fx, &branch, json!({"id": "reviewer", "read_only": true})).await;
-        assert_eq!(fx.finish(&branch).await.0, 200);
-        let evs = fx.events(&branch).await;
-        // Fork at the reviewer's start: after everything the first agent did.
-        let at = live::first_of(&evs, EventKind::AgentStart, "reviewer").unwrap();
-        let (status, f) = fx.on(&branch, "fork", json!({"at_seq": at})).await;
-        assert_eq!((status, &f["start_seq"]), (200, &json!(at)), "{f}");
-        let agents = f["agents"].as_array().unwrap();
-        let of = |id: &str| agents.iter().find(|a| a["agent"] == id).unwrap().clone();
-        let history = of("solo")["history"].as_array().unwrap().clone();
-        let want: Vec<Value> = evs
-            .iter()
-            .filter(|e| e.seq < at && e.agent.as_deref() == Some("solo"))
-            .map(|e| json!(e.kind))
-            .collect();
-        let got: Vec<Value> = history.iter().map(|e| e["kind"].clone()).collect();
-        assert_eq!(got, want);
-        let child = f["branch_id"].as_str().unwrap().to_string();
-        assert!(fx.state.live.read().unwrap().contains_key(&child));
-        assert!(of("reviewer")["mcp_url"].as_str().unwrap().contains(&child));
-        let (status, v) = fx.finish(&child).await;
-        assert_eq!(status, 200, "{v}");
-        let swap_team = json!({"id": "single", "name": "Single agent", "agents": [
-            {"id": "solo2", "name": "Solo", "kind": "external", "model": null, "prompt": "You do it all."}]});
-        let both = json!({"changes": {"solo": {"prompt": "x"}}, "at_seq": at, "team": swap_team});
-        assert_eq!(fx.on(&branch, "fork", both).await.0, 400);
-        let (status, f) = fx.on(&branch, "fork", json!({"at_seq": at, "team": swap_team})).await;
-        assert_eq!(status, 200, "{f}");
-        let agents = f["agents"].as_array().unwrap();
-        assert_eq!((agents.len(), &agents[0]["agent"]), (1, &json!("solo2")));
-        assert_eq!(agents[0]["history"], json!([]));
-        let swapped = f["branch_id"].as_str().unwrap();
-        let stored = fx.state.store.branch(swapped).await.unwrap();
-        assert_eq!(stored.team.id, "single");
-        assert!(stored.fork_note.unwrap().contains("Single agent"));
-        assert_eq!(fx.finish(swapped).await.0, 200);
-    })
+    run_live(
+        Live::claude("live_a_fork_of_an_external_run_hands_back_each_agents_history"),
+        a_fork_of_an_external_run_hands_back_each_agents_history,
+    );
+}
+
+async fn a_fork_of_an_external_run_hands_back_each_agents_history(live: Live) {
+    let fx = setup("fork").await;
+    let branch = start(&fx).await;
+    let task = ticket(&fx).await;
+    work(
+        &fx,
+        &live,
+        &branch,
+        json!({"id": "solo", "model": live.model()}),
+        &task,
+    )
+    .await;
+    register(&fx, &branch, json!({"id": "reviewer", "read_only": true})).await;
+    assert_eq!(fx.finish(&branch).await.0, 200);
+    let evs = fx.events(&branch).await;
+    // Fork at the reviewer's start: after everything the first agent did.
+    let at = live::first_of(&evs, EventKind::AgentStart, "reviewer").unwrap();
+    assert_history_handed_back(&fx, &branch, &evs, at).await;
+    assert_team_swap(&fx, &branch, at).await;
+}
+
+/// A fork at `at` hands back each agent's history before it and its endpoints on the new branch.
+async fn assert_history_handed_back(fx: &Fx, branch: &str, evs: &[Event], at: i64) {
+    let (status, f) = fx.on(branch, "fork", json!({"at_seq": at})).await;
+    assert_eq!((status, &f["start_seq"]), (200, &json!(at)), "{f}");
+    let agents = f["agents"].as_array().unwrap();
+    let of = |id: &str| agents.iter().find(|a| a["agent"] == id).unwrap().clone();
+    let history = of("solo")["history"].as_array().unwrap().clone();
+    let want: Vec<Value> = evs
+        .iter()
+        .filter(|e| e.seq < at && e.agent.as_deref() == Some("solo"))
+        .map(|e| json!(e.kind))
+        .collect();
+    let got: Vec<Value> = history.iter().map(|e| e["kind"].clone()).collect();
+    assert_eq!(got, want);
+    let child = f["branch_id"].as_str().unwrap().to_string();
+    assert!(fx.state.live.read().unwrap().contains_key(&child));
+    assert!(of("reviewer")["mcp_url"].as_str().unwrap().contains(&child));
+    let (status, v) = fx.finish(&child).await;
+    assert_eq!(status, 200, "{v}");
+}
+
+/// A fork may give another team instead of agent changes (not both); its agents have no history.
+async fn assert_team_swap(fx: &Fx, branch: &str, at: i64) {
+    let swap_team = json!({"id": "single", "name": "Single agent", "agents": [
+        {"id": "solo2", "name": "Solo", "kind": "external", "model": null, "prompt": "You do it all."}]});
+    let both = json!({"changes": {"solo": {"prompt": "x"}}, "at_seq": at, "team": swap_team});
+    assert_eq!(fx.on(branch, "fork", both).await.0, 400);
+    let (status, f) = fx
+        .on(branch, "fork", json!({"at_seq": at, "team": swap_team}))
+        .await;
+    assert_eq!(status, 200, "{f}");
+    let agents = f["agents"].as_array().unwrap();
+    assert_eq!((agents.len(), &agents[0]["agent"]), (1, &json!("solo2")));
+    assert_eq!(agents[0]["history"], json!([]));
+    let swapped = f["branch_id"].as_str().unwrap();
+    let stored = fx.state.store.branch(swapped).await.unwrap();
+    assert_eq!(stored.team.id, "single");
+    assert!(stored.fork_note.unwrap().contains("Single agent"));
+    assert_eq!(fx.finish(swapped).await.0, 200);
 }

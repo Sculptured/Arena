@@ -40,6 +40,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 /// A team for data only (never run).
 fn team() -> Team {
     let agent = |id: &str| AgentSpec {
@@ -130,8 +137,14 @@ async fn order_before(fx: &Fx, evs: &[Event], at: i64) -> Value {
 
 /// The child's first read of the order, if it read it before writing anything.
 fn first_read_before_writes(cevs: &[Event], from: i64) -> Option<Value> {
-    for e in cevs.iter().filter(|e| e.seq >= from && e.kind == EventKind::ToolCall) {
-        if e.payload["writes"].as_array().is_some_and(|w| !w.is_empty()) {
+    for e in cevs
+        .iter()
+        .filter(|e| e.seq >= from && e.kind == EventKind::ToolCall)
+    {
+        if e.payload["writes"]
+            .as_array()
+            .is_some_and(|w| !w.is_empty())
+        {
             return None;
         }
         if e.payload["name"] == "get_order_details" && e.payload["error"].is_null() {
@@ -147,33 +160,54 @@ fn first_read_before_writes(cevs: &[Event], from: i64) -> Option<Value> {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_fork_restores_the_world_at_its_fork_point() {
-    let Some(live) = Live::any("live_a_fork_restores_the_world_at_its_fork_point") else {
-        return;
-    };
-    run(async {
-        let fx = setup("world").await;
-        let (pid, b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
-        let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
-        let e = fork::fork(&fx.state, &pid, 999, HashMap::new()).await.unwrap_err();
-        assert!(matches!(e, ForkError::UnknownSeq), "{e:?}");
-        let ghost = HashMap::from([("ghost".to_string(), Change { model: Some("x/y".into()), ..Default::default() })]);
-        let e = fork::fork(&fx.state, &pid, at, ghost).await.unwrap_err();
-        assert!(matches!(e, ForkError::UnknownAgent(ref a) if a == "ghost"), "{e:?}");
-        assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1);
+    run_live(
+        Live::any("live_a_fork_restores_the_world_at_its_fork_point"),
+        a_fork_restores_the_world_at_its_fork_point,
+    );
+}
 
-        let resp = fork::fork(&fx.state, &pid, at, HashMap::new()).await.unwrap();
-        assert_eq!((resp.start_seq, resp.moved_from), (at, None));
-        let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
-        assert_child_of(&c, &b, &pid, at);
-        live::assert_recorded(&c, &cevs, &live);
-        assert_eq!(events_before(&cevs, at), events_before(&pevs, at));
-        assert!(cevs.iter().filter(|e| e.seq >= at).all(|e| e.agent.as_deref() != Some("triage")));
-        let want = order_before(&fx, &pevs, at).await;
-        match first_read_before_writes(&cevs, at) {
-            Some(read) => assert_eq!(read["status"], want["status"], "{read}"),
-            None => eprintln!("note: the resolver did not read the order first this time"),
-        }
-    })
+/// A fork at a step the branch doesn't have, or changing an agent the team doesn't have, is
+/// refused and makes no branch.
+async fn assert_bad_forks_make_nothing(fx: &Fx, pid: &str, at: i64) {
+    let e = fork::fork(&fx.state, pid, 999, HashMap::new())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ForkError::UnknownSeq), "{e:?}");
+    let change = Change {
+        model: Some("x/y".into()),
+        ..Default::default()
+    };
+    let ghost = HashMap::from([("ghost".to_string(), change)]);
+    let e = fork::fork(&fx.state, pid, at, ghost).await.unwrap_err();
+    assert!(
+        matches!(e, ForkError::UnknownAgent(ref a) if a == "ghost"),
+        "{e:?}"
+    );
+    assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1);
+}
+
+async fn a_fork_restores_the_world_at_its_fork_point(live: Live) {
+    let fx = setup("world").await;
+    let (pid, b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
+    let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
+    assert_bad_forks_make_nothing(&fx, &pid, at).await;
+    let resp = fork::fork(&fx.state, &pid, at, HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!((resp.start_seq, resp.moved_from), (at, None));
+    let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    assert_child_of(&c, &b, &pid, at);
+    live::assert_recorded(&c, &cevs, &live);
+    assert_eq!(events_before(&cevs, at), events_before(&pevs, at));
+    assert!(cevs
+        .iter()
+        .filter(|e| e.seq >= at)
+        .all(|e| e.agent.as_deref() != Some("triage")));
+    let want = order_before(&fx, &pevs, at).await;
+    match first_read_before_writes(&cevs, at) {
+        Some(read) => assert_eq!(read["status"], want["status"], "{read}"),
+        None => eprintln!("note: the resolver did not read the order first this time"),
+    }
 }
 
 /// A prompt change for the resolver: the child stores its effective team and the change as
@@ -182,30 +216,39 @@ fn live_a_fork_restores_the_world_at_its_fork_point() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_fork_applies_a_prompt_change() {
-    let Some(live) = Live::any("live_a_fork_applies_a_prompt_change") else {
-        return;
+    run_live(
+        Live::any("live_a_fork_applies_a_prompt_change"),
+        a_fork_applies_a_prompt_change,
+    );
+}
+
+async fn a_fork_applies_a_prompt_change(live: Live) {
+    let fx = setup("prompt").await;
+    let team = bench_team(&fx, &live).await;
+    let triage_prompt = team.agents[0].prompt.clone();
+    let (pid, _b, pevs) = parent(&fx, team).await;
+    let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
+    let new_prompt =
+        "You are a careful resolver. Never change addresses. Read the order, then stop.";
+    let change = Change {
+        prompt: Some(new_prompt.into()),
+        ..Default::default()
     };
-    run(async {
-        let fx = setup("prompt").await;
-        let team = bench_team(&fx, &live).await;
-        let triage_prompt = team.agents[0].prompt.clone();
-        let (pid, _b, pevs) = parent(&fx, team).await;
-        let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
-        let new_prompt = "You are a careful resolver. Never change addresses. Read the order, then stop.";
-        let change = Change { prompt: Some(new_prompt.into()), ..Default::default() };
-        let changes = HashMap::from([("resolver".to_string(), change)]);
-        let resp = fork::fork(&fx.state, &pid, at, changes).await.unwrap();
-        assert_eq!(resp.start_seq, at);
-        let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
-        live::assert_recorded(&c, &cevs, &live);
-        assert_eq!(c.team.agents[1].prompt, new_prompt);
-        assert_eq!(c.team.agents[0].prompt, triage_prompt);
-        assert_eq!(c.changes["resolver"]["prompt"], new_prompt);
-        assert_eq!(c.fork_note, None);
-        for e in cevs.iter().filter(|e| e.seq >= at && e.kind == EventKind::ModelCall) {
-            assert_eq!(e.payload["request"]["messages"][0]["content"], new_prompt);
-        }
-    })
+    let changes = HashMap::from([("resolver".to_string(), change)]);
+    let resp = fork::fork(&fx.state, &pid, at, changes).await.unwrap();
+    assert_eq!(resp.start_seq, at);
+    let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    live::assert_recorded(&c, &cevs, &live);
+    assert_eq!(c.team.agents[1].prompt, new_prompt);
+    assert_eq!(c.team.agents[0].prompt, triage_prompt);
+    assert_eq!(c.changes["resolver"]["prompt"], new_prompt);
+    assert_eq!(c.fork_note, None);
+    for e in cevs
+        .iter()
+        .filter(|e| e.seq >= at && e.kind == EventKind::ModelCall)
+    {
+        assert_eq!(e.payload["request"]["messages"][0]["content"], new_prompt);
+    }
 }
 
 /// arenad's own agent resumes a fork at one of its model calls: the child starts there and its
@@ -213,24 +256,37 @@ fn live_a_fork_applies_a_prompt_change() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_an_open_agent_resumes_a_fork_mid_conversation() {
-    let Some(live) = Live::api("live_an_open_agent_resumes_a_fork_mid_conversation") else {
-        return;
-    };
-    run(async {
-        let fx = setup("resume").await;
-        let (pid, _b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
-        let calls: Vec<&Event> = pevs
-            .iter()
-            .filter(|e| e.kind == EventKind::ModelCall && e.agent.as_deref() == Some("resolver"))
-            .collect();
-        let at_call = calls.last().expect("the resolver called its model");
-        let at = at_call.seq;
-        let resp = fork::fork(&fx.state, &pid, at, HashMap::new()).await.unwrap();
-        assert_eq!((resp.start_seq, resp.moved_from, resp.reason), (at, None, None));
-        let (_c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
-        let first = cevs.iter().find(|e| e.seq >= at && e.kind == EventKind::ModelCall).unwrap();
-        assert_eq!(first.payload["request"]["messages"], at_call.payload["request"]["messages"]);
-    })
+    run_live(
+        Live::api("live_an_open_agent_resumes_a_fork_mid_conversation"),
+        an_open_agent_resumes_a_fork_mid_conversation,
+    );
+}
+
+async fn an_open_agent_resumes_a_fork_mid_conversation(live: Live) {
+    let fx = setup("resume").await;
+    let (pid, _b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
+    let calls: Vec<&Event> = pevs
+        .iter()
+        .filter(|e| e.kind == EventKind::ModelCall && e.agent.as_deref() == Some("resolver"))
+        .collect();
+    let at_call = calls.last().expect("the resolver called its model");
+    let at = at_call.seq;
+    let resp = fork::fork(&fx.state, &pid, at, HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.start_seq, resp.moved_from, resp.reason),
+        (at, None, None)
+    );
+    let (_c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    let first = cevs
+        .iter()
+        .find(|e| e.seq >= at && e.kind == EventKind::ModelCall)
+        .unwrap();
+    assert_eq!(
+        first.payload["request"]["messages"],
+        at_call.payload["request"]["messages"]
+    );
 }
 
 /// A branch of task 27 that has started and not ended.
@@ -427,7 +483,11 @@ impl LegacyFx {
         let ended = live::ended(&self.state, &child).await;
         let cevs = self.state.store.events(&child).await.unwrap();
         match first_read_before_writes(&cevs, at) {
-            Some(read) => assert_eq!(read["status"], "exchange requested", "{read} {:?}", ended.error),
+            Some(read) => assert_eq!(
+                read["status"], "exchange requested",
+                "{read} {:?}",
+                ended.error
+            ),
             None => eprintln!("note: the agent did not read the order first this time"),
         }
     }
@@ -472,13 +532,15 @@ fn old_run_still_shows_rows_compares_and_deletes() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_old_run_still_forks_from_its_snapshot() {
-    let Some(live) = Live::api("live_old_run_still_forks_from_its_snapshot") else {
-        return;
-    };
-    run(async {
-        let prompt = "You are a retail support agent. First read order #W7181492 with get_order_details, then stop.";
-        let fx = LegacyFx::new(&live.team(vec![live.agent("resolver", prompt)])).await;
-        fx.check_fork().await;
-        fx.check_delete().await;
-    })
+    run_live(
+        Live::api("live_old_run_still_forks_from_its_snapshot"),
+        old_run_still_forks_from_its_snapshot,
+    );
+}
+
+async fn old_run_still_forks_from_its_snapshot(live: Live) {
+    let prompt = "You are a retail support agent. First read order #W7181492 with get_order_details, then stop.";
+    let fx = LegacyFx::new(&live.team(vec![live.agent("resolver", prompt)])).await;
+    fx.check_fork().await;
+    fx.check_delete().await;
 }

@@ -30,6 +30,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 fn agent(id: &str) -> AgentSpec {
     AgentSpec {
         id: id.into(),
@@ -262,27 +269,29 @@ fn health_tasks_and_run_validation() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_post_run_then_stream_until_status() {
-    let Some(live) = Live::any("live_post_run_then_stream_until_status") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("stream").await;
-        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
-        let team = live.bench_team(bench.team.unwrap());
-        let (st, v) = fx
-            .post("/api/runs", json!({"task_id": "27", "team": team}))
-            .await;
-        assert_eq!(st, 200, "{v}");
-        let branch = v["branch_id"].as_str().unwrap().to_string();
-        let run_id = v["run_id"].as_str().unwrap().to_string();
-        let (frames, seqs) = assert_stream_ended(&fx, &branch).await;
-        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
-        live::assert_recorded(&b, &evs, &live);
-        let again = read_stream(&fx, &branch).await;
-        assert_eq!(again.len(), frames);
-        assert_branch_and_run_listed(&fx, &branch, &run_id, seqs).await;
-        teardown(fx, &[&branch]).await;
-    })
+    run_live(
+        Live::any("live_post_run_then_stream_until_status"),
+        post_run_then_stream_until_status,
+    );
+}
+
+async fn post_run_then_stream_until_status(live: Live) {
+    let fx = live_setup("stream").await;
+    let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+    let team = live.bench_team(bench.team.unwrap());
+    let (st, v) = fx
+        .post("/api/runs", json!({"task_id": "27", "team": team}))
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let branch = v["branch_id"].as_str().unwrap().to_string();
+    let run_id = v["run_id"].as_str().unwrap().to_string();
+    let (frames, seqs) = assert_stream_ended(&fx, &branch).await;
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
+    let again = read_stream(&fx, &branch).await;
+    assert_eq!(again.len(), frames);
+    assert_branch_and_run_listed(&fx, &branch, &run_id, seqs).await;
+    teardown(fx, &[&branch]).await;
 }
 
 fn solo(live: &Live) -> Team {
@@ -313,39 +322,50 @@ async fn final_save(fx: &Fx, branch: &str) -> String {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_compare_diffs_the_final_saves_of_two_runs() {
-    let Some(live) = Live::any("live_compare_diffs_the_final_saves_of_two_runs") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("compare").await;
-        let a = fx.run_to_end("27", &solo(&live)).await;
-        let b = fx.run_to_end("27", &solo(&live)).await;
-        let (st, v) = fx.get(&format!("/api/compare?a={a}&b={b}")).await;
-        assert_eq!(st, 200, "{v}");
-        for (side, id) in [("a", &a), ("b", &b)] {
-            let br = fx.state.store.branch(id).await.unwrap();
-            assert_eq!(v[side]["status"], json!(br.status), "{v}");
-            assert!(v[side]["tokens"].as_i64().unwrap() > 0, "{v}");
-            assert!(v[side]["seconds"].as_f64().unwrap() >= 0.0, "{v}");
-        }
-        let (sa, sb) = (final_save(&fx, &a).await, final_save(&fx, &b).await);
-        let mut want = fx._hub.diff(json!({"save": sa}), json!({"save": sb})).await;
-        want.sort();
-        let rows = v["differing_rows"].as_array().unwrap();
-        let mut keys: Vec<String> = rows.iter().map(|r| r["key"].as_str().unwrap().to_string()).collect();
-        keys.sort();
-        assert_eq!(keys, want);
-        for r in rows {
-            let key = r["key"].as_str().unwrap();
-            let doc_a = &fx._hub.inspect_save(&sa, &[key]).await[key];
-            let doc_b = &fx._hub.inspect_save(&sb, &[key]).await[key];
-            assert_eq!((&r["a"], &r["b"]), (doc_a, doc_b), "{key}");
-        }
-        let first = &v["first_divergent_seq"];
-        assert!(first.is_null() || first.as_i64().unwrap() >= 1, "{first}");
-        compare_edge_cases(&fx, &a).await;
-        teardown(fx, &[&a, &b]).await;
-    })
+    run_live(
+        Live::any("live_compare_diffs_the_final_saves_of_two_runs"),
+        compare_diffs_the_final_saves_of_two_runs,
+    );
+}
+
+/// The differing rows are exactly the part's `diff` of the two final saves, each side's doc read
+/// from its save.
+async fn assert_rows_are_the_parts_diff(fx: &Fx, v: &Value, a: &str, b: &str) {
+    let (sa, sb) = (final_save(fx, a).await, final_save(fx, b).await);
+    let mut want = fx._hub.diff(json!({"save": sa}), json!({"save": sb})).await;
+    want.sort();
+    let rows = v["differing_rows"].as_array().unwrap();
+    let mut keys: Vec<String> = rows
+        .iter()
+        .map(|r| r["key"].as_str().unwrap().to_string())
+        .collect();
+    keys.sort();
+    assert_eq!(keys, want);
+    for r in rows {
+        let key = r["key"].as_str().unwrap();
+        let doc_a = &fx._hub.inspect_save(&sa, &[key]).await[key];
+        let doc_b = &fx._hub.inspect_save(&sb, &[key]).await[key];
+        assert_eq!((&r["a"], &r["b"]), (doc_a, doc_b), "{key}");
+    }
+}
+
+async fn compare_diffs_the_final_saves_of_two_runs(live: Live) {
+    let fx = live_setup("compare").await;
+    let a = fx.run_to_end("27", &solo(&live)).await;
+    let b = fx.run_to_end("27", &solo(&live)).await;
+    let (st, v) = fx.get(&format!("/api/compare?a={a}&b={b}")).await;
+    assert_eq!(st, 200, "{v}");
+    for (side, id) in [("a", &a), ("b", &b)] {
+        let br = fx.state.store.branch(id).await.unwrap();
+        assert_eq!(v[side]["status"], json!(br.status), "{v}");
+        assert!(v[side]["tokens"].as_i64().unwrap() > 0, "{v}");
+        assert!(v[side]["seconds"].as_f64().unwrap() >= 0.0, "{v}");
+    }
+    assert_rows_are_the_parts_diff(&fx, &v, &a, &b).await;
+    let first = &v["first_divergent_seq"];
+    assert!(first.is_null() || first.as_i64().unwrap() >= 1, "{first}");
+    compare_edge_cases(&fx, &a).await;
+    teardown(fx, &[&a, &b]).await;
 }
 
 /// The rows request for `keys` at step `seq` of branch `b`, plus `extra` query text.
@@ -373,34 +393,48 @@ async fn bad_rows_requests(fx: &Fx, b: &str, seq: i64) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_rows_read_each_steps_save() {
-    let Some(live) = Live::any("live_rows_read_each_steps_save") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("rows").await;
-        let b = fx.run_to_end("27", &solo(&live)).await;
-        let evs = fx.state.store.events(&b).await.unwrap();
-        let order = format!("orders/{ORDER}");
-        let keys = format!("orders/%23W7181492,users/nobody");
-        let (st, v) = fx.get(&rows_path(&b, 1, &keys, "")).await;
-        assert_eq!((st, &v["seq"]), (200, &json!(1)), "{v}");
-        let base = fx._hub.inspect_save("base_retail_0_1_0_retail", &[&order]).await;
-        assert_eq!(v["rows"][&order], base[&order], "{v}");
-        assert!(v["rows"]["users/nobody"].is_null());
-        for e in evs.iter().filter(|e| e.payload["saves"]["retail"].is_string()) {
-            let save = e.payload["saves"]["retail"].as_str().unwrap();
-            let written: Vec<String> = serde_json::from_value(e.payload["writes"].clone()).unwrap_or_default();
-            for key in written.iter().filter(|k| k.contains('/')) {
-                let q = key.replace('#', "%23");
-                let (st, v) = fx.get(&rows_path(&b, e.seq, &q, "&part=retail")).await;
-                assert_eq!(st, 200, "{v}");
-                let saved = fx._hub.inspect_save(save, &[key]).await;
-                assert_eq!(v["rows"][key], saved[key], "{key} at {}", e.seq);
-            }
-        }
-        bad_rows_requests(&fx, &b, 1).await;
-        teardown(fx, &[&b]).await;
-    })
+    run_live(
+        Live::any("live_rows_read_each_steps_save"),
+        rows_read_each_steps_save,
+    );
+}
+
+/// The rows of what step `e` wrote, read at it, are what its save holds.
+async fn assert_rows_read_the_save(fx: &Fx, b: &str, e: &Event) {
+    let save = e.payload["saves"]["retail"].as_str().unwrap();
+    let written: Vec<String> =
+        serde_json::from_value(e.payload["writes"].clone()).unwrap_or_default();
+    for key in written.iter().filter(|k| k.contains('/')) {
+        let q = key.replace('#', "%23");
+        let (st, v) = fx.get(&rows_path(b, e.seq, &q, "&part=retail")).await;
+        assert_eq!(st, 200, "{v}");
+        let saved = fx._hub.inspect_save(save, &[key]).await;
+        assert_eq!(v["rows"][key], saved[key], "{key} at {}", e.seq);
+    }
+}
+
+async fn rows_read_each_steps_save(live: Live) {
+    let fx = live_setup("rows").await;
+    let b = fx.run_to_end("27", &solo(&live)).await;
+    let evs = fx.state.store.events(&b).await.unwrap();
+    let order = format!("orders/{ORDER}");
+    let keys = "orders/%23W7181492,users/nobody";
+    let (st, v) = fx.get(&rows_path(&b, 1, keys, "")).await;
+    assert_eq!((st, &v["seq"]), (200, &json!(1)), "{v}");
+    let base = fx
+        ._hub
+        .inspect_save("base_retail_0_1_0_retail", &[&order])
+        .await;
+    assert_eq!(v["rows"][&order], base[&order], "{v}");
+    assert!(v["rows"]["users/nobody"].is_null());
+    for e in evs
+        .iter()
+        .filter(|e| e.payload["saves"]["retail"].is_string())
+    {
+        assert_rows_read_the_save(&fx, &b, e).await;
+    }
+    bad_rows_requests(&fx, &b, 1).await;
+    teardown(fx, &[&b]).await;
 }
 
 /// A bad step, an unknown agent in the changes and a malformed body are 400; an unknown branch
@@ -430,31 +464,33 @@ async fn assert_fork_errors(fx: &Fx, url: &str, at: i64) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_fork_over_http_maps_errors_and_starts_a_branch() {
-    let Some(live) = Live::any("live_fork_over_http_maps_errors_and_starts_a_branch") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("fork").await;
-        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
-        let team = live.bench_team(bench.team.unwrap());
-        let b = fx.run_to_end("27", &team).await;
-        let evs = fx.state.store.events(&b).await.unwrap();
-        let at = live::first_of(&evs, EventKind::AgentStart, "resolver").unwrap();
-        let url = format!("/api/branches/{b}/fork");
-        assert_fork_errors(&fx, &url, at).await;
-        let (st, v) = fx.post(&url, json!({"at_seq": at})).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap().to_string();
-        assert_eq!(v["start_seq"], at, "{v}");
-        let done = fx.wait(&child).await;
-        assert_eq!(done["parent_id"], b.as_str());
-        let parent = fx.state.store.branch(&b).await.unwrap();
-        let c = fx.state.store.branch(&child).await.unwrap();
-        assert_eq!(c.run_id, parent.run_id);
-        let cevs = fx.state.store.events(&child).await.unwrap();
-        live::assert_recorded(&c, &cevs, &live);
-        teardown(fx, &[&b, &child]).await;
-    })
+    run_live(
+        Live::any("live_fork_over_http_maps_errors_and_starts_a_branch"),
+        fork_over_http_maps_errors_and_starts_a_branch,
+    );
+}
+
+async fn fork_over_http_maps_errors_and_starts_a_branch(live: Live) {
+    let fx = live_setup("fork").await;
+    let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+    let team = live.bench_team(bench.team.unwrap());
+    let b = fx.run_to_end("27", &team).await;
+    let evs = fx.state.store.events(&b).await.unwrap();
+    let at = live::first_of(&evs, EventKind::AgentStart, "resolver").unwrap();
+    let url = format!("/api/branches/{b}/fork");
+    assert_fork_errors(&fx, &url, at).await;
+    let (st, v) = fx.post(&url, json!({"at_seq": at})).await;
+    assert_eq!(st, 200, "{v}");
+    let child = v["branch_id"].as_str().unwrap().to_string();
+    assert_eq!(v["start_seq"], at, "{v}");
+    let done = fx.wait(&child).await;
+    assert_eq!(done["parent_id"], b.as_str());
+    let parent = fx.state.store.branch(&b).await.unwrap();
+    let c = fx.state.store.branch(&child).await.unwrap();
+    assert_eq!(c.run_id, parent.run_id);
+    let cevs = fx.state.store.events(&child).await.unwrap();
+    live::assert_recorded(&c, &cevs, &live);
+    teardown(fx, &[&b, &child]).await;
 }
 
 #[test]

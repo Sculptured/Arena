@@ -33,6 +33,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 /// A team for runs that never reach an agent, and for live branches driven through MCP.
 fn idle_team() -> Team {
     Team {
@@ -61,7 +68,8 @@ struct Fx {
 async fn setup(tag: &str, root: ToyRoot) -> Fx {
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("links", tag).await;
-    let (state, base) = app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
+    let (state, base) =
+        app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
     Fx {
         state,
         base,
@@ -99,7 +107,11 @@ impl Fx {
             .unwrap();
         let world = self.hub.start_world("toybench", &branch).await;
         let ctx = Arc::new(BranchCtx::new(branch.clone(), world, team, "t1".into()));
-        self.state.live.write().unwrap().insert(branch.clone(), ctx.clone());
+        self.state
+            .live
+            .write()
+            .unwrap()
+            .insert(branch.clone(), ctx.clone());
         (branch, ctx)
     }
 
@@ -179,7 +191,10 @@ fn gets(evs: &[Event], from: i64) -> Vec<i64> {
 /// Two reading agents, one after the other: the world's clock runs while the first works.
 fn two_readers(live: &Live) -> Team {
     let read = "Call the get tool once, then stop.";
-    live.team(vec![live.reader("first", read), live.reader("second", read)])
+    live.team(vec![
+        live.reader("first", read),
+        live.reader("second", read),
+    ])
 }
 
 fn assert_alarm_then_link(evs: &[Event]) {
@@ -217,28 +232,40 @@ fn after_the_link(evs: &[Event]) -> Option<i64> {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_an_event_calls_the_linked_tool_and_a_replay_repeats_it() {
-    let Some(live) = Live::any("live_an_event_calls_the_linked_tool_and_a_replay_repeats_it") else {
+    run_live(
+        Live::any("live_an_event_calls_the_linked_tool_and_a_replay_repeats_it"),
+        an_event_calls_the_linked_tool_and_a_replay_repeats_it,
+    );
+}
+
+async fn an_event_calls_the_linked_tool_and_a_replay_repeats_it(live: Live) {
+    let fx = setup("alarm", alarm_world("alarm", "replay_only", json!(1000))).await;
+    let tools = fx.agent_tools().await;
+    assert!(
+        tools.iter().any(|t| t == "get") && !tools.iter().any(|t| t == "add"),
+        "{tools:?}"
+    );
+    let (parent, evs) = fx.run_to_end(&live, two_readers(&live)).await;
+    assert_alarm_then_link(&evs);
+    let link = link_steps(&evs)[0].seq;
+    assert!(
+        gets(&evs, link).iter().all(|v| *v >= 1000),
+        "{:?}",
+        gets(&evs, link)
+    );
+    let Some(at) = after_the_link(&evs) else {
         return;
     };
-    run(async {
-        let fx = setup("alarm", alarm_world("alarm", "replay_only", json!(1000))).await;
-        let tools = fx.agent_tools().await;
-        assert!(tools.iter().any(|t| t == "get") && !tools.iter().any(|t| t == "add"), "{tools:?}");
-        let (parent, evs) = fx.run_to_end(&live, two_readers(&live)).await;
-        assert_alarm_then_link(&evs);
-        let link = link_steps(&evs)[0].seq;
-        assert!(gets(&evs, link).iter().all(|v| *v >= 1000), "{:?}", gets(&evs, link));
-        let Some(at) = after_the_link(&evs) else {
-            return;
-        };
-        let (st, v) = fx.fork(&parent, at).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap();
-        let (_b, cevs) = live::ended_ok(&fx.state, child).await;
-        let own: Vec<Event> = cevs.iter().filter(|e| e.seq >= at).cloned().collect();
-        assert!(link_steps(&own).is_empty(), "{own:?}");
-        assert!(gets(&cevs, at).iter().all(|v| *v >= 1000), "the replay added it again");
-    })
+    let (st, v) = fx.fork(&parent, at).await;
+    assert_eq!(st, 200, "{v}");
+    let child = v["branch_id"].as_str().unwrap();
+    let (_b, cevs) = live::ended_ok(&fx.state, child).await;
+    let own: Vec<Event> = cevs.iter().filter(|e| e.seq >= at).cloned().collect();
+    assert!(link_steps(&own).is_empty(), "{own:?}");
+    assert!(
+        gets(&cevs, at).iter().all(|v| *v >= 1000),
+        "the replay added it again"
+    );
 }
 
 /// A link's call is an input of its part: what it gave must come out again on a replay, so a
@@ -246,42 +273,52 @@ fn live_an_event_calls_the_linked_tool_and_a_replay_repeats_it() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_linked_call_that_replays_differently_diverges() {
-    let Some(live) = Live::any("live_a_linked_call_that_replays_differently_diverges") else {
+    run_live(
+        Live::any("live_a_linked_call_that_replays_differently_diverges"),
+        a_linked_call_that_replays_differently_diverges,
+    );
+}
+
+async fn a_linked_call_that_replays_differently_diverges(live: Live) {
+    let fx = setup("noisy", alarm_world("noisy", "nondeterministic", json!(1))).await;
+    let (parent, evs) = fx.run_to_end(&live, two_readers(&live)).await;
+    let Some(at) = after_the_link(&evs) else {
         return;
     };
-    run(async {
-        let fx = setup("noisy", alarm_world("noisy", "nondeterministic", json!(1))).await;
-        let (parent, evs) = fx.run_to_end(&live, two_readers(&live)).await;
-        let Some(at) = after_the_link(&evs) else {
-            return;
-        };
-        let seq = link_steps(&evs)[0].seq;
-        let (st, v) = fx.fork(&parent, at).await;
-        assert_eq!(st, 409, "{v}");
-        let want = format!("replay of c diverged at step {seq}, so it can't be restored exactly");
-        assert_eq!(v["error"], want.as_str());
-    })
+    let seq = link_steps(&evs)[0].seq;
+    let (st, v) = fx.fork(&parent, at).await;
+    assert_eq!(st, 409, "{v}");
+    let want = format!("replay of c diverged at step {seq}, so it can't be restored exactly");
+    assert_eq!(v["error"], want.as_str());
 }
 
 /// An argument the event lacks: the step says so and the part is not called.
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_an_argument_the_event_lacks_is_a_step_error() {
-    let Some(live) = Live::any("live_an_argument_the_event_lacks_is_a_step_error") else {
-        return;
-    };
-    run(async {
-        let fx = setup("lacks", alarm_world("lacks", "replay_only", json!("/no/such"))).await;
-        let team = live.team(vec![live.reader("solo", "Call the get tool once, then stop.")]);
-        let (_, evs) = fx.run_to_end(&live, team).await;
-        let steps = link_steps(&evs);
-        let step = &steps[0].payload;
-        assert!(step["part"].is_null(), "{step}");
-        assert!(
-            step["error"].as_str().unwrap().contains("no /no/such"),
-            "{step}"
-        );
-    })
+    run_live(
+        Live::any("live_an_argument_the_event_lacks_is_a_step_error"),
+        an_argument_the_event_lacks_is_a_step_error,
+    );
+}
+
+async fn an_argument_the_event_lacks_is_a_step_error(live: Live) {
+    let fx = setup(
+        "lacks",
+        alarm_world("lacks", "replay_only", json!("/no/such")),
+    )
+    .await;
+    let team = live.team(vec![
+        live.reader("solo", "Call the get tool once, then stop.")
+    ]);
+    let (_, evs) = fx.run_to_end(&live, team).await;
+    let steps = link_steps(&evs);
+    let step = &steps[0].payload;
+    assert!(step["part"].is_null(), "{step}");
+    assert!(
+        step["error"].as_str().unwrap().contains("no /no/such"),
+        "{step}"
+    );
 }
 
 /// An event in a tool call's result sets off its link after the call's own step, at the call's
@@ -312,35 +349,36 @@ fn an_event_in_a_tool_result_calls_the_link() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_links_in_a_loop_stop() {
-    let Some(live) = Live::any("live_links_in_a_loop_stop") else {
-        return;
-    };
-    run(async {
-        let link = json!({"from": "a", "event": "alarm", "to": "a", "tool": "a_poke"});
-        let part_args = [
-            "part",
-            "--prefix",
-            "a_",
-            "--uses-clock",
-            "--tool-event",
-            "alarm",
-        ];
-        let root = package_root(
-            "loop",
-            &[
-                toy("toy-a", "integration", &part_args),
-                toy("toy-b", "integration", &["part", "--prefix", "b_"]),
-                bench(&["a=toy-a", "b=toy-b"], "b_poke", &[link]),
-            ],
-        );
-        let fx = setup("loop", root).await;
-        let team = live.team(vec![live.reader("solo", "Call the a_peek tool once, then stop.")]);
-        let (_, evs) = fx.run_to_end(&live, team).await;
-        let steps = link_steps(&evs);
-        assert_eq!(steps.len(), 65);
-        let last = steps[64].payload["error"].as_str().unwrap();
-        assert!(last.contains("64 calls in one step"), "{last}");
-    })
+    run_live(Live::any("live_links_in_a_loop_stop"), links_in_a_loop_stop);
+}
+
+async fn links_in_a_loop_stop(live: Live) {
+    let link = json!({"from": "a", "event": "alarm", "to": "a", "tool": "a_poke"});
+    let part_args = [
+        "part",
+        "--prefix",
+        "a_",
+        "--uses-clock",
+        "--tool-event",
+        "alarm",
+    ];
+    let root = package_root(
+        "loop",
+        &[
+            toy("toy-a", "integration", &part_args),
+            toy("toy-b", "integration", &["part", "--prefix", "b_"]),
+            bench(&["a=toy-a", "b=toy-b"], "b_poke", &[link]),
+        ],
+    );
+    let fx = setup("loop", root).await;
+    let team = live.team(vec![
+        live.reader("solo", "Call the a_peek tool once, then stop.")
+    ]);
+    let (_, evs) = fx.run_to_end(&live, team).await;
+    let steps = link_steps(&evs);
+    assert_eq!(steps.len(), 65);
+    let last = steps[64].payload["error"].as_str().unwrap();
+    assert!(last.contains("64 calls in one step"), "{last}");
 }
 
 /// A world whose link names something it doesn't have is refused.
@@ -399,7 +437,10 @@ fn a_gate_holds_a_tool_back_until_the_document_allows_it() {
         assert_eq!(allowed["isError"], false, "{allowed}");
         assert_eq!(allowed["structuredContent"]["n"], 1, "{allowed}");
         let peek = fx.mcp(&branch, "a_peek").await;
-        assert_eq!(peek["structuredContent"]["n"], 1, "the refused call changed nothing");
+        assert_eq!(
+            peek["structuredContent"]["n"], 1,
+            "the refused call changed nothing"
+        );
         let evs = fx.state.store.events(&branch).await.unwrap();
         let first = &live::calls_named(&evs, "a_poke")[0].payload;
         assert!(first["part"].is_null(), "{first}");
@@ -413,39 +454,52 @@ fn a_gate_holds_a_tool_back_until_the_document_allows_it() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_scored_benchmark_checks_the_end_state() {
-    let Some(live) = Live::any("live_a_scored_benchmark_checks_the_end_state") else {
-        return;
+    run_live(
+        Live::any("live_a_scored_benchmark_checks_the_end_state"),
+        a_scored_benchmark_checks_the_end_state,
+    );
+}
+
+/// A world of one toy part `box` whose benchmark scores itself: `poked` once it was poked.
+fn scored_world() -> ToyRoot {
+    let args = [
+        "bench",
+        "--integration",
+        "toy-box",
+        "--gold",
+        "nope",
+        "--scored",
+    ];
+    package_root(
+        "scored",
+        &[
+            toy("toy-box", "integration", &["part"]),
+            toy("toybench", "benchmark", &args),
+        ],
+    )
+}
+
+async fn a_scored_benchmark_checks_the_end_state(live: Live) {
+    let root = scored_world();
+    let fx = setup("scored", root).await;
+    let team = live.team(vec![
+        live.agent("solo", "Call the poke tool once, then stop.")
+    ]);
+    let (branch, evs) = fx.run_to_end(&live, team).await;
+    let poked = live::calls_named(&evs, "poke")
+        .iter()
+        .any(|e| e.payload["error"].is_null());
+    let status = fx.state.store.branch(&branch).await.unwrap().status;
+    let (want, failed) = match poked {
+        true => (BranchStatus::Passed, vec![]),
+        false => (BranchStatus::Failed, vec!["poked".to_string()]),
     };
-    run(async {
-        let args = [
-            "bench",
-            "--integration",
-            "toy-box",
-            "--gold",
-            "nope",
-            "--scored",
-        ];
-        let root = package_root(
-            "scored",
-            &[
-                toy("toy-box", "integration", &["part"]),
-                toy("toybench", "benchmark", &args),
-            ],
-        );
-        let fx = setup("scored", root).await;
-        let team = live.team(vec![live.agent("solo", "Call the poke tool once, then stop.")]);
-        let (branch, evs) = fx.run_to_end(&live, team).await;
-        let poked = live::calls_named(&evs, "poke").iter().any(|e| e.payload["error"].is_null());
-        let status = fx.state.store.branch(&branch).await.unwrap().status;
-        let want = if poked { BranchStatus::Passed } else { BranchStatus::Failed };
-        assert_eq!(status, want);
-        let c = live::check_of(&evs).unwrap();
-        let failed = if poked { vec![] } else { vec!["poked".to_string()] };
-        assert_eq!(c.differing_rows, Some(failed));
-        assert_eq!(c.checks.unwrap()[0].name, "poked");
-        assert_eq!(c.gold_db, None);
-        assert!(c.final_saves.unwrap().contains_key("box"));
-    })
+    assert_eq!(status, want);
+    let c = live::check_of(&evs).unwrap();
+    assert_eq!(c.differing_rows, Some(failed));
+    assert_eq!(c.checks.unwrap()[0].name, "poked");
+    assert_eq!(c.gold_db, None);
+    assert!(c.final_saves.unwrap().contains_key("box"));
 }
 
 /// Two toy parts, `a` (its program run with `a_args`) and `b`, and a task whose setup makes
@@ -478,32 +532,48 @@ fn setup_world(tag: &str, a_args: &[&str], setup: &[Value], links: &[Value]) -> 
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_tasks_setup_runs_before_the_agents() {
-    let Some(live) = Live::any("live_a_tasks_setup_runs_before_the_agents") else {
-        return;
-    };
-    run(async {
-        let poke = json!({"part": "a", "tool": "a_poke"});
-        let link = json!({"from": "a", "event": "rung", "to": "b", "tool": "b_poke"});
-        let a_args = ["part", "--prefix", "a_", "--tool-event", "rung"];
-        let fx = setup("setup", setup_world("setup", &a_args, &[poke], &[link])).await;
-        assert_eq!(fx.agent_tools().await, ["a_peek", "b_peek"]);
-        let team = live.team(vec![live.agent("solo", "Call the a_peek tool once, then stop.")]);
-        let (_, evs) = fx.run_to_end(&live, team).await;
-        let calls: Vec<&Event> = evs.iter().filter(|e| e.kind == EventKind::ToolCall).collect();
-        let actors: Vec<Option<&str>> = calls.iter().map(|e| e.agent.as_deref()).collect();
-        assert_eq!(actors[..2], [Some("setup"), Some("link")]);
-        assert!(actors[2..].iter().all(|a| *a == Some("solo")), "{actors:?}");
-        let agent_start = live::first_of(&evs, EventKind::AgentStart, "solo").unwrap();
-        assert!(calls[1].seq < agent_start, "the setup came before the agent");
-        let (first, linked) = (&calls[0].payload, &calls[1].payload);
-        let named = |p: &Value| (p["name"].clone(), p["part"].clone());
-        assert_eq!(named(first), (json!("a_poke"), json!("a")));
-        assert!(first["saves"]["a"].is_string(), "{first}");
-        assert_eq!(named(linked), (json!("b_poke"), json!("b")));
-        for peek in live::calls_named(&evs, "a_peek") {
-            assert_eq!(peek.payload["result"]["n"], 1, "{}", peek.payload);
-        }
-    })
+    run_live(
+        Live::any("live_a_tasks_setup_runs_before_the_agents"),
+        a_tasks_setup_runs_before_the_agents,
+    );
+}
+
+/// The setup's poke, then the link it set off, both before the agent, then only the agent's
+/// calls; the setup's step saved what it changed.
+fn assert_setup_then_link_then_agent(evs: &[Event]) {
+    let calls: Vec<&Event> = evs
+        .iter()
+        .filter(|e| e.kind == EventKind::ToolCall)
+        .collect();
+    let actors: Vec<Option<&str>> = calls.iter().map(|e| e.agent.as_deref()).collect();
+    assert_eq!(actors[..2], [Some("setup"), Some("link")]);
+    assert!(actors[2..].iter().all(|a| *a == Some("solo")), "{actors:?}");
+    let agent_start = live::first_of(evs, EventKind::AgentStart, "solo").unwrap();
+    assert!(
+        calls[1].seq < agent_start,
+        "the setup came before the agent"
+    );
+    let (first, linked) = (&calls[0].payload, &calls[1].payload);
+    let named = |p: &Value| (p["name"].clone(), p["part"].clone());
+    assert_eq!(named(first), (json!("a_poke"), json!("a")));
+    assert!(first["saves"]["a"].is_string(), "{first}");
+    assert_eq!(named(linked), (json!("b_poke"), json!("b")));
+}
+
+async fn a_tasks_setup_runs_before_the_agents(live: Live) {
+    let poke = json!({"part": "a", "tool": "a_poke"});
+    let link = json!({"from": "a", "event": "rung", "to": "b", "tool": "b_poke"});
+    let a_args = ["part", "--prefix", "a_", "--tool-event", "rung"];
+    let fx = setup("setup", setup_world("setup", &a_args, &[poke], &[link])).await;
+    assert_eq!(fx.agent_tools().await, ["a_peek", "b_peek"]);
+    let team = live.team(vec![
+        live.agent("solo", "Call the a_peek tool once, then stop.")
+    ]);
+    let (_, evs) = fx.run_to_end(&live, team).await;
+    assert_setup_then_link_then_agent(&evs);
+    for peek in live::calls_named(&evs, "a_peek") {
+        assert_eq!(peek.payload["result"]["n"], 1, "{}", peek.payload);
+    }
 }
 
 /// A setup call that fails ends the run's branch before any agent runs.
@@ -522,8 +592,16 @@ fn a_failed_setup_ends_the_run() {
             "{e:#}"
         );
         let runs = fx.state.store.runs().await.unwrap();
-        let evs = fx.state.store.events(&runs[0].branches[0].id).await.unwrap();
-        assert!(evs.iter().all(|e| e.kind != EventKind::AgentStart), "no agent ran");
+        let evs = fx
+            .state
+            .store
+            .events(&runs[0].branches[0].id)
+            .await
+            .unwrap();
+        assert!(
+            evs.iter().all(|e| e.kind != EventKind::AgentStart),
+            "no agent ran"
+        );
     })
 }
 

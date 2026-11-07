@@ -30,6 +30,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 fn agent(id: &str) -> AgentSpec {
     AgentSpec {
         id: id.into(),
@@ -183,29 +190,31 @@ async fn run_with_fork(fx: &Fx, live: &Live) -> (String, Vec<String>) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_delete_run_drops_all_part_saves() {
-    let Some(live) = Live::any("live_delete_run_drops_all_part_saves") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("delete").await;
-        let (run_id, saves) = run_with_fork(&fx, &live).await;
-        assert_saves(&fx, &saves, true).await;
-        let before = disk_bytes(&fx).await;
-        let (st, v) = fx.delete(&format!("/api/runs/{run_id}")).await;
-        assert_eq!(
-            (st, v["dropped"].as_u64()),
-            (200, Some(saves.len() as u64)),
-            "{v}"
-        );
-        assert_saves(&fx, &saves, false).await;
-        assert_saves(&fx, &shared_saves().map(String::from), true).await;
-        let after = disk_bytes(&fx).await;
-        if !saves.is_empty() {
-            assert!(after < before, "disk usage falls: {before} -> {after}");
-        }
-        assert!(fx.state.store.runs().await.unwrap().is_empty());
-        assert_eq!(fx.delete(&format!("/api/runs/{run_id}")).await.0, 404);
-    })
+    run_live(
+        Live::any("live_delete_run_drops_all_part_saves"),
+        delete_run_drops_all_part_saves,
+    );
+}
+
+async fn delete_run_drops_all_part_saves(live: Live) {
+    let fx = live_setup("delete").await;
+    let (run_id, saves) = run_with_fork(&fx, &live).await;
+    assert_saves(&fx, &saves, true).await;
+    let before = disk_bytes(&fx).await;
+    let (st, v) = fx.delete(&format!("/api/runs/{run_id}")).await;
+    assert_eq!(
+        (st, v["dropped"].as_u64()),
+        (200, Some(saves.len() as u64)),
+        "{v}"
+    );
+    assert_saves(&fx, &saves, false).await;
+    assert_saves(&fx, &shared_saves().map(String::from), true).await;
+    let after = disk_bytes(&fx).await;
+    if !saves.is_empty() {
+        assert!(after < before, "disk usage falls: {before} -> {after}");
+    }
+    assert!(fx.state.store.runs().await.unwrap().is_empty());
+    assert_eq!(fx.delete(&format!("/api/runs/{run_id}")).await.0, 404);
 }
 
 /// A run of task 27 with one root branch that has not ended.
@@ -316,27 +325,29 @@ async fn orphan_save(fx: &Fx, save: &str) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_startup_gc_keeps_named_saves() {
-    let Some(live) = Live::any("live_startup_gc_keeps_named_saves") else {
-        return;
-    };
-    run(async {
-        let fx = live_setup("gc").await;
-        let (_, b) = live_run(&fx, &live).await;
-        let mut kept = run_saves(&fx, &b).await;
-        kept.extend(shared_saves().map(String::from));
-        orphan_save(&fx, "s_orphan").await;
-        let folder = |s: &str| fx._hub.saves.join("postgres").join(s);
-        assert!(save_exists(&fx, "s_orphan").await && folder("s_orphan").is_dir());
+    run_live(
+        Live::any("live_startup_gc_keeps_named_saves"),
+        startup_gc_keeps_named_saves,
+    );
+}
 
-        let r = arenad::gc::run_startup_gc(&fx.state.store, &fx.state.hub, "retail")
-            .await
-            .unwrap();
-        assert!(r.dropped >= 1 && r.bytes > 0, "{r:?}");
-        assert!(!save_exists(&fx, "s_orphan").await, "the orphan is dropped");
-        assert!(!folder("s_orphan").exists(), "with its folder");
-        assert_saves(&fx, &kept, true).await;
-        assert!(kept.iter().all(|s| folder(s).is_dir()), "kept folders stay");
-    })
+async fn startup_gc_keeps_named_saves(live: Live) {
+    let fx = live_setup("gc").await;
+    let (_, b) = live_run(&fx, &live).await;
+    let mut kept = run_saves(&fx, &b).await;
+    kept.extend(shared_saves().map(String::from));
+    orphan_save(&fx, "s_orphan").await;
+    let folder = |s: &str| fx._hub.saves.join("postgres").join(s);
+    assert!(save_exists(&fx, "s_orphan").await && folder("s_orphan").is_dir());
+
+    let r = arenad::gc::run_startup_gc(&fx.state.store, &fx.state.hub, "retail")
+        .await
+        .unwrap();
+    assert!(r.dropped >= 1 && r.bytes > 0, "{r:?}");
+    assert!(!save_exists(&fx, "s_orphan").await, "the orphan is dropped");
+    assert!(!folder("s_orphan").exists(), "with its folder");
+    assert_saves(&fx, &kept, true).await;
+    assert!(kept.iter().all(|s| folder(s).is_dir()), "kept folders stay");
 }
 
 /// A run whose only branch failed before recording anything names no saves and no world: it is

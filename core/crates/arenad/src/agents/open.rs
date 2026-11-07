@@ -358,7 +358,10 @@ mod tests {
     #[test]
     fn only_a_json_object_is_run_as_arguments() {
         assert_eq!(parse_tool_args(""), Some(json!({})));
-        assert_eq!(parse_tool_args(r##"{"order_id": "#W1"}"##), Some(json!({"order_id": "#W1"})));
+        assert_eq!(
+            parse_tool_args(r##"{"order_id": "#W1"}"##),
+            Some(json!({"order_id": "#W1"}))
+        );
         assert_eq!(parse_tool_args(r##"{"order_id": "#W00"##), None);
         assert_eq!(parse_tool_args("[1]"), None);
     }
@@ -376,10 +379,22 @@ mod tests {
             Err(Fault::Model(e)) => e,
             _ => panic!("not a model failure"),
         };
-        assert_eq!(model(end_without_calls(&answer("length", Value::Null))), "model output was cut off");
-        let refused = answer("content_filter", json!({"type": "refusal", "category": "cyber"}));
-        assert_eq!(model(end_without_calls(&refused)), "the model refused (category cyber)");
-        assert_eq!(model(end_without_calls(&answer("content_filter", Value::Null))), "the model refused");
+        assert_eq!(
+            model(end_without_calls(&answer("length", Value::Null))),
+            "model output was cut off"
+        );
+        let refused = answer(
+            "content_filter",
+            json!({"type": "refusal", "category": "cyber"}),
+        );
+        assert_eq!(
+            model(end_without_calls(&refused)),
+            "the model refused (category cyber)"
+        );
+        assert_eq!(
+            model(end_without_calls(&answer("content_filter", Value::Null))),
+            "the model refused"
+        );
     }
 
     #[test]

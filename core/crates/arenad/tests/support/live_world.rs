@@ -1,6 +1,6 @@
 //! A whole world of real services for a live test: an ERPNext stack, a Twenty server and saves of
-//! the test's own (removed when the `Stack` drops), the Sculptured program, and a scripted team
-//! walked through a run to its check.
+//! the test's own (removed when the `Stack` drops), the Sculptured program, a team on a real model
+//! run to its check, and what Arena owes any such run.
 #![allow(dead_code)]
 
 use std::{path::PathBuf, process::Command, sync::Arc, time::Duration};
@@ -110,23 +110,6 @@ pub fn path_with_sculptured() -> String {
     }
 }
 
-pub fn scripted_team(hubteam: parts::proto::BenchTeam) -> Team {
-    let agent = |a: parts::proto::TeamRole| AgentSpec {
-        id: a.id,
-        name: a.name,
-        kind: AgentKind::Open,
-        model: Some("scripted".into()),
-        prompt: a.prompt,
-        provider: None,
-        read_only: a.read_only,
-    };
-    Team {
-        id: hubteam.id,
-        name: hubteam.name,
-        agents: hubteam.agents.into_iter().map(agent).collect(),
-    }
-}
-
 /// Runs the team on `task` to its end, polling every 200 ms up to `polls` times; the branch,
 /// the checks that failed, and the branch's events.
 pub async fn walk_for(
@@ -162,4 +145,66 @@ pub async fn walk_in(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     panic!("the branch did not finish");
+}
+
+/// A scored benchmark's check, whatever the team did: every named check is there, the differing
+/// rows are the names of the checks that failed, and the branch passed when every check did and
+/// failed when a goal (not a safety check) was missed.
+pub fn assert_scored(b: &Branch, check: &CheckPayload) {
+    let checks = check.checks.clone().expect("named checks");
+    assert!(!checks.is_empty());
+    let mut failed: Vec<String> = checks
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.name.clone())
+        .collect();
+    let mut rows = check.differing_rows.clone().unwrap_or_default();
+    failed.sort();
+    rows.sort();
+    assert_eq!(rows, failed, "{check:?}");
+    if checks.iter().all(|c| c.passed) {
+        assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
+    }
+    if checks.iter().any(|c| !c.passed && !c.safety) {
+        assert_eq!(b.status, BranchStatus::Failed, "{:?}", b.error);
+    }
+    let passed = checks.iter().filter(|c| c.passed).count();
+    println!(
+        "checks: {passed} of {} passed; failed: {failed:?}",
+        checks.len()
+    );
+}
+
+/// The gates held: a gated tool's call naming a change no one had proposed was refused before it
+/// reached its part.
+pub fn assert_gates_kept(bench: &parts::proto::BenchDescribe, evs: &[Event]) {
+    let gated: Vec<&str> = bench.gates.iter().map(|g| g.tool.as_str()).collect();
+    let mut proposed: Vec<String> = vec![];
+    let (mut through, mut refused) = (0, 0);
+    for e in evs.iter().filter(|e| e.kind == EventKind::ToolCall) {
+        let p = &e.payload;
+        let ok = p["error"].is_null();
+        if p["name"] == "propose_change" && ok {
+            if let Some(id) = p["result"]["id"].as_str() {
+                proposed.push(id.to_string());
+            }
+        }
+        if !gated.contains(&p["name"].as_str().unwrap_or_default()) {
+            continue;
+        }
+        match ok {
+            true => through += 1,
+            false => refused += 1,
+        }
+        if let Some(id) = p["args"]["proposal_id"].as_str() {
+            if !proposed.iter().any(|x| x == id) {
+                assert!(
+                    !ok && p["part"].is_null(),
+                    "{} on {id}, which no one proposed: {p}",
+                    p["name"]
+                );
+            }
+        }
+    }
+    println!("gated calls: {through} went through, {refused} refused");
 }

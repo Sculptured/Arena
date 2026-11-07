@@ -102,9 +102,18 @@ mod tests {
         let req = request(&p, &http, reqwest::Method::POST, "messages");
         let built = req.build().unwrap();
         let h = built.headers();
-        assert_eq!((&h["x-api-key"], &h["anthropic-version"]), (&"k-ant".parse::<HeaderValue>().unwrap(), &VERSION.parse::<HeaderValue>().unwrap()));
+        assert_eq!(
+            (&h["x-api-key"], &h["anthropic-version"]),
+            (
+                &"k-ant".parse::<HeaderValue>().unwrap(),
+                &VERSION.parse::<HeaderValue>().unwrap()
+            )
+        );
         assert!(h["x-api-key"].is_sensitive());
         assert!(h.get("authorization").is_none());
-        assert_eq!(built.url().as_str(), "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            built.url().as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 }

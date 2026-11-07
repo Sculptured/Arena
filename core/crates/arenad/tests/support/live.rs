@@ -270,7 +270,11 @@ pub fn check_of(evs: &[Event]) -> Option<CheckPayload> {
 /// branch that passed or failed for the task has its check.
 pub fn assert_recorded(b: &Branch, evs: &[Event], live: &Live) {
     let seqs: Vec<i64> = evs.iter().map(|e| e.seq).collect();
-    assert_eq!(seqs, (1..=evs.len() as i64).collect::<Vec<_>>(), "steps numbered without gaps");
+    assert_eq!(
+        seqs,
+        (1..=evs.len() as i64).collect::<Vec<_>>(),
+        "steps numbered without gaps"
+    );
     assert_eq!(evs[0].kind, EventKind::RunStart, "{:?}", evs[0]);
     let ids: Vec<&str> = b.team.agents.iter().map(|a| a.id.as_str()).collect();
     for e in evs {
@@ -285,10 +289,14 @@ pub fn assert_recorded(b: &Branch, evs: &[Event], live: &Live) {
         let must_end = a.kind != AgentKind::External;
         assert_started_and_ended(evs, &a.id, live, must_end);
     }
-    let checked = check_of(evs).is_some();
     if matches!(b.status, BranchStatus::Passed) {
-        assert!(checked, "a passed branch has its check");
+        assert!(check_of(evs).is_some(), "a passed branch has its check");
     }
+    summarize(b, evs, live);
+}
+
+/// Prints what a live branch recorded, for the test's log.
+fn summarize(b: &Branch, evs: &[Event], live: &Live) {
     let count = |k: EventKind| evs.iter().filter(|e| e.kind == k).count();
     eprintln!(
         "live: {} on {live:?}: {:?}, {} tool calls, {} model calls recorded, {} handoffs, {} messages",
@@ -322,7 +330,12 @@ fn assert_model_call(e: &Event, b: &Branch) {
     let spec = b.team.agents.iter().find(|a| a.id == id);
     let spec = spec.unwrap_or_else(|| panic!("a model call by {id:?}"));
     assert_eq!(mc.request["model"].as_str(), spec.model.as_deref(), "{id}");
-    assert!(mc.request["messages"].as_array().is_some_and(|m| !m.is_empty()), "{id}");
+    assert!(
+        mc.request["messages"]
+            .as_array()
+            .is_some_and(|m| !m.is_empty()),
+        "{id}"
+    );
     assert_eq!(mc.provider.as_deref(), spec.provider.as_deref(), "{id}");
     if mc.response["choices"].is_array() {
         let prompt = mc.usage["prompt_tokens"].as_i64().unwrap_or(0);
@@ -368,7 +381,12 @@ pub fn offered_tools(evs: &[Event], agent: &str) -> Option<Vec<String>> {
 /// A JSON-RPC `tools/list` on an agent's MCP endpoint: the names of the tools it offers.
 pub async fn mcp_tools(url: &str) -> Vec<String> {
     let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
-    let r = reqwest::Client::new().post(url).json(&req).send().await.unwrap();
+    let r = reqwest::Client::new()
+        .post(url)
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
     let v: Value = r.json().await.unwrap();
     let tools = v["result"]["tools"].as_array().cloned().unwrap_or_default();
     tools
@@ -414,16 +432,17 @@ fn usage_reports(stdout: &str) -> (Vec<Value>, Value) {
     (reports, result)
 }
 
-/// Runs Claude Code (`live` must be [`Live::Claude`]) on `prompt` with the world's tools at
-/// `mcp_url`, the way an external system runs its own agents: no built-in tools, only the MCP
-/// server `server`'s, pre-approved. Ten minutes at most.
-pub async fn run_claude(live: &Live, server: &str, mcp_url: &str, prompt: &str) -> ExternalRun {
+/// The `claude -p` command for `prompt` with only the MCP server `server` at `mcp_url`,
+/// streaming each message; database credentials are kept from it.
+fn claude_command(
+    live: &Live,
+    server: &str,
+    mcp_url: &str,
+    prompt: &str,
+) -> tokio::process::Command {
     let config = json!({"mcpServers": {server: {"type": "http", "url": mcp_url}}});
-    let workdir = std::env::temp_dir().join(format!("arena-live-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&workdir).unwrap();
     let mut c = tokio::process::Command::new("claude");
-    c.current_dir(&workdir)
-        .arg("-p")
+    c.arg("-p")
         .args(["--model", live.model()])
         .args(["--output-format", "stream-json", "--verbose"])
         .args(["--setting-sources", ""])
@@ -441,16 +460,39 @@ pub async fn run_claude(live: &Live, server: &str, mcp_url: &str, prompt: &str) 
     for k in ["ARENA_PG_URL", "DATABASE_URL", "PGPASSWORD"] {
         c.env_remove(k);
     }
+    c
+}
+
+/// What `c` printed, run in a fresh work folder (removed after), ten minutes at most.
+async fn output_in_a_fresh_folder(mut c: tokio::process::Command) -> std::process::Output {
+    let workdir =
+        std::env::temp_dir().join(format!("arena-live-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&workdir).unwrap();
+    c.current_dir(&workdir);
     let out = tokio::time::timeout(Duration::from_secs(600), c.output()).await;
     let _ = std::fs::remove_dir_all(&workdir);
-    let out = out.expect("claude ran over 10 minutes").expect("claude starts");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let (reports, result) = usage_reports(&stdout);
-    let total = |k: &str| reports.iter().map(|r| r[k].as_i64().unwrap_or(0)).sum::<i64>();
+    out.expect("claude ran over 10 minutes")
+        .expect("claude starts")
+}
+
+/// Runs Claude Code (`live` must be [`Live::Claude`]) on `prompt` with the world's tools at
+/// `mcp_url`, the way an external system runs its own agents: no built-in tools, only the MCP
+/// server `server`'s, pre-approved. Ten minutes at most.
+pub async fn run_claude(live: &Live, server: &str, mcp_url: &str, prompt: &str) -> ExternalRun {
+    let out = output_in_a_fresh_folder(claude_command(live, server, mcp_url, prompt)).await;
+    let (reports, result) = usage_reports(&String::from_utf8_lossy(&out.stdout));
+    let total = |k: &str| {
+        reports
+            .iter()
+            .map(|r| r[k].as_i64().unwrap_or(0))
+            .sum::<i64>()
+    };
     let prompt_tokens = total("input_tokens")
         + total("cache_creation_input_tokens")
         + total("cache_read_input_tokens");
-    let completion_tokens = result["usage"]["output_tokens"].as_i64().unwrap_or(total("output_tokens"));
+    let completion_tokens = result["usage"]["output_tokens"]
+        .as_i64()
+        .unwrap_or(total("output_tokens"));
     ExternalRun {
         reports,
         result,

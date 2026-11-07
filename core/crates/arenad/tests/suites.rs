@@ -38,6 +38,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 const SYSTEM: &str =
     r#"{"kind": "erp", "product": "Toy ERP", "stands_in_for": "SAP S/4HANA", "simulated": true}"#;
 
@@ -55,7 +62,8 @@ async fn setup(tag: &str) -> Fx {
     let root = toy_world(tag, &["--system", SYSTEM], &bench);
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("suites", tag).await;
-    let (state, base) = app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
+    let (state, base) =
+        app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
     Fx {
         base,
         http: reqwest::Client::new(),
@@ -139,7 +147,9 @@ fn suites_refuse_what_they_cannot_run() {
 /// The rate of one check of one task in a report: `(passed, runs)`.
 fn rate_of(r: &Value, task: &str, check: &str) -> (i64, i64) {
     let rows = r["checks"].as_array().unwrap();
-    let c = rows.iter().find(|c| c["task_id"] == task && c["name"] == check);
+    let c = rows
+        .iter()
+        .find(|c| c["task_id"] == task && c["name"] == check);
     let c = c.unwrap_or_else(|| panic!("no {task}/{check} in {r}"));
     (c["passed"].as_i64().unwrap(), c["runs"].as_i64().unwrap())
 }
@@ -151,16 +161,16 @@ async fn runs_checks(fx: &Fx, r: &Value) -> Vec<(String, Vec<parts::proto::Named
         let branch = row["branch_id"].as_str().unwrap();
         let evs = fx.state.store.events(branch).await.unwrap();
         let check = live::check_of(&evs).expect("a scored run");
-        out.push((row["task_id"].as_str().unwrap().to_string(), check.checks.unwrap()));
+        out.push((
+            row["task_id"].as_str().unwrap().to_string(),
+            check.checks.unwrap(),
+        ));
     }
     out
 }
 
-/// The report adds up its runs: each check's rate counts the runs that passed it, the summary's
-/// passes, rate, safety violations and score follow from them.
-async fn assert_report_adds_up(fx: &Fx, r: &Value, runs: usize) {
-    assert_eq!(r["runs"].as_array().unwrap().len(), runs, "{r}");
-    let checks = runs_checks(fx, r).await;
+/// Each check's rate counts the runs that passed it.
+fn assert_rates(r: &Value, checks: &[(String, Vec<parts::proto::NamedCheck>)]) {
     for task in ["t1", "t2"] {
         for name in ["poked", "not_overpoked"] {
             let of_task = checks.iter().filter(|(t, _)| t == task);
@@ -168,17 +178,37 @@ async fn assert_report_adds_up(fx: &Fx, r: &Value, runs: usize) {
                 .clone()
                 .filter(|(_, cs)| cs.iter().any(|c| c.name == name && c.passed))
                 .count() as i64;
-            assert_eq!(rate_of(r, task, name), (passed, of_task.count() as i64), "{task}/{name}");
+            let want = (passed, of_task.count() as i64);
+            assert_eq!(rate_of(r, task, name), want, "{task}/{name}");
         }
     }
-    let goal_ok = |cs: &Vec<parts::proto::NamedCheck>| cs.iter().filter(|c| !c.safety).all(|c| c.passed);
+}
+
+/// The report adds up its runs: each check's rate counts the runs that passed it, the summary's
+/// passes, rate and safety violations follow from them.
+async fn assert_report_adds_up(fx: &Fx, r: &Value, runs: usize) {
+    assert_eq!(r["runs"].as_array().unwrap().len(), runs, "{r}");
+    let checks = runs_checks(fx, r).await;
+    assert_rates(r, &checks);
+    let goal_ok =
+        |cs: &Vec<parts::proto::NamedCheck>| cs.iter().filter(|c| !c.safety).all(|c| c.passed);
     let passed = checks.iter().filter(|(_, cs)| goal_ok(cs)).count();
-    let violations: usize = checks.iter().map(|(_, cs)| cs.iter().filter(|c| c.safety && !c.passed).count()).sum();
+    let violations: usize = checks
+        .iter()
+        .map(|(_, cs)| cs.iter().filter(|c| c.safety && !c.passed).count())
+        .sum();
     let s = &r["summary"];
-    assert_eq!((&s["scored"], &s["passed"]), (&json!(runs), &json!(passed)), "{s}");
+    let counts = (&s["scored"], &s["passed"], &s["safety_violations"]);
+    assert_eq!(
+        counts,
+        (&json!(runs), &json!(passed), &json!(violations)),
+        "{s}"
+    );
     let rate = passed as f64 / runs as f64;
-    assert!((s["pass_rate"].as_f64().unwrap() - rate).abs() < 1e-9, "{s}");
-    assert_eq!(s["safety_violations"], json!(violations), "{s}");
+    assert!(
+        (s["pass_rate"].as_f64().unwrap() - rate).abs() < 1e-9,
+        "{s}"
+    );
     assert!(r["finished_s"].as_f64().unwrap() > 0.0, "{r}");
 }
 
@@ -200,7 +230,12 @@ async fn assert_run_start_names_its_systems(fx: &Fx, r: &Value) {
         start["tools"]["peek"],
         json!({"effect": "read", "part": "box"})
     );
-    for e in b["events"].as_array().unwrap().iter().filter(|e| e["kind"] == "tool_call") {
+    for e in b["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "tool_call")
+    {
         assert!(e["payload"]["duration_ms"].as_f64().unwrap() >= 0.0, "{e}");
     }
     let (_, world) = fx.get("/api/world").await;
@@ -212,26 +247,33 @@ async fn assert_run_start_names_its_systems(fx: &Fx, r: &Value) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_builtin_suite_of_two_tasks_aggregates_its_runs() {
-    let Some(live) = Live::any("live_a_builtin_suite_of_two_tasks_aggregates_its_runs") else {
-        return;
-    };
-    run(async {
-        let fx = setup("builtin").await;
-        let id = fx.suite(json!({"team": poker(&live, 1), "tasks": ["t1", "t2"], "repeats": 1})).await;
-        let (status, v) = fx.post(&format!("/api/suites/{id}/claim"), json!({})).await;
-        assert_eq!(status, 409, "{v}");
-        let r = fx.finished(&id).await;
-        assert_report_adds_up(&fx, &r, 2).await;
-        for row in r["runs"].as_array().unwrap() {
-            let branch = row["branch_id"].as_str().unwrap();
-            let (b, evs) = live::ended_ok(&fx.state, branch).await;
-            live::assert_recorded(&b, &evs, &live);
-        }
-        assert_run_start_names_its_systems(&fx, &r).await;
-        let (_, list) = fx.get("/api/suites").await;
-        assert_eq!((&list[0]["id"], &list[0]["status"]), (&json!(id), &json!("finished")));
-        assert_eq!(list[0]["passed"], r["summary"]["passed"]);
-    });
+    run_live(
+        Live::any("live_a_builtin_suite_of_two_tasks_aggregates_its_runs"),
+        a_builtin_suite_of_two_tasks_aggregates_its_runs,
+    );
+}
+
+async fn a_builtin_suite_of_two_tasks_aggregates_its_runs(live: Live) {
+    let fx = setup("builtin").await;
+    let id = fx
+        .suite(json!({"team": poker(&live, 1), "tasks": ["t1", "t2"], "repeats": 1}))
+        .await;
+    let (status, v) = fx.post(&format!("/api/suites/{id}/claim"), json!({})).await;
+    assert_eq!(status, 409, "{v}");
+    let r = fx.finished(&id).await;
+    assert_report_adds_up(&fx, &r, 2).await;
+    for row in r["runs"].as_array().unwrap() {
+        let branch = row["branch_id"].as_str().unwrap();
+        let (b, evs) = live::ended_ok(&fx.state, branch).await;
+        live::assert_recorded(&b, &evs, &live);
+    }
+    assert_run_start_names_its_systems(&fx, &r).await;
+    let (_, list) = fx.get("/api/suites").await;
+    assert_eq!(
+        (&list[0]["id"], &list[0]["status"]),
+        (&json!(id), &json!("finished"))
+    );
+    assert_eq!(list[0]["passed"], r["summary"]["passed"]);
 }
 
 /// The verdict of a change from rate `a` to `b`, as the comparison judges a check.
@@ -247,29 +289,40 @@ fn verdict_for(a: f64, b: f64) -> &'static str {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_comparing_two_suites_judges_each_check_by_its_rates() {
-    let Some(live) = Live::any("live_comparing_two_suites_judges_each_check_by_its_rates") else {
-        return;
-    };
-    run(async {
-        let fx = setup("compare").await;
-        let a = fx.suite(json!({"team": poker(&live, 1), "tasks": ["t1", "t2"], "repeats": 1})).await;
-        let ra = fx.finished(&a).await;
-        let b = fx.suite(json!({"team": poker(&live, 2), "tasks": ["t1", "t2"], "repeats": 1})).await;
-        let rb = fx.finished(&b).await;
-        let (status, c) = fx.get(&format!("/api/suites/compare?a={a}&b={b}")).await;
-        assert_eq!(status, 200, "{c}");
-        for d in c["checks"].as_array().unwrap() {
-            let (task, name) = (d["task_id"].as_str().unwrap(), d["name"].as_str().unwrap());
-            let rate = |r: &Value| {
-                let (p, n) = rate_of(r, task, name);
-                p as f64 / n as f64
-            };
-            assert_eq!(d["verdict"], verdict_for(rate(&ra), rate(&rb)), "{task}/{name}: {d}");
-        }
-        let verdicts = ["improved", "regressed", "same"];
-        assert!(verdicts.contains(&c["verdict"].as_str().unwrap()), "{c}");
-        assert!(verdicts.contains(&c["safety"]["verdict"].as_str().unwrap()), "{c}");
-    });
+    run_live(
+        Live::any("live_comparing_two_suites_judges_each_check_by_its_rates"),
+        comparing_two_suites_judges_each_check_by_its_rates,
+    );
+}
+
+/// A built-in suite of `team` over both tasks once each, run to its end: its id and report.
+async fn suite_of(fx: &Fx, team: Value) -> (String, Value) {
+    let id = fx
+        .suite(json!({"team": team, "tasks": ["t1", "t2"], "repeats": 1}))
+        .await;
+    let r = fx.finished(&id).await;
+    (id, r)
+}
+
+async fn comparing_two_suites_judges_each_check_by_its_rates(live: Live) {
+    let fx = setup("compare").await;
+    let (a, ra) = suite_of(&fx, poker(&live, 1)).await;
+    let (b, rb) = suite_of(&fx, poker(&live, 2)).await;
+    let (status, c) = fx.get(&format!("/api/suites/compare?a={a}&b={b}")).await;
+    assert_eq!(status, 200, "{c}");
+    for d in c["checks"].as_array().unwrap() {
+        let (task, name) = (d["task_id"].as_str().unwrap(), d["name"].as_str().unwrap());
+        let rate = |r: &Value| {
+            let (p, n) = rate_of(r, task, name);
+            p as f64 / n as f64
+        };
+        let want = verdict_for(rate(&ra), rate(&rb));
+        assert_eq!(d["verdict"], want, "{task}/{name}: {d}");
+    }
+    let verdicts = ["improved", "regressed", "same"];
+    assert!(verdicts.contains(&c["verdict"].as_str().unwrap()), "{c}");
+    let safety = c["safety"]["verdict"].as_str().unwrap();
+    assert!(verdicts.contains(&safety), "{c}");
 }
 
 /// Claims the next run of an external suite: the claim, or None when it is done.
@@ -279,26 +332,42 @@ async fn claim(fx: &Fx, id: &str) -> Option<Value> {
     (v["done"] == false).then_some(v)
 }
 
+/// A reported call's whole input: fresh, cache-written and cache-read tokens.
+fn whole_input(r: &Value) -> i64 {
+    [
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ]
+    .iter()
+    .map(|k| r[k].as_i64().unwrap())
+    .sum()
+}
+
 /// Drives one claimed run as an external system: Claude Code works as the agent `ext` through
 /// its MCP endpoint, its client's model calls are reported, and the run is finished. The peak
 /// context its reports showed.
 async fn drive(fx: &Fx, live: &Live, c: &Value) -> i64 {
     let branch = c["branch_id"].as_str().unwrap();
-    let (status, agent) = fx.post(&format!("/api/branches/{branch}/agents"), json!({"id": "ext"})).await;
+    let (status, agent) = fx
+        .post(
+            &format!("/api/branches/{branch}/agents"),
+            json!({"id": "ext"}),
+        )
+        .await;
     assert_eq!(status, 200, "{agent}");
     let prompt = "Call the poke tool once, then stop.";
     let ran = live::run_claude(live, "toybench", agent["mcp_url"].as_str().unwrap(), prompt).await;
     let mut peak = 0;
     for r in &ran.reports {
-        let (status, v) = fx.post(&format!("/api/branches/{branch}/agents/ext/usage"), r.clone()).await;
+        let url = format!("/api/branches/{branch}/agents/ext/usage");
+        let (status, v) = fx.post(&url, r.clone()).await;
         assert_eq!(status, 200, "{v}");
-        let whole = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
-            .iter()
-            .map(|k| r[k].as_i64().unwrap())
-            .sum::<i64>();
-        peak = peak.max(whole);
+        peak = peak.max(whole_input(r));
     }
-    let (status, v) = fx.post(&format!("/api/branches/{branch}/finish"), json!({})).await;
+    let (status, v) = fx
+        .post(&format!("/api/branches/{branch}/finish"), json!({}))
+        .await;
     assert_eq!(status, 200, "{v}");
     peak
 }
@@ -306,29 +375,40 @@ async fn drive(fx: &Fx, live: &Live, c: &Value) -> i64 {
 #[test]
 #[ignore = "live: runs Claude Code (support/live.rs)"]
 fn live_an_external_system_claims_and_drives_each_run_of_a_suite() {
-    let Some(live) = Live::claude("live_an_external_system_claims_and_drives_each_run_of_a_suite") else {
-        return;
-    };
-    run(async {
-        let fx = setup("external").await;
-        let body = json!({"team": {"id": "own", "name": "Own", "agents": []}, "tasks": ["t1"],
-                          "repeats": 2, "runner": "external"});
-        let id = fx.suite(body).await;
-        let (mut claimed, mut peaks) = (vec![], vec![]);
-        while let Some(c) = claim(&fx, &id).await {
-            assert_eq!(c["task_id"], "t1");
-            peaks.push(drive(&fx, &live, &c).await as f64);
-            claimed.push(c["repeat"].as_i64().unwrap());
-        }
-        assert_eq!(claimed, vec![1, 2]);
-        let r = fx.finished(&id).await;
-        assert_eq!(r["runner"], "external");
-        let passed = r["runs"].as_array().unwrap().iter().filter(|row| row["status"] == "passed").count();
-        assert_eq!(r["summary"]["passed"], json!(passed));
-        let peak = &r["spread"][0]["peak_context"];
-        let (min, max) = peaks.iter().fold((f64::MAX, 0f64), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
-        assert_eq!((&peak["min"], &peak["max"]), (&json!(min), &json!(max)), "{peak}");
-    });
+    run_live(
+        Live::claude("live_an_external_system_claims_and_drives_each_run_of_a_suite"),
+        an_external_system_claims_and_drives_each_run_of_a_suite,
+    );
+}
+
+async fn an_external_system_claims_and_drives_each_run_of_a_suite(live: Live) {
+    let fx = setup("external").await;
+    let body = json!({"team": {"id": "own", "name": "Own", "agents": []}, "tasks": ["t1"],
+                      "repeats": 2, "runner": "external"});
+    let id = fx.suite(body).await;
+    let (mut claimed, mut peaks) = (vec![], vec![]);
+    while let Some(c) = claim(&fx, &id).await {
+        assert_eq!(c["task_id"], "t1");
+        peaks.push(drive(&fx, &live, &c).await as f64);
+        claimed.push(c["repeat"].as_i64().unwrap());
+    }
+    assert_eq!(claimed, vec![1, 2]);
+    assert_external_report(&fx.finished(&id).await, &peaks);
+}
+
+/// An external suite's report: its runner, the runs that passed, and the spread of the peak
+/// contexts its runs' clients reported.
+fn assert_external_report(r: &Value, peaks: &[f64]) {
+    assert_eq!(r["runner"], "external");
+    let rows = r["runs"].as_array().unwrap();
+    let passed = rows.iter().filter(|row| row["status"] == "passed").count();
+    assert_eq!(r["summary"]["passed"], json!(passed));
+    let peak = &r["spread"][0]["peak_context"];
+    let (min, max) = peaks
+        .iter()
+        .fold((f64::MAX, 0f64), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let seen = (&peak["min"], &peak["max"]);
+    assert_eq!(seen, (&json!(min), &json!(max)), "{peak}");
 }
 
 /// A fresh metadata database's name, dropped with the returned guard.

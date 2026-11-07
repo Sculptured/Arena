@@ -32,6 +32,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 /// One disruption the builder may add: `jam` on part `a`, after `{after}` calls.
 fn options() -> Value {
     let after =
@@ -81,7 +88,8 @@ struct Fx {
 async fn setup(tag: &str, root: ToyRoot) -> Fx {
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("twin", tag).await;
-    let (state, base) = app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
+    let (state, base) =
+        app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
     Fx {
         state,
         base,
@@ -108,15 +116,21 @@ impl Fx {
     /// finishes it: its branch and events.
     async fn external_run(&self, scenario: Value) -> (String, Vec<Event>) {
         let team = json!({"id": "own", "name": "Own", "agents": []});
-        let body = json!({"task_id": "t1", "team": team, "runner": "external", "scenario": scenario});
+        let body =
+            json!({"task_id": "t1", "team": team, "runner": "external", "scenario": scenario});
         let (status, v) = self.post("/api/runs", body).await;
         assert_eq!(status, 200, "{v}");
         let branch = v["branch_id"].as_str().unwrap().to_string();
-        let (status, v) = self.post(&format!("/api/branches/{branch}/finish"), json!({})).await;
+        let (status, v) = self
+            .post(&format!("/api/branches/{branch}/finish"), json!({}))
+            .await;
         assert_eq!(status, 200, "{v}");
         let b = self.state.store.branch(&branch).await.unwrap();
         assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-        (branch.clone(), self.state.store.events(&branch).await.unwrap())
+        (
+            branch.clone(),
+            self.state.store.events(&branch).await.unwrap(),
+        )
     }
 
     /// Starts a run of `t1` with `team` in `scenario`; its branch, run to its end, and its events.
@@ -133,7 +147,9 @@ impl Fx {
     /// Forks `parent` at `at_seq` with no change; the new branch's id and events, run to its end.
     async fn fork_to_end(&self, parent: &str, at_seq: i64) -> (String, Vec<Event>) {
         let fork = json!({"at_seq": at_seq});
-        let (status, v) = self.post(&format!("/api/branches/{parent}/fork"), fork).await;
+        let (status, v) = self
+            .post(&format!("/api/branches/{parent}/fork"), fork)
+            .await;
         assert_eq!(status, 200, "{v}");
         let child = v["branch_id"].as_str().unwrap().to_string();
         let (_b, evs) = live::ended_ok(&self.state, &child).await;
@@ -163,8 +179,13 @@ fn views_wanted(evs: &[Event]) -> Vec<(i64, String)> {
     let first = steps(evs, "setup").last().map_or(1, |e| e.seq);
     let mut out = vec![(first, "0".to_string())];
     let mut pokes = 0;
-    for e in evs.iter().filter(|e| e.kind == EventKind::ToolCall && e.seq > first) {
-        let wrote = e.payload["writes"].as_array().is_some_and(|w| !w.is_empty());
+    for e in evs
+        .iter()
+        .filter(|e| e.kind == EventKind::ToolCall && e.seq > first)
+    {
+        let wrote = e.payload["writes"]
+            .as_array()
+            .is_some_and(|w| !w.is_empty());
         if e.payload["name"] == "b_poke" && e.payload["error"].is_null() {
             pokes += 1;
         }
@@ -216,29 +237,38 @@ fn a_scenario_is_expanded_into_the_setup_and_recorded() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_views_follow_the_writing_steps_and_forks_inherit_them() {
-    let Some(live) = Live::any("live_views_follow_the_writing_steps_and_forks_inherit_them") else {
-        return;
-    };
-    run(async {
-        let fx = setup("views", world("views", &[])).await;
-        let poke = "Call b_poke once, then b_peek once, then b_poke once more, then stop.";
-        let team = live.team(vec![live.agent("first", poke), live.agent("second", poke)]);
-        let (parent, evs) = fx
-            .run_in(&live, &team, json!({"disruptions": [{"id": "jam", "params": {}}]}))
-            .await;
-        let views = fx.get(&format!("/api/branches/{parent}/views")).await;
-        let want = views_wanted(&evs);
-        assert_eq!(drawn(&views), want);
-        let set = steps(&evs, "setup");
-        assert!(views[0]["event_seq"].as_i64().unwrap() > set[0].seq);
-        let at = live::first_of(&evs, EventKind::AgentStart, "second").unwrap();
-        let (child, cevs) = fx.fork_to_end(&parent, at).await;
-        assert_eq!(cevs[0].payload["scenario"]["disruptions"][0]["id"], "jam", "the fork keeps it");
-        let inherited = drawn(&fx.get(&format!("/api/branches/{child}/views")).await);
-        let before: Vec<_> = want.iter().filter(|(s, _)| *s < at).cloned().collect();
-        assert_eq!(inherited[..before.len()], before[..]);
-        assert_eq!(inherited, views_wanted(&cevs));
-    })
+    run_live(
+        Live::any("live_views_follow_the_writing_steps_and_forks_inherit_them"),
+        views_follow_the_writing_steps_and_forks_inherit_them,
+    );
+}
+
+async fn views_follow_the_writing_steps_and_forks_inherit_them(live: Live) {
+    let fx = setup("views", world("views", &[])).await;
+    let poke = "Call b_poke once, then b_peek once, then b_poke once more, then stop.";
+    let team = live.team(vec![live.agent("first", poke), live.agent("second", poke)]);
+    let (parent, evs) = fx
+        .run_in(
+            &live,
+            &team,
+            json!({"disruptions": [{"id": "jam", "params": {}}]}),
+        )
+        .await;
+    let views = fx.get(&format!("/api/branches/{parent}/views")).await;
+    let want = views_wanted(&evs);
+    assert_eq!(drawn(&views), want);
+    let set = steps(&evs, "setup");
+    assert!(views[0]["event_seq"].as_i64().unwrap() > set[0].seq);
+    let at = live::first_of(&evs, EventKind::AgentStart, "second").unwrap();
+    let (child, cevs) = fx.fork_to_end(&parent, at).await;
+    assert_eq!(
+        cevs[0].payload["scenario"]["disruptions"][0]["id"], "jam",
+        "the fork keeps it"
+    );
+    let inherited = drawn(&fx.get(&format!("/api/branches/{child}/views")).await);
+    let before: Vec<_> = want.iter().filter(|(s, _)| *s < at).cloned().collect();
+    assert_eq!(inherited[..before.len()], before[..]);
+    assert_eq!(inherited, views_wanted(&cevs));
 }
 
 /// A run without a scenario still gets a view after its start; a view that fails records nothing
@@ -262,34 +292,49 @@ fn a_failing_view_records_nothing_and_fails_nothing() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_internal_keys_are_saved_but_make_no_write_and_no_view() {
-    let Some(live) = Live::any("live_internal_keys_are_saved_but_make_no_write_and_no_view") else {
+    run_live(
+        Live::any("live_internal_keys_are_saved_but_make_no_write_and_no_view"),
+        internal_keys_are_saved_but_make_no_write_and_no_view,
+    );
+}
+
+/// Each peek changed only the internal key: no write, but a save.
+fn assert_internal_only(peeks: &[&Event]) {
+    for peek in peeks {
+        let p = &peek.payload;
+        let keys = (&p["writes"], &p["internal"]);
+        assert_eq!(keys, (&json!([]), &json!(["_peeks/n"])), "{p}");
+        assert!(
+            p["saves"]["b"].is_string(),
+            "saved for its internal key: {p}"
+        );
+    }
+}
+
+async fn internal_keys_are_saved_but_make_no_write_and_no_view(live: Live) {
+    let root = world_with("internal", &[], &["--internal-peeks"]);
+    let fx = setup("internal", root).await;
+    let team = live.team(vec![
+        live.agent("first", "Call b_peek twice, then b_poke once, then stop."),
+        live.agent("second", "Call b_peek once, then stop."),
+    ]);
+    let (parent, evs) = fx.run_in(&live, &team, Value::Null).await;
+    let peeks = live::calls_named(&evs, "b_peek");
+    assert_internal_only(&peeks);
+    let views = fx.get(&format!("/api/branches/{parent}/views")).await;
+    let why = "after RunStart and the writes, not the peeks";
+    assert_eq!(drawn(&views), views_wanted(&evs), "{why}");
+    let at = live::first_of(&evs, EventKind::AgentStart, "second").unwrap();
+    let before = peeks.iter().filter(|e| e.seq < at).count() as i64;
+    let (_child, cevs) = fx.fork_to_end(&parent, at).await;
+    let again = live::calls_named(&cevs, "b_peek")
+        .into_iter()
+        .find(|e| e.seq >= at);
+    let Some(again) = again else {
+        eprintln!("note: the child's agent did not peek this time");
         return;
     };
-    run(async {
-        let root = world_with("internal", &[], &["--internal-peeks"]);
-        let fx = setup("internal", root).await;
-        let team = live.team(vec![
-            live.agent("first", "Call b_peek twice, then b_poke once, then stop."),
-            live.agent("second", "Call b_peek once, then stop."),
-        ]);
-        let (parent, evs) = fx.run_in(&live, &team, Value::Null).await;
-        let peeks = live::calls_named(&evs, "b_peek");
-        for peek in &peeks {
-            let p = &peek.payload;
-            assert_eq!((&p["writes"], &p["internal"]), (&json!([]), &json!(["_peeks/n"])), "{p}");
-            assert!(p["saves"]["b"].is_string(), "saved for its internal key: {p}");
-        }
-        let views = fx.get(&format!("/api/branches/{parent}/views")).await;
-        assert_eq!(drawn(&views), views_wanted(&evs), "after RunStart and the writes, not the peeks");
-        let at = live::first_of(&evs, EventKind::AgentStart, "second").unwrap();
-        let before = peeks.iter().filter(|e| e.seq < at).count() as i64;
-        let (_child, cevs) = fx.fork_to_end(&parent, at).await;
-        match live::calls_named(&cevs, "b_peek").into_iter().find(|e| e.seq >= at) {
-            Some(again) => {
-                let result = &again.payload["result"];
-                assert_eq!(result["peeks"], before + 1, "the fork restored the peeks counted: {result}");
-            }
-            None => eprintln!("note: the child's agent did not peek this time"),
-        }
-    })
+    let result = &again.payload["result"];
+    let why = "the fork restored the peeks counted";
+    assert_eq!(result["peeks"], before + 1, "{why}: {result}");
 }

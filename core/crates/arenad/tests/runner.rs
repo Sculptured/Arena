@@ -36,6 +36,13 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
+}
+
 struct Fx {
     state: Arc<AppState>,
     base: String,
@@ -105,7 +112,11 @@ fn an_unreachable_provider_ends_the_branch_infra_error() {
         let evs = fx.state.store.events(&branch).await.unwrap();
         assert_eq!(
             kinds(&evs),
-            vec![EventKind::RunStart, EventKind::AgentStart, EventKind::AgentEnd]
+            vec![
+                EventKind::RunStart,
+                EventKind::AgentStart,
+                EventKind::AgentEnd
+            ]
         );
         let end: AgentEndPayload =
             serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
@@ -172,6 +183,24 @@ async fn line_in(fx: &Fx, save: &str) -> Value {
     fx.hub.inspect_save(save, &[&key]).await[&key]["doc"]["address"]["address1"].clone()
 }
 
+/// Writes `USER`'s address line `line` on `branch` through Arena's MCP endpoint.
+async fn write_line(fx: &Fx, branch: &str, line: &str) -> Value {
+    let args = json!({"user_id": USER, "address1": line, "address2": "",
+                      "city": "Austin", "state": "TX", "country": "USA", "zip": "73301"});
+    mcp(fx, branch, "resolver", "modify_user_address", args).await
+}
+
+/// What `branch` reads and what its write saved show `line` only.
+async fn assert_own_line(fx: &Fx, branch: &str, line: &str) {
+    let user = json!({"user_id": USER});
+    let read = mcp(fx, branch, "resolver", "get_user_details", user).await;
+    assert_eq!(read["address"]["address1"], line, "{read}");
+    let evs = fx.state.store.events(branch).await.unwrap();
+    let w = live::calls_named(&evs, "modify_user_address")[0];
+    let save = w.payload["saves"]["retail"].as_str().unwrap().to_string();
+    assert_eq!(line_in(fx, &save).await, line);
+}
+
 /// Two branches' worlds run on one program and stay apart: each sees and saves its own write,
 /// whichever wrote last.
 #[test]
@@ -180,22 +209,13 @@ fn two_branches_on_one_program_keep_their_own_world() {
         let fx = setup("two", &[], "retail", None).await;
         let (a, actx) = live_branch(&fx, unreachable_team(), "retail", "27").await;
         let (b, bctx) = live_branch(&fx, unreachable_team(), "retail", "27").await;
-        let write = |line: &str| {
-            json!({"user_id": USER, "address1": line, "address2": "",
-                   "city": "Austin", "state": "TX", "country": "USA", "zip": "73301"})
-        };
         let (wa, wb) = tokio::join!(
-            mcp(&fx, &a, "resolver", "modify_user_address", write("1 Alpha Way")),
-            mcp(&fx, &b, "resolver", "modify_user_address", write("2 Beta Way")),
+            write_line(&fx, &a, "1 Alpha Way"),
+            write_line(&fx, &b, "2 Beta Way"),
         );
         assert!(wa.is_object() && wb.is_object());
         for (branch, line) in [(&a, "1 Alpha Way"), (&b, "2 Beta Way")] {
-            let read = mcp(&fx, branch, "resolver", "get_user_details", json!({"user_id": USER})).await;
-            assert_eq!(read["address"]["address1"], line, "{read}");
-            let evs = fx.state.store.events(branch).await.unwrap();
-            let w = live::calls_named(&evs, "modify_user_address")[0];
-            let save = w.payload["saves"]["retail"].as_str().unwrap().to_string();
-            assert_eq!(line_in(&fx, &save).await, line);
+            assert_own_line(&fx, branch, line).await;
         }
         actx.world.stop().await;
         bctx.world.stop().await;
@@ -227,7 +247,10 @@ fn assert_run_start(rs: &Value) {
 /// row differs, the differing rows sorted, and the final state saved before the instances
 /// stopped (an exchange in it when it passed).
 async fn assert_scored(fx: &Fx, b: &Branch, check: &CheckPayload) {
-    assert_eq!(check.gold_db.as_deref(), Some("gold_retail_0_1_0_27_retail"));
+    assert_eq!(
+        check.gold_db.as_deref(),
+        Some("gold_retail_0_1_0_27_retail")
+    );
     let rows = check.differing_rows.clone().expect("differing rows");
     assert_eq!(check.passed, rows.is_empty(), "{rows:?}");
     assert_eq!(check.passed, b.status == BranchStatus::Passed);
@@ -240,7 +263,10 @@ async fn assert_scored(fx: &Fx, b: &Branch, check: &CheckPayload) {
     if check.passed {
         assert_eq!(order[key]["doc"]["status"], "exchange requested");
     } else {
-        assert!(order[key]["doc"].is_object(), "the final save reads: {order}");
+        assert!(
+            order[key]["doc"].is_object(),
+            "the final save reads: {order}"
+        );
     }
 }
 
@@ -253,7 +279,10 @@ fn overhead(e: &Event, cat: &str) -> f64 {
 /// the metrics estimate production as the measured time minus them.
 fn assert_overhead(b: &Branch, evs: &[Event]) {
     assert!(overhead(&evs[0], "restore") > 0.0, "{}", evs[0].payload);
-    for w in evs.iter().filter(|e| e.kind == EventKind::ToolCall && e.payload["saves"].is_object()) {
+    for w in evs
+        .iter()
+        .filter(|e| e.kind == EventKind::ToolCall && e.payload["saves"].is_object())
+    {
         assert!(overhead(w, "save") > 0.0, "{}", w.payload);
     }
     assert!(evs[1..].iter().all(|e| overhead(e, "record") > 0.0));
@@ -275,13 +304,23 @@ fn assert_resolver_input(evs: &[Event]) {
     else {
         return;
     };
-    let input = first.payload["request"]["messages"][1]["content"].as_str().unwrap();
-    assert!(input.contains("# Customer ticket") && input.contains("# Store policy"), "{input}");
-    let note = evs.iter().find(|e| e.kind == EventKind::Handoff && e.agent.as_deref() == Some("triage"));
+    let input = first.payload["request"]["messages"][1]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        input.contains("# Customer ticket") && input.contains("# Store policy"),
+        "{input}"
+    );
+    let note = evs
+        .iter()
+        .find(|e| e.kind == EventKind::Handoff && e.agent.as_deref() == Some("triage"));
     match note {
         Some(h) => {
             assert!(input.contains("# Handoff note from"), "{input}");
-            assert!(input.contains(h.payload["note"].as_str().unwrap()), "{input}");
+            assert!(
+                input.contains(h.payload["note"].as_str().unwrap()),
+                "{input}"
+            );
         }
         None => assert!(!input.contains("Handoff note"), "{input}"),
     }
@@ -293,30 +332,36 @@ fn assert_resolver_input(evs: &[Event]) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_team_runs_task_27_and_arena_records_and_scores_it() {
-    let Some(live) = Live::any("live_a_team_runs_task_27_and_arena_records_and_scores_it") else {
-        return;
-    };
-    run(async {
-        let fx = setup("live27", &[], "retail", None).await;
-        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
-        let team = live.bench_team(bench.team.unwrap());
-        let (_run, branch) = runner::start_run(&fx.state, "27", team).await.unwrap();
-        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
-        live::assert_recorded(&b, &evs, &live);
-        assert_run_start(&evs[0].payload);
-        let starts: Vec<Option<&str>> = evs
-            .iter()
-            .filter(|e| e.kind == EventKind::AgentStart)
-            .map(|e| e.agent.as_deref())
-            .collect();
-        assert_eq!(starts, [Some("triage"), Some("resolver")], "one after another");
-        assert_eq!(evs.last().unwrap().kind, EventKind::Check, "{:?}", b.error);
-        let check = live::check_of(&evs).unwrap();
-        assert_scored(&fx, &b, &check).await;
-        assert_overhead(&b, &evs);
-        assert_resolver_input(&evs);
-        assert!(fx.state.live.read().unwrap().is_empty());
-    })
+    run_live(
+        Live::any("live_a_team_runs_task_27_and_arena_records_and_scores_it"),
+        a_team_runs_task_27_and_arena_records_and_scores_it,
+    );
+}
+
+async fn a_team_runs_task_27_and_arena_records_and_scores_it(live: Live) {
+    let fx = setup("live27", &[], "retail", None).await;
+    let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+    let team = live.bench_team(bench.team.unwrap());
+    let (_run, branch) = runner::start_run(&fx.state, "27", team).await.unwrap();
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
+    assert_run_start(&evs[0].payload);
+    let starts: Vec<Option<&str>> = evs
+        .iter()
+        .filter(|e| e.kind == EventKind::AgentStart)
+        .map(|e| e.agent.as_deref())
+        .collect();
+    assert_eq!(
+        starts,
+        [Some("triage"), Some("resolver")],
+        "one after another"
+    );
+    assert_eq!(evs.last().unwrap().kind, EventKind::Check, "{:?}", b.error);
+    let check = live::check_of(&evs).unwrap();
+    assert_scored(&fx, &b, &check).await;
+    assert_overhead(&b, &evs);
+    assert_resolver_input(&evs);
+    assert!(fx.state.live.read().unwrap().is_empty());
 }
 
 /// A branch under the old rules (a fork of a run recorded before runners) fails when an agent
@@ -324,31 +369,47 @@ fn live_a_team_runs_task_27_and_arena_records_and_scores_it() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_legacy_branch_still_needs_its_handoff() {
-    let Some(live) = Live::any("live_a_legacy_branch_still_needs_its_handoff") else {
-        return;
-    };
-    run(async {
-        let fx = setup("legacyhandoff", &[], "retail", None).await;
-        let quiet = "Reply with one short sentence. Do not call any tool.";
-        let team = live.team(vec![live.agent("triage", quiet), live.agent("resolver", quiet)]);
-        let (branch, ctx) = live_branch(&fx, team, "retail", "27").await;
-        assert_eq!(ctx.rules, Rules::legacy());
-        runner::run_branch(fx.state.clone(), ctx, StartPoint::default()).await;
-        let b = fx.state.store.branch(&branch).await.unwrap();
-        let evs = fx.state.store.events(&branch).await.unwrap();
-        let handed = evs.iter().any(|e| e.kind == EventKind::Handoff);
-        let triage_ok = evs.iter().any(|e| {
-            e.kind == EventKind::AgentEnd && e.agent.as_deref() == Some("triage") && e.payload["ok"] == true
-        });
-        if triage_ok && !handed {
-            assert_eq!(b.status, BranchStatus::Failed);
-            assert_eq!(b.error.as_deref(), Some("no handoff"));
-            assert_eq!(kinds(&evs), vec![EventKind::AgentStart, EventKind::AgentEnd]);
-        } else if handed {
-            eprintln!("note: the model handed off although told not to; the refusal was not exercised");
-            assert!(evs.iter().any(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some("resolver")));
-        }
-    })
+    run_live(
+        Live::any("live_a_legacy_branch_still_needs_its_handoff"),
+        a_legacy_branch_still_needs_its_handoff,
+    );
+}
+
+/// A triage and a resolver told to call no tool.
+fn quiet_team(live: &Live) -> Team {
+    let quiet = "Reply with one short sentence. Do not call any tool.";
+    live.team(vec![
+        live.agent("triage", quiet),
+        live.agent("resolver", quiet),
+    ])
+}
+
+async fn a_legacy_branch_still_needs_its_handoff(live: Live) {
+    let fx = setup("legacyhandoff", &[], "retail", None).await;
+    let (branch, ctx) = live_branch(&fx, quiet_team(&live), "retail", "27").await;
+    assert_eq!(ctx.rules, Rules::legacy());
+    runner::run_branch(fx.state.clone(), ctx, StartPoint::default()).await;
+    let b = fx.state.store.branch(&branch).await.unwrap();
+    let evs = fx.state.store.events(&branch).await.unwrap();
+    let handed = evs.iter().any(|e| e.kind == EventKind::Handoff);
+    let triage_ok = evs.iter().any(|e| {
+        e.kind == EventKind::AgentEnd
+            && e.agent.as_deref() == Some("triage")
+            && e.payload["ok"] == true
+    });
+    if triage_ok && !handed {
+        assert_eq!(b.status, BranchStatus::Failed);
+        assert_eq!(b.error.as_deref(), Some("no handoff"));
+        assert_eq!(
+            kinds(&evs),
+            vec![EventKind::AgentStart, EventKind::AgentEnd]
+        );
+    } else if handed {
+        eprintln!("note: the model handed off although told not to; the refusal was not exercised");
+        assert!(evs
+            .iter()
+            .any(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some("resolver")));
+    }
 }
 
 /// A new run never needs a handoff: an agent that leaves none ends normally, the next one starts
@@ -356,26 +417,35 @@ fn live_a_legacy_branch_still_needs_its_handoff() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_run_goes_on_without_handoffs() {
-    let Some(live) = Live::any("live_a_run_goes_on_without_handoffs") else {
-        return;
-    };
-    run(async {
-        let fx = setup("nohandoff", &[], "retail", None).await;
-        let quiet = "Reply with one short sentence. Do not call any tool.";
-        let team = live.team(vec![live.agent("triage", quiet), live.agent("resolver", quiet)]);
-        let (_run, branch) = runner::start_run(&fx.state, "27", team).await.unwrap();
-        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
-        live::assert_recorded(&b, &evs, &live);
-        assert_ne!(b.error.as_deref(), Some("no handoff"));
-        let starts = evs.iter().filter(|e| e.kind == EventKind::AgentStart).count();
-        assert_eq!(starts, 2, "the resolver started after the triage");
-        let rs = &evs[0].payload;
-        assert_eq!((&rs["runner"], &rs["handoff"]), (&json!("chain"), &json!("optional")));
-        if let Some(tools) = live::offered_tools(&evs, "triage") {
-            assert!(tools.iter().any(|t| t == "message") && tools.iter().any(|t| t == "inbox"), "{tools:?}");
-        }
-        assert_resolver_input(&evs);
-    })
+    run_live(
+        Live::any("live_a_run_goes_on_without_handoffs"),
+        a_run_goes_on_without_handoffs,
+    );
+}
+
+async fn a_run_goes_on_without_handoffs(live: Live) {
+    let fx = setup("nohandoff", &[], "retail", None).await;
+    let (_run, branch) = runner::start_run(&fx.state, "27", quiet_team(&live))
+        .await
+        .unwrap();
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
+    assert_ne!(b.error.as_deref(), Some("no handoff"));
+    let starts = evs
+        .iter()
+        .filter(|e| e.kind == EventKind::AgentStart)
+        .count();
+    assert_eq!(starts, 2, "the resolver started after the triage");
+    let rs = &evs[0].payload;
+    let rules = (&rs["runner"], &rs["handoff"]);
+    assert_eq!(rules, (&json!("chain"), &json!("optional")));
+    if let Some(tools) = live::offered_tools(&evs, "triage") {
+        assert!(
+            tools.iter().any(|t| t == "message") && tools.iter().any(|t| t == "inbox"),
+            "{tools:?}"
+        );
+    }
+    assert_resolver_input(&evs);
 }
 
 /// The concurrent runner starts every agent before any ends; what one sends the other is
@@ -383,36 +453,51 @@ fn live_a_run_goes_on_without_handoffs() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_the_concurrent_runner_runs_every_agent_at_once() {
-    let Some(live) = Live::any("live_the_concurrent_runner_runs_every_agent_at_once") else {
-        return;
-    };
-    run(async {
-        let fx = setup("concurrent", &[], "retail", None).await;
-        let say = |other: &str| {
-            format!("Call the message tool once with to=\"{other}\" and a one-line hello, then call inbox once, then stop.")
-        };
-        let team = live.team(vec![live.agent("triage", &say("resolver")), live.agent("resolver", &say("triage"))]);
-        let started = runner::start_run_with(&fx.state, "27", team, Runner::Concurrent);
-        let (_run, branch) = started.await.unwrap();
-        let (b, evs) = live::ended_ok(&fx.state, &branch).await;
-        live::assert_recorded(&b, &evs, &live);
-        assert_eq!(evs[0].payload["runner"], "concurrent");
-        let k = kinds(&evs);
-        assert_eq!(&k[1..3], [EventKind::AgentStart, EventKind::AgentStart]);
-        for m in evs.iter().filter(|e| e.kind == EventKind::Message) {
-            let from = m.agent.as_deref().unwrap();
-            let to = m.payload["to"].as_str().unwrap();
-            assert!(from != to && ["triage", "resolver"].contains(&to), "{}", m.payload);
-            let read_after = evs.iter().find(|e| {
-                e.seq > m.seq && e.agent.as_deref() == Some(to) && e.payload["name"] == "inbox"
-            });
-            if let Some(inbox) = read_after {
-                let got = inbox.payload["result"]["messages"].as_array().cloned().unwrap_or_default();
-                assert!(got.iter().any(|g| g["text"] == m.payload["text"]), "{}", inbox.payload);
-            }
+    run_live(
+        Live::any("live_the_concurrent_runner_runs_every_agent_at_once"),
+        the_concurrent_runner_runs_every_agent_at_once,
+    );
+}
+
+/// Each message went to the other agent, and an inbox read of it after holds it.
+fn assert_messages_delivered(evs: &[Event]) {
+    for m in evs.iter().filter(|e| e.kind == EventKind::Message) {
+        let from = m.agent.as_deref().unwrap();
+        let to = m.payload["to"].as_str().unwrap();
+        let other = from != to && ["triage", "resolver"].contains(&to);
+        assert!(other, "{}", m.payload);
+        let read_after = evs.iter().find(|e| {
+            e.seq > m.seq && e.agent.as_deref() == Some(to) && e.payload["name"] == "inbox"
+        });
+        if let Some(inbox) = read_after {
+            let got = inbox.payload["result"]["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let held = got.iter().any(|g| g["text"] == m.payload["text"]);
+            assert!(held, "{}", inbox.payload);
         }
-        assert_eq!(k.last(), Some(&EventKind::Check));
-    })
+    }
+}
+
+async fn the_concurrent_runner_runs_every_agent_at_once(live: Live) {
+    let fx = setup("concurrent", &[], "retail", None).await;
+    let say = |other: &str| {
+        format!("Call the message tool once with to=\"{other}\" and a one-line hello, then call inbox once, then stop.")
+    };
+    let team = live.team(vec![
+        live.agent("triage", &say("resolver")),
+        live.agent("resolver", &say("triage")),
+    ]);
+    let started = runner::start_run_with(&fx.state, "27", team, Runner::Concurrent);
+    let (_run, branch) = started.await.unwrap();
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
+    assert_eq!(evs[0].payload["runner"], "concurrent");
+    let k = kinds(&evs);
+    assert_eq!(&k[1..3], [EventKind::AgentStart, EventKind::AgentStart]);
+    assert_messages_delivered(&evs);
+    assert_eq!(k.last(), Some(&EventKind::Check));
 }
 
 /// A branch can start mid-chain: the agent at the start point runs with the notes recorded
@@ -420,29 +505,36 @@ fn live_the_concurrent_runner_runs_every_agent_at_once() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_run_branch_can_start_mid_chain_from_recorded_notes() {
-    let Some(live) = Live::any("live_run_branch_can_start_mid_chain_from_recorded_notes") else {
-        return;
+    run_live(
+        Live::any("live_run_branch_can_start_mid_chain_from_recorded_notes"),
+        run_branch_can_start_mid_chain_from_recorded_notes,
+    );
+}
+
+async fn run_branch_can_start_mid_chain_from_recorded_notes(live: Live) {
+    let fx = setup("mid", &[], "retail", None).await;
+    let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+    let team = live.bench_team(bench.team.unwrap());
+    let (branch, ctx) = live_branch(&fx, team, "retail", "27").await;
+    let from = StartPoint {
+        agent_index: 1,
+        resume: None,
+        notes: vec!["Carried note: the customer wants an exchange.".into()],
     };
-    run(async {
-        let fx = setup("mid", &[], "retail", None).await;
-        let bench = fx.state.hub.bench_describe("retail").await.unwrap();
-        let team = live.bench_team(bench.team.unwrap());
-        let (branch, ctx) = live_branch(&fx, team, "retail", "27").await;
-        let from = StartPoint {
-            agent_index: 1,
-            resume: None,
-            notes: vec!["Carried note: the customer wants an exchange.".into()],
-        };
-        runner::run_branch(fx.state.clone(), ctx, from).await;
-        let (_b, evs) = live::ended_ok(&fx.state, &branch).await;
-        let k = kinds(&evs);
-        assert_eq!(k, vec![EventKind::AgentStart, EventKind::AgentEnd, EventKind::Check]);
-        assert!(evs.iter().all(|e| e.agent.as_deref() != Some("triage")));
-        if let Some(first) = evs.iter().find(|e| e.kind == EventKind::ModelCall) {
-            let input = first.payload["request"]["messages"][1]["content"].as_str().unwrap();
-            assert!(input.contains("Carried note"), "{input}");
-        }
-    })
+    runner::run_branch(fx.state.clone(), ctx, from).await;
+    let (_b, evs) = live::ended_ok(&fx.state, &branch).await;
+    let k = kinds(&evs);
+    assert_eq!(
+        k,
+        vec![EventKind::AgentStart, EventKind::AgentEnd, EventKind::Check]
+    );
+    assert!(evs.iter().all(|e| e.agent.as_deref() != Some("triage")));
+    if let Some(first) = evs.iter().find(|e| e.kind == EventKind::ModelCall) {
+        let input = first.payload["request"]["messages"][1]["content"]
+            .as_str()
+            .unwrap();
+        assert!(input.contains("Carried note"), "{input}");
+    }
 }
 
 /// A toy world whose part crashes on its first tool call, once; it logs every request.
@@ -453,7 +545,14 @@ fn crashy_world() -> (packages::ToyRoot, PathBuf) {
         log.to_string_lossy().into_owned(),
         mark.to_string_lossy().into_owned(),
     );
-    let args = ["--crash-on-call", "1", "--crash-mark", &mark_s, "--log", &log_s];
+    let args = [
+        "--crash-on-call",
+        "1",
+        "--crash-mark",
+        &mark_s,
+        "--log",
+        &log_s,
+    ];
     (packages::toy_world("crashy", &args, &[]), log)
 }
 
@@ -462,36 +561,48 @@ fn crashy_world() -> (packages::ToyRoot, PathBuf) {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_part_crash_ends_branch_infra_error() {
-    let Some(live) = Live::any("live_part_crash_ends_branch_infra_error") else {
+    run_live(
+        Live::any("live_part_crash_ends_branch_infra_error"),
+        part_crash_ends_branch_infra_error,
+    );
+}
+
+/// The branch ended `infra_error` at the crash, the agent stopped there, and the crashed
+/// instance was stopped (by the restarted program).
+fn assert_crashed(b: &Branch, evs: &[Event], pokes: &[&Event], log: &std::path::Path) {
+    assert_eq!(b.status, BranchStatus::InfraError);
+    let err = b.error.clone().unwrap();
+    let why =
+        err.starts_with("the box integration stopped: ") && err.contains("toy: crashing on call 1");
+    assert!(why, "{err}");
+    let first = pokes[0].payload["error"].as_str().unwrap();
+    assert!(first.contains("the box integration stopped"));
+    assert_eq!(pokes.len(), 1, "the agent stopped at the crash");
+    assert!(!kinds(evs).contains(&EventKind::Check));
+    let stop = format!("stop {}", arenad::world::instance_id(&b.id, "box"));
+    assert!(std::fs::read_to_string(log).unwrap().contains(&stop));
+}
+
+async fn part_crash_ends_branch_infra_error(live: Live) {
+    let (root, log) = crashy_world();
+    let fx = toy_fx("crash", &root, None).await;
+    let solo = live.team(vec![
+        live.agent("solo", "Call the poke tool once, then stop.")
+    ]);
+    let (_run, branch) = runner::start_run(&fx.state, "t1", solo.clone())
+        .await
+        .unwrap();
+    let b = live::ended(&fx.state, &branch).await;
+    let evs = fx.state.store.events(&branch).await.unwrap();
+    let pokes = live::calls_named(&evs, "poke");
+    if pokes.is_empty() {
+        eprintln!("note: the model did not poke this time; the crash was not exercised");
         return;
-    };
-    run(async {
-        let (root, log) = crashy_world();
-        let fx = toy_fx("crash", &root, None).await;
-        let solo = live.team(vec![live.agent("solo", "Call the poke tool once, then stop.")]);
-        let (_run, branch) = runner::start_run(&fx.state, "t1", solo.clone()).await.unwrap();
-        let b = live::ended(&fx.state, &branch).await;
-        let evs = fx.state.store.events(&branch).await.unwrap();
-        let pokes = live::calls_named(&evs, "poke");
-        if pokes.is_empty() {
-            eprintln!("note: the model did not poke this time; the crash was not exercised");
-            return;
-        }
-        assert_eq!(b.status, BranchStatus::InfraError);
-        let err = b.error.unwrap();
-        assert!(
-            err.starts_with("the box integration stopped: ") && err.contains("toy: crashing on call 1"),
-            "{err}"
-        );
-        assert!(pokes[0].payload["error"].as_str().unwrap().contains("the box integration stopped"));
-        assert_eq!(pokes.len(), 1, "the agent stopped at the crash");
-        assert!(!kinds(&evs).contains(&EventKind::Check));
-        let stop = format!("stop {}", arenad::world::instance_id(&branch, "box"));
-        assert!(std::fs::read_to_string(&log).unwrap().contains(&stop));
-        let (_run, again) = runner::start_run(&fx.state, "t1", solo).await.unwrap();
-        let b = live::ended(&fx.state, &again).await;
-        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-    })
+    }
+    assert_crashed(&b, &evs, &pokes, &log);
+    let (_run, again) = runner::start_run(&fx.state, "t1", solo).await.unwrap();
+    let b = live::ended(&fx.state, &again).await;
+    assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
 }
 
 /// A part whose `diff` answers nonsense ends the branch `infra_error`, never passed, whatever the
@@ -499,25 +610,37 @@ fn live_part_crash_ends_branch_infra_error() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_malformed_diff_is_infra_error_not_passed() {
-    let Some(live) = Live::any("live_malformed_diff_is_infra_error_not_passed") else {
-        return;
-    };
-    run(async {
-        let root = packages::toy_world("baddiff", &["--bad-diff"], &[]);
-        let fx = toy_fx("baddiff", &root, None).await;
-        let solo = live.team(vec![live.agent("solo", "Call the poke tool once, then stop.")]);
-        let (_run, branch) = runner::start_run(&fx.state, "t1", solo).await.unwrap();
-        let b = live::ended(&fx.state, &branch).await;
-        assert_eq!(b.status, BranchStatus::InfraError);
-        let err = b.error.unwrap();
-        assert!(err.contains("diff failed") && err.contains("bad result"), "{err}");
-        let evs = fx.state.store.events(&branch).await.unwrap();
-        assert!(!kinds(&evs).contains(&EventKind::Check));
-        if let Some(first) = evs.iter().find(|e| e.kind == EventKind::ModelCall) {
-            let input = first.payload["request"]["messages"][1]["content"].as_str().unwrap();
-            assert!(input.contains("\n# Instructions\n\nBe kind to the box.\n"), "{input}");
-        }
-    })
+    run_live(
+        Live::any("live_malformed_diff_is_infra_error_not_passed"),
+        malformed_diff_is_infra_error_not_passed,
+    );
+}
+
+async fn malformed_diff_is_infra_error_not_passed(live: Live) {
+    let root = packages::toy_world("baddiff", &["--bad-diff"], &[]);
+    let fx = toy_fx("baddiff", &root, None).await;
+    let solo = live.team(vec![
+        live.agent("solo", "Call the poke tool once, then stop.")
+    ]);
+    let (_run, branch) = runner::start_run(&fx.state, "t1", solo).await.unwrap();
+    let b = live::ended(&fx.state, &branch).await;
+    assert_eq!(b.status, BranchStatus::InfraError);
+    let err = b.error.unwrap();
+    assert!(
+        err.contains("diff failed") && err.contains("bad result"),
+        "{err}"
+    );
+    let evs = fx.state.store.events(&branch).await.unwrap();
+    assert!(!kinds(&evs).contains(&EventKind::Check));
+    if let Some(first) = evs.iter().find(|e| e.kind == EventKind::ModelCall) {
+        let input = first.payload["request"]["messages"][1]["content"]
+            .as_str()
+            .unwrap();
+        assert!(
+            input.contains("\n# Instructions\n\nBe kind to the box.\n"),
+            "{input}"
+        );
+    }
 }
 
 /// A real Claude model whose output budget is one token: its answer is cut off, which is the
@@ -525,23 +648,27 @@ fn live_malformed_diff_is_infra_error_not_passed() {
 #[test]
 #[ignore = "live: runs a real model (support/live.rs)"]
 fn live_a_cut_off_answer_fails_the_branch_not_infra_error() {
-    let Some(live) = Live::api("live_a_cut_off_answer_fails_the_branch_not_infra_error") else {
-        return;
-    };
+    run_live(
+        Live::api("live_a_cut_off_answer_fails_the_branch_not_infra_error"),
+        a_cut_off_answer_fails_the_branch_not_infra_error,
+    );
+}
+
+async fn a_cut_off_answer_fails_the_branch_not_infra_error(live: Live) {
     if live.provider() != Some("anthropic") {
         eprintln!("skipped: needs ANTHROPIC_API_KEY (its output budget is set per call by arenad)");
         return;
     }
-    run(async {
-        let mut providers = arenad::app::Config::new().providers;
-        providers.anthropic_max_tokens = 1;
-        let fx = setup("cutoff", &[], "retail", Some(providers)).await;
-        let team = live.team(vec![live.agent("solo", "Write a long answer about the order.")]);
-        let (_run, branch) = runner::start_run(&fx.state, "27", team).await.unwrap();
-        let b = live::ended(&fx.state, &branch).await;
-        assert_eq!(b.status, BranchStatus::Failed);
-        assert_eq!(b.error.as_deref(), Some("model output was cut off"));
-        let evs = fx.state.store.events(&branch).await.unwrap();
-        assert!(!kinds(&evs).contains(&EventKind::Check));
-    })
+    let mut providers = arenad::app::Config::new().providers;
+    providers.anthropic_max_tokens = 1;
+    let fx = setup("cutoff", &[], "retail", Some(providers)).await;
+    let team = live.team(vec![
+        live.agent("solo", "Write a long answer about the order.")
+    ]);
+    let (_run, branch) = runner::start_run(&fx.state, "27", team).await.unwrap();
+    let b = live::ended(&fx.state, &branch).await;
+    assert_eq!(b.status, BranchStatus::Failed);
+    assert_eq!(b.error.as_deref(), Some("model output was cut off"));
+    let evs = fx.state.store.events(&branch).await.unwrap();
+    assert!(!kinds(&evs).contains(&EventKind::Check));
 }
