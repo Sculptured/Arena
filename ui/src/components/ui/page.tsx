@@ -30,7 +30,7 @@ export function Stat({ label, value, abnormal = false, title, children, classNam
   return (
     <div className={cn('flex min-w-0 flex-col', className)} title={title}>
       <span className="text-2xs font-medium tracking-wide whitespace-nowrap text-muted uppercase">{label}</span>
-      <span className={cn('truncate font-mono text-sm', abnormal && 'font-semibold text-alarm')}>{value}</span>
+      <span className={cn('font-mono text-sm break-words', abnormal && 'font-semibold text-alarm')}>{value}</span>
       {children}
     </div>
   );
