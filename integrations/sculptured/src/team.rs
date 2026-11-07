@@ -34,7 +34,13 @@ impl Seat {
 /// Makes `team` exist (made fresh when it doesn't) and (re)starts its agents: a restored server
 /// lost the agents' processes. Returns once every agent runs.
 pub async fn ensure_running(api: &Api, team: &str) -> Result<()> {
-    if !exists(api, team).await? {
+    if exists(api, team).await? {
+        // A restored runner can resume the saved team before we reach this call.
+        // Stop that generation before starting fresh proposers for re-raised changes.
+        api.send(Method::POST, &["teams", team, "stop"], json!({}))
+            .await?
+            .expect("stopping the restored team")?;
+    } else {
         create(api, team).await?;
     }
     let start = ["teams", team, "start"];
