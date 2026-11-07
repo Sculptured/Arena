@@ -6,6 +6,9 @@
   ``arenad``, ``arena-retail`` and ``arena-postgres``) on the Postgres at ``ARENA_SDK_PG_URL``
   (default ``deploy/compose.yml``'s, ``postgres://arena:arena@127.0.0.1:5544/postgres``).
 
+The arenad the tests start cleans up unreferenced saves when it starts, like any arenad, so point
+``ARENA_SDK_PG_URL`` at a Postgres server no other test run is using at the same time.
+
 Without either, the tests marked ``core`` are skipped. They drive the API directly (start and finish
 external runs, call a tool endpoint, fork, read records, export) and never pose as an agent.
 """

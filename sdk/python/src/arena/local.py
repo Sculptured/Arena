@@ -82,27 +82,17 @@ class LocalArena(Arena):
         if saves is None:
             self._tmp_saves = tempfile.mkdtemp(prefix="arena-saves-")
             saves = self._tmp_saves
-        e = dict(os.environ)
-        e.update(
-            {
-                "ARENA_PORT": str(self.port),
-                "ARENA_SAVES": os.path.abspath(saves),
-            }
-        )
-        if benchmark:
-            e["ARENA_BENCHMARK"] = benchmark
-        if packages:
-            e["ARENA_PACKAGES"] = os.pathsep.join(os.path.abspath(p) for p in packages)
-        if pg_url:
-            e["ARENA_PG_URL"] = pg_url
-        if bin_dir:
-            e["ARENA_BIN_DIR"] = os.path.abspath(bin_dir)
-        if max_db_bytes is not None:
-            e["ARENA_MAX_DB_BYTES"] = str(max_db_bytes)
-        if cors_origin:
-            e["ARENA_CORS_ORIGIN"] = cors_origin
-        if env:
-            e.update(env)
+        settings = {
+            "ARENA_PORT": str(self.port),
+            "ARENA_SAVES": os.path.abspath(saves),
+            "ARENA_BENCHMARK": benchmark,
+            "ARENA_PACKAGES": packages and os.pathsep.join(os.path.abspath(p) for p in packages),
+            "ARENA_PG_URL": pg_url,
+            "ARENA_BIN_DIR": bin_dir and os.path.abspath(bin_dir),
+            "ARENA_MAX_DB_BYTES": None if max_db_bytes is None else str(max_db_bytes),
+            "ARENA_CORS_ORIGIN": cors_origin,
+        }
+        e = {**os.environ, **{k: v for k, v in settings.items() if v}, **(env or {})}
         if log is None:
             fd, log = tempfile.mkstemp(prefix="arenad-", suffix=".log")
             os.close(fd)

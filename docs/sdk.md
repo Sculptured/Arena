@@ -104,8 +104,8 @@ branch.finish()     # freeze, score, stop the world: {"status": "passed"|"failed
 ```
 
 Plug these into any framework: an OpenAI client with `base_url=ex.gateway_url` (the gateway holds the key, which
-is set in arenad's environment), any MCP client that speaks streamable HTTP pointed at `ex.mcp_url` (arenad
-answers each request with JSON), or Claude Code: `arena.claude_code.run(ex, prompt, model="haiku")` starts the CLI on that endpoint only (no built-in
+is set in arenad's environment), an MCP client that speaks streamable HTTP pointed at `ex.mcp_url` (arenad
+answers each request with JSON; checked with Claude Code and the SDK's own client), or Claude Code: `arena.claude_code.run(ex, prompt, model="haiku")` starts the CLI on that endpoint only (no built-in
 tools), records each model call it reports and the agent's end. Agents can join at any time
 (`branch.register(...)`). See `examples/bring_your_own_agent.py`.
 
@@ -209,7 +209,7 @@ benchmark's world ([packages.md](packages.md)). Then pass the folders to `Arena.
 arenad is a library crate as well as a binary (`core/crates/arenad/src/lib.rs`): its modules (`app`, `api`,
 `runner`, `fork`, `store`, ...) can be embedded, as its own tests do (`app::router(state)` gives the whole
 service as an axum `Router`). That API is internal and changes without notice; for a stable interface use the
-HTTP API, for example with `reqwest`:
+HTTP API, for example with `reqwest` (a sketch, not compiled in this repository):
 
 ```rust
 let c = reqwest::Client::new();

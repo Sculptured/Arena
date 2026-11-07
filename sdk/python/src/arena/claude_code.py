@@ -85,68 +85,81 @@ def run(
     if not available():
         raise ClaudeCodeMissing("Claude Code (`claude`) is not on PATH; install it and sign in")
     workdir = tempfile.mkdtemp(prefix="arena-claude-")
-    cfg = os.path.join(workdir, "mcp.json")
-    with open(cfg, "w", encoding="utf-8") as f:
-        json.dump(agent.mcp_config("arena"), f)
-    env = {k: v for k, v in os.environ.items() if k not in SCRUB}
     started = time.monotonic()
-    lines: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    final: dict[str, Any] = {}
     try:
+        cfg = os.path.join(workdir, "mcp.json")
+        with open(cfg, "w", encoding="utf-8") as f:
+            json.dump(agent.mcp_config("arena"), f)
         proc = subprocess.Popen(
             command(agent, prompt, model, cfg, max_turns),
-            cwd=workdir, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, text=True,
+            cwd=workdir, env={k: v for k, v in os.environ.items() if k not in SCRUB},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
         )
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
-            lines.append(msg)
-            if msg.get("type") == "assistant" and report:
-                m = msg.get("message") or {}
-                mid = m.get("id")
-                if mid and mid not in seen and m.get("usage"):
-                    seen.add(mid)
-                    u = m["usage"]
-                    agent.report_usage(
-                        message_id=mid,
-                        model=m.get("model"),
-                        input_tokens=u.get("input_tokens"),
-                        output_tokens=u.get("output_tokens"),
-                        cache_creation_input_tokens=u.get("cache_creation_input_tokens"),
-                        cache_read_input_tokens=u.get("cache_read_input_tokens"),
-                    )
-            elif msg.get("type") == "result":
-                final = msg
-            if time.monotonic() - started > timeout:
-                proc.kill()
-                break
+        lines, final = _follow(proc, agent if report else None, started + timeout)
         proc.wait(30)
         stderr = proc.stderr.read() if proc.stderr else ""
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    seconds = time.monotonic() - started
+    res = _result(final, lines, stderr, time.monotonic() - started)
+    if end:
+        agent.end(
+            ok=res.ok, error=res.error, prompt_tokens=res.prompt_tokens,
+            completion_tokens=res.completion_tokens, cost_usd=res.cost_usd,
+            cost_source="api_equivalent_estimate", seconds=round(res.seconds, 3),
+        )
+    return res
+
+
+def _follow(proc: subprocess.Popen, agent: Optional[AgentEndpoint], deadline: float):
+    """Reads the CLI's ``stream-json`` lines until it ends (or ``deadline``), reporting each model
+    call's usage to ``agent`` once. Returns the lines and the final ``result`` line."""
+    assert proc.stdout is not None, "stdout is piped"
+    lines: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    final: dict[str, Any] = {}
+    for line in proc.stdout:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        lines.append(msg)
+        if msg.get("type") == "assistant" and agent is not None:
+            _report(agent, msg.get("message") or {}, seen)
+        elif msg.get("type") == "result":
+            final = msg
+        if time.monotonic() > deadline:
+            proc.kill()
+            break
+    return lines, final
+
+
+def _report(agent: AgentEndpoint, m: dict[str, Any], seen: set[str]) -> None:
+    """Records one assistant message's usage (once per message id)."""
+    mid, u = m.get("id"), m.get("usage")
+    if not mid or mid in seen or not u:
+        return
+    seen.add(mid)
+    agent.report_usage(
+        message_id=mid,
+        model=m.get("model"),
+        input_tokens=u.get("input_tokens"),
+        output_tokens=u.get("output_tokens"),
+        cache_creation_input_tokens=u.get("cache_creation_input_tokens"),
+        cache_read_input_tokens=u.get("cache_read_input_tokens"),
+    )
+
+
+def _result(final: dict[str, Any], lines: list, stderr: str, seconds: float) -> ClaudeResult:
     u = final.get("usage") or {}
     prompt_tokens = sum(int(u.get(k) or 0) for k in
                         ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-    completion = int(u.get("output_tokens") or 0)
     is_error = bool(final.get("is_error")) or not final
     text = final.get("result") or ""
     error = None
     if is_error:
-        error = text or (stderr.strip()[-500:] if stderr else "") or "claude ended without a result"
-    res = ClaudeResult(
+        error = text or stderr.strip()[-500:] or "claude ended without a result"
+    return ClaudeResult(
         ok=not is_error, text=text, error=error, prompt_tokens=prompt_tokens,
-        completion_tokens=completion, cost_usd=final.get("total_cost_usd"), seconds=seconds,
-        turns=int(final.get("num_turns") or 0), raw=lines,
+        completion_tokens=int(u.get("output_tokens") or 0), cost_usd=final.get("total_cost_usd"),
+        seconds=seconds, turns=int(final.get("num_turns") or 0), raw=lines,
     )
-    if end:
-        agent.end(
-            ok=res.ok, error=res.error, prompt_tokens=prompt_tokens, completion_tokens=completion,
-            cost_usd=res.cost_usd, cost_source="api_equivalent_estimate", seconds=round(seconds, 3),
-        )
-    return res

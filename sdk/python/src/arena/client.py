@@ -345,43 +345,56 @@ class Branch:
         ending when the branch ends (``self.final`` then holds ``{status, error}``). If the
         connection drops (arenad restarting), it reconnects up to ``reconnect`` times and goes on
         after the last event it gave."""
-        last, tries = 0, 0
+        seen = [0]  # the last seq given
+        tries = 0
         while True:
+            before = seen[0]
             try:
-                with self.arena._http.stream(
-                    "GET", f"/api/branches/{self.id}/stream", timeout=httpx.Timeout(None, connect=10.0)
-                ) as r:
-                    if r.status_code >= 400:
-                        r.read()
-                        raise from_status(r.status_code, r.text, "GET", "stream")
-                    for name, data in sse.parse(r.iter_lines()):
-                        if name == "event":
-                            e = Event.from_dict(data)
-                            if e.seq > last:
-                                last = e.seq
-                                tries = 0
-                                yield e
-                        elif name == "status":
-                            self.final = data
-                            return
+                yield from self._stream_once(seen)
+                if self.final is not None:
+                    return
             except httpx.TransportError:
                 pass
-            tries += 1
+            tries = 1 if seen[0] > before else tries + 1
             if tries > reconnect:
                 raise ConnectionFailed(f"lost the event stream of branch {self.id}")
             time.sleep(min(2**tries, 10))
-            # The branch may have ended while we were away.
-            try:
-                rec = self.record()
-            except ConnectionFailed:
-                continue
-            if rec.ended:
-                for e in rec.events:
-                    if e.seq > last:
-                        last = e.seq
-                        yield e
-                self.final = {"status": rec.status, "error": rec.error}
+            # The branch may have ended while the stream was down.
+            if (yield from self._ended_meanwhile(seen)):
                 return
+
+    def _stream_once(self, seen: list[int]) -> Iterator[Event]:
+        """One connection to the event stream: the events after ``seen[0]``; sets ``final`` at the
+        end."""
+        self.final = None
+        path = f"/api/branches/{self.id}/stream"
+        with self.arena._http.stream("GET", path, timeout=httpx.Timeout(None, connect=10.0)) as r:
+            if r.status_code >= 400:
+                r.read()
+                raise from_status(r.status_code, r.text, "GET", path)
+            for name, data in sse.parse(r.iter_lines()):
+                if name == "status":
+                    self.final = data
+                    return
+                if name == "event" and data["seq"] > seen[0]:
+                    seen[0] = data["seq"]
+                    yield Event.from_dict(data)
+
+    def _ended_meanwhile(self, seen: list[int]):
+        """After a dropped stream: if the branch has ended, yields the events not given yet, sets
+        ``final`` and returns True."""
+        try:
+            rec = self.record()
+        except ConnectionFailed:
+            return False
+        if not rec.ended:
+            return False
+        for e in rec.events:
+            if e.seq > seen[0]:
+                seen[0] = e.seq
+                yield e
+        self.final = {"status": rec.status, "error": rec.error}
+        return True
 
     async def astream(self) -> AsyncIterator[Event]:
         """:meth:`stream` for asyncio (no reconnect)."""

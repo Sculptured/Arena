@@ -48,50 +48,54 @@ def test_bad_requests_are_typed(arena):
         arena.branch("no-such-branch")
 
 
-def test_external_run_record_fork_compare_export(arena, cleanup, tmp_path):
-    task = arena.tasks()[0]
-    branch = arena.external_run(task, agents=["probe"], seed=7, name="sdk test")
-    cleanup.append(branch.run_id)
+@pytest.fixture(scope="module")
+def ended(arena):
+    """An external run with one agent that made one read call, finished; deleted afterwards."""
+    branch = arena.external_run(arena.tasks()[0], agents=["probe"], seed=7, name="sdk test")
     agent = branch.agents["probe"]
+    tool = _read_tool(branch, agent)
+    agent.call(tool, {})
+    agent.end(ok=True)
+    live = branch.record()
+    result = branch.finish()
+    yield {"branch": branch, "agent": agent, "tool": tool, "live": live, "result": result}
+    arena.delete_run(branch.run_id)
+
+
+def test_external_run_endpoints_and_record(arena, ended):
+    branch, agent, live = ended["branch"], ended["agent"], ended["live"]
     assert agent.mcp_url.endswith(f"/mcp/{branch.id}/probe") and "/gateway/" in agent.gateway_url
     assert agent.mcp_config()["mcpServers"]["arena"]["url"] == agent.mcp_url
-    names = {t.name for t in agent.tools}
-    assert {"handoff", "message", "inbox"} <= names
-    assert {t.name for t in agent.mcp.list_tools()} == names
-
-    tool = _read_tool(branch, agent)
-    result = agent.call(tool, {})
-    assert isinstance(result.text, str)
-    agent.end(ok=True)
-    rec = branch.record()
-    assert rec.status == "running" and rec.seed == 7 and rec.run_start["runner"] == "external"
-    calls = rec.tool_calls("probe")
-    assert [c.tool for c in calls] == [tool]
+    assert {"handoff", "message", "inbox"} <= {t.name for t in agent.tools}
+    assert live.status == "running" and live.seed == 7 and live.run_start["runner"] == "external"
+    assert [c.tool for c in live.tool_calls("probe")] == [ended["tool"]]
     assert any(r.id == branch.run_id and r.name == "sdk test" for r in arena.runs())
-
-    ended = branch.finish()
-    assert ended["status"] in ("passed", "failed")
+    assert ended["result"]["status"] in ("passed", "failed")
     check = branch.check()
     assert check is not None and check.checks
 
-    # The stream of an ended branch gives every event, then the final status.
+
+def test_stream_of_an_ended_branch(ended):
+    branch = ended["branch"]
     seen = list(branch.stream())
     assert [e.seq for e in seen] == [e.seq for e in branch.events()]
-    assert branch.final["status"] == ended["status"]
+    assert branch.final["status"] == ended["result"]["status"]
 
-    # Fork at the tool call: the world restored, the new branch live with the agent's history.
-    fork = branch.fork(calls[0].seq)
-    cleanup.append(fork.run_id)
-    assert fork.fork_info.start_seq == calls[0].seq
-    assert "probe" in fork.agents
-    assert all(e.seq < calls[0].seq for e in fork.agents["probe"].history)
+
+def test_fork_restore_plan_and_compare(arena, ended):
+    branch = ended["branch"]
+    at = branch.record().tool_calls("probe")[0].seq
+    assert branch.restore_plan(at)["parts"]
+    fork = branch.fork(at)  # same run: deleted with it
+    assert fork.fork_info.start_seq == at and "probe" in fork.agents
+    assert all(e.seq < at for e in fork.agents["probe"].history)
     assert fork.record().status == "running"
-    plan = branch.restore_plan(calls[0].seq)
-    assert plan["parts"]
     fork.finish()
-    cmp = arena.compare(branch, fork)
-    assert "first_divergent_seq" in cmp
+    assert "first_divergent_seq" in arena.compare(branch, fork)
 
+
+def test_export_dataset(ended, tmp_path):
+    branch = ended["branch"]
     out = branch.export(str(tmp_path / "ds"))
     rows = read_jsonl(os.path.join(out, "branches.jsonl"))
     events = read_jsonl(os.path.join(out, "events.jsonl"))
@@ -159,7 +163,6 @@ def test_step_env_contract(arena, cleanup):
     assert rewards["probe"] in (0.0, 1.0)
     calls = env.branch.record().tool_calls("probe")
     env2, obs2, infos2 = env.fork(calls[0].seq)
-    cleanup.append(env2.branch.run_id)
     assert env2.agents == ["probe"] and "history" in obs2["probe"]
     env2.close()
     assert env2.branch.record().status in ("passed", "failed")

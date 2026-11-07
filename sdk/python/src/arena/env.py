@@ -126,19 +126,7 @@ class ArenaParallelEnv:
         truncations, infos)``."""
         if self.branch is None or not self.agents:
             raise RuntimeError("call reset() first (or the episode has ended)")
-        results: dict[str, Any] = {}
-        ended: set[str] = set()
-        for a in list(self.agents):
-            act = actions.get(a)
-            if act is None:
-                continue
-            if act == END:
-                self._endpoints[a].end(ok=True)
-                ended.add(a)
-                continue
-            name, args = _parse_action(act)
-            r = self._endpoints[a].call(name, args)
-            results[a] = {"text": r.text, "is_error": r.is_error, "value": r.value}
+        results, ended = self._perform(actions)
         self.steps += 1
         new = self._new_events()
         live = [a for a in self.agents if a not in ended]
@@ -154,20 +142,42 @@ class ArenaParallelEnv:
             rewards[a] = float(self.shaping(self, a, actions.get(a), obs[a])) if self.shaping else 0.0
             infos[a] = {"step": self.steps, "seq": self._last_seq}
         if done:
-            if truncated:
-                for a in live:
-                    self._endpoints[a].end(ok=False, error="truncated")
-            self.branch.finish()
-            self.check = self.branch.check()
-            final = self._terminal_reward()
-            for a in self.agents:
-                rewards[a] += final
-                infos[a]["check"] = self.check
-                infos[a]["status"] = (self.branch.final or {}).get("status")
+            self._end_episode(live if truncated else [], rewards, infos)
         terminations = {a: (a in ended) or (done and not truncated) for a in self.agents}
         truncations = {a: truncated and a not in ended for a in self.agents}
         self.agents = [] if done else live
         return obs, rewards, terminations, truncations, infos
+
+    def _perform(self, actions: dict[str, Any]) -> tuple[dict[str, dict], set[str]]:
+        """Runs each live agent's action in ``possible_agents`` order: the tool results, and the
+        agents that ended."""
+        results: dict[str, dict] = {}
+        ended: set[str] = set()
+        for a in list(self.agents):
+            act = actions.get(a)
+            if act is None:
+                continue
+            if act == END:
+                self._endpoints[a].end(ok=True)
+                ended.add(a)
+                continue
+            name, args = _parse_action(act)
+            r = self._endpoints[a].call(name, args)
+            results[a] = {"text": r.text, "is_error": r.is_error, "value": r.value}
+        return results, ended
+
+    def _end_episode(self, truncated: list[str], rewards: dict, infos: dict) -> None:
+        """Ends the ``truncated`` agents, finishes and scores the branch, adds the terminal reward."""
+        assert self.branch is not None, "an episode is live"
+        for a in truncated:
+            self._endpoints[a].end(ok=False, error="truncated")
+        self.branch.finish()
+        self.check = self.branch.check()
+        final = self._terminal_reward()
+        for a in self.agents:
+            rewards[a] += final
+            infos[a]["check"] = self.check
+            infos[a]["status"] = (self.branch.final or {}).get("status")
 
     def _terminal_reward(self) -> float:
         if self.check is None:

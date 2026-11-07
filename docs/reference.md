@@ -181,6 +181,7 @@ cargo test -- --ignored live_                  # live integration tests: they st
 The SDK's integration tests start an arenad on the retail example (`ARENA_SDK_BIN_DIR`, default
 `core/target/release`, then `core/target/debug`; Postgres at `ARENA_SDK_PG_URL`, default the compose one) or use
 the running one at `ARENA_SDK_URL`, and are skipped without either. They drive the API directly and call no model.
+The arenad they start runs the startup cleanup, so give them a Postgres no other test run uses at the time.
 
 The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from
 `Sculptured-Examples/factory` next to the arena checkout (their READMEs say which folders). **That example is not
