@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { modesLine } from './components';
 import { ProviderSelect, ProviderStatusLine } from './ProviderFields';
 import {
-  agentModelLine, bestProviders, checkProviders, modelProblem, providerLine, providerOptions, resetProviders,
+  agentModelLine, bestProviders, checkProviders, modelProblem, providerLine, providerOptions, providerSummary, resetProviders,
 } from './providers';
 import { AgentFields } from './pages/Team';
 import { AgentEdit, applied, forkProblem } from './run/ForkPanel';
@@ -28,7 +28,8 @@ const CHECKED: ProviderStatus[] = HEALTH.map((s) =>
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim();
 
 /** The first element in `node`'s tree (not rendered: components stay elements) that `pred` matches. */
-function find(node: ReactNode, pred: (e: ReactElement<any>) => boolean): ReactElement<any> | null {
+type Props = { children?: ReactNode; onChange?: (v: string) => void };
+function find(node: ReactNode, pred: (e: ReactElement<Props>) => boolean): ReactElement<Props> | null {
   if (Array.isArray(node)) {
     for (const n of node) {
       const f = find(n, pred);
@@ -37,7 +38,7 @@ function find(node: ReactNode, pred: (e: ReactElement<any>) => boolean): ReactEl
     return null;
   }
   if (!node || typeof node !== 'object' || !('props' in node)) return null;
-  const e = node as ReactElement<any>;
+  const e = node as ReactElement<Props>;
   return pred(e) ? e : find(e.props.children, pred);
 }
 
@@ -100,7 +101,7 @@ describe('team editor', () => {
   it('choosing a provider sends it with its model; a CLI agent has no provider', () => {
     const patches: Partial<AgentSpec>[] = [];
     const tree = AgentFields({ agent: agent({ model: 'deepseek/x' }), index: 0, openOk: true, list: CHECKED, patch: (p) => patches.push(p) });
-    find(tree, (e) => e.type === ProviderSelect)!.props.onChange('local:ollama');
+    find(tree, (e) => e.type === ProviderSelect)!.props.onChange!('local:ollama');
     expect(patches).toEqual([{ provider: 'local:ollama', model: null }]);
 
     const cli = renderToStaticMarkup(<AgentFields agent={agent({ kind: 'claude_code', model: 'sonnet' })} index={1} openOk list={CHECKED} patch={() => {}} />);
@@ -148,7 +149,7 @@ describe('fork panel', () => {
     const html = renderToStaticMarkup(<AgentEdit {...props} />);
     expect(html).toContain('<option value="anthropic" disabled="">Anthropic (Claude) (unavailable: ANTHROPIC_API_KEY is not set)</option>');
     expect(html).toContain('<option value="open" selected="">API mode</option>');
-    find(AgentEdit(props), (e) => e.type === ProviderSelect)!.props.onChange('local:ollama');
+    find(AgentEdit(props), (e) => e.type === ProviderSelect)!.props.onChange!('local:ollama');
     expect(edits).toEqual([{ provider: 'local:ollama', model: '' }]);
     expect(renderToStaticMarkup(<AgentEdit {...props} agent={agents[1]} />)).not.toContain('Provider');
   });
@@ -190,5 +191,17 @@ describe('model and cost per provider', () => {
     expect(formatCost(null, null)).toBe('tokens only');
     expect(formatCost(0, 'local (no API charge)')).toBe('no API charge');
     expect(formatCost(0.5, 'mixed')).toBe('$0.50 (mixed)');
+  });
+});
+
+describe('status bar summary', () => {
+  it('says how many providers are ready and, when none is, the reason they share', () => {
+    expect(providerSummary([])).toBeNull();
+    expect(providerSummary(HEALTH)).toEqual({ glyph: '✓', text: '1 of 4 ready, 1 not checked' });
+    expect(providerSummary(CHECKED)).toEqual({ glyph: '✓', text: '2 of 4 ready' });
+    const keyless = HEALTH.slice(0, 3).map((s) => ({ ...s, available: false, why: `${s.id.toUpperCase()}_API_KEY is not set` }));
+    expect(providerSummary(keyless)).toEqual({ glyph: '✕', text: '0 of 3 ready: no API key set' });
+    const down = [{ ...HEALTH[3], checked: true, why: 'did not answer' }];
+    expect(providerSummary(down)).toEqual({ glyph: '✕', text: '0 of 1 ready: did not answer' });
   });
 });

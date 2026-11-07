@@ -1,69 +1,61 @@
-import { NavLink, Route, Routes } from 'react-router-dom';
-import { diskLine, modesLine, useHealth } from './components';
-import { ProviderStatusLine } from './ProviderFields';
-import { bestProviders, checkProviders, useCheckedProviders } from './providers';
-import Compare from './pages/Compare';
-import Run from './pages/Run';
-import Runs from './pages/Runs';
-import Team from './pages/Team';
+import { useCallback, useState } from 'react';
+import { Route, Routes } from 'react-router-dom';
+import CommandPalette, { usePaletteShortcut } from './app/CommandPalette';
+import StatusBar from './app/StatusBar';
+import TopBar from './app/TopBar';
+import { EmptyState } from './components/ui/state';
+import { Toaster } from './components/ui/toaster';
+import { TooltipProvider } from './components/ui/tooltip';
+import { PageBody, PageHeader } from './components/ui/page';
 import ProcessPage from './control/ProcessPage';
 import SuiteComparePage from './control/SuiteComparePage';
 import SuitePage from './control/SuitePage';
 import SuitesPage from './control/SuitesPage';
+import Compare from './pages/Compare';
+import Run from './pages/Run';
+import Runs from './pages/Runs';
+import Team from './pages/Team';
 
-function Placeholder({ title }: { title: string }) {
+function NotFound() {
   return (
     <>
-      <header className="page-head"><h1>{title}</h1></header>
-      <main className="content"><p className="muted">This page is coming next.</p></main>
+      <PageHeader title="Not found" />
+      <PageBody><EmptyState title="There is no page at this address." hint="Use the menu above, or press ⌘K to go to a run or a suite." /></PageBody>
     </>
   );
 }
 
-export default function App() {
-  const h = useHealth();
-  const checked = useCheckedProviders();
-  const statuses = bestProviders(checked.list, h?.providers);
+function AppRoutes() {
   return (
-    <div className="app">
-      <div className="topbar">
-        <span className="wordmark">Arena</span>
-        <nav className="nav">
-          <NavLink to="/" end>Runs</NavLink>
-          <NavLink to="/team">Team</NavLink>
-          <NavLink to="/suites">Suites</NavLink>
-        </nav>
-        <span className="spacer" />
-        <span
-          className={`modes${h?.disk && h.disk.bytes >= h.disk.limit_bytes ? ' disk-full' : ''}`}
-          title="Space used by saved worlds, and the limit above which new runs are refused"
-        >
-          {diskLine(h)}
-        </span>
-      </div>
-      {h && (
-        <div className="status-line">
-          <span className="modes" title="Agent CLIs found on this machine">{modesLine(h)}</span>
-          <span className="label">API mode</span>
-          <ProviderStatusLine
-            statuses={statuses}
-            loading={checked.loading}
-            error={checked.error}
-            onCheck={() => { checkProviders().catch(() => {}); }}
-          />
+    <Routes>
+      <Route path="/" element={<Runs />} />
+      <Route path="/team" element={<Team />} />
+      <Route path="/runs/:runId/:branchId" element={<Run />} />
+      <Route path="/compare/:a/:b" element={<Compare />} />
+      <Route path="/suites" element={<SuitesPage />} />
+      <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
+      <Route path="/suites/:id" element={<SuitePage />} />
+      <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+}
+
+export default function App() {
+  const [palette, setPalette] = useState(false);
+  const toggle = useCallback(() => setPalette((o) => !o), []);
+  usePaletteShortcut(toggle);
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="flex min-h-full flex-col">
+        <TopBar onPalette={() => setPalette(true)} />
+        <div className="min-w-0 flex-1">
+          <AppRoutes />
         </div>
-      )}
-      <Routes>
-        <Route path="/" element={<Runs />} />
-        <Route path="/team" element={<Team />} />
-        <Route path="/runs/:runId/:branchId" element={<Run />} />
-        <Route path="/compare/:a/:b" element={<Compare />} />
-        <Route path="/suites" element={<SuitesPage />} />
-        <Route path="/suites/compare/:a/:b" element={<SuiteComparePage />} />
-        <Route path="/suites/:id" element={<SuitePage />} />
-        <Route path="/control/:runId/:branchId" element={<ProcessPage />} />
-        <Route path="*" element={<Placeholder title="Not found" />} />
-      </Routes>
-    </div>
+        <StatusBar />
+      </div>
+      <CommandPalette open={palette} onOpenChange={setPalette} />
+      <Toaster />
+    </TooltipProvider>
   );
 }

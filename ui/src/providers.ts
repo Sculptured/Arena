@@ -74,6 +74,25 @@ export function providerLine(s: ProviderStatus): string {
   return `${GLYPH[st]} ${s.label} ${st}${why ? `: ${why}` : ''}`;
 }
 
+/** The status bar's one line about API mode: how many providers are ready, and the shared reason when none is. */
+export function providerSummary(list: ProviderStatus[]): { glyph: string; text: string } | null {
+  if (!list.length) return null;
+  const ready = list.filter((s) => providerState(s) === 'ready').length;
+  const unchecked = list.filter((s) => providerState(s) === 'not checked').length;
+  const count = `${ready} of ${list.length} ready`;
+  if (ready === list.length) return { glyph: GLYPH.ready, text: count };
+  if (ready > 0) return { glyph: GLYPH.ready, text: unchecked ? `${count}, ${unchecked} not checked` : count };
+  if (unchecked) return { glyph: GLYPH['not checked'], text: `${count}, ${unchecked} not checked` };
+  return { glyph: GLYPH.unavailable, text: `${count}: ${sharedReason(list)}` };
+}
+
+/** "no API key set" when every provider lacks its key, the one reason they share, else a pointer to the list. */
+function sharedReason(list: ProviderStatus[]): string {
+  const why = list.map((s) => s.why ?? '');
+  if (why.every((w) => /_API_KEY is not set$/.test(w))) return 'no API key set';
+  return why.every((w) => w === why[0]) && why[0] ? why[0] : 'see each provider';
+}
+
 /** An option of a provider select: unavailable ones are disabled and say why. */
 export interface ProviderOption {
   id: string;
