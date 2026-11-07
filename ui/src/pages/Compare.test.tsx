@@ -29,8 +29,8 @@ describe('compare sides', () => {
     ] };
     const html = text(renderToStaticMarkup(<Side id="abcdef0123" s={side} team={team} />));
     expect(html).toContain('Cost unknown');
-    expect(html).toContain('Triage: sonnet · Claude Code');
-    expect(html).toContain('Resolver: gpt-x · OpenAI');
+    expect(html).toContain('Triage: Claude Code · Sonnet');
+    expect(html).toContain('Resolver: OpenAI · gpt-x');
     const local = { ...side, cost_usd: 0, cost_source: 'local (no API charge)' };
     expect(text(renderToStaticMarkup(<Side id="b" s={local} />))).toContain('Cost no API charge');
   });

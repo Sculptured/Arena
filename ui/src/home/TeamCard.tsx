@@ -2,7 +2,7 @@ import { FileUp, Pencil } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import ImportDialog from '../board/ImportDialog';
-import { modelBadge } from '../board/board';
+import { agentModelLine } from '../providers';
 import TeamBoard from '../board/TeamBoard';
 import { Button } from '../components/ui/button';
 import { Panel, PanelHeader } from '../components/ui/panel';
@@ -25,7 +25,7 @@ export default function TeamCard({ team, runner, onImported }: { team: Team | nu
         <div className="relative h-80 min-h-0 flex-1 overflow-hidden rounded-b-lg">
           <TeamBoard team={team} runner={runner} selected={picked} onSelect={setPicked} className="h-full" />
           {agent && (
-            <SidePanel title={agent.name} meta={`${modelBadge(agent)}${agent.read_only ? ' · Read-only' : ''}`} onClose={() => setPicked(null)}
+            <SidePanel title={agent.name} meta={`${agentModelLine(agent)}${agent.read_only ? ' · Read-only' : ''}`} onClose={() => setPicked(null)}
               className="absolute inset-y-0 right-0 w-80 border-l shadow-pop">
               <p className="px-3 pt-2 text-2xs font-medium text-muted">Prompt</p>
               <p className="px-3 pb-3 text-xs leading-5 whitespace-pre-wrap">{agent.prompt || 'No prompt.'}</p>

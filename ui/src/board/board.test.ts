@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentSpec, Team } from '../types';
-import { CARD_H, CARD_W, jobLine, layoutBoard, modelBadge } from './board';
+import { agentModelLine } from '../providers';
+import { CARD_H, CARD_W, jobLine, layoutBoard } from './board';
 import { importTeam, workOrder } from './importTeam';
 
 const agent = (id: string, more: Partial<AgentSpec> = {}): AgentSpec => ({ id, name: id, kind: 'claude_code', model: null, prompt: '', ...more });
@@ -60,9 +61,9 @@ describe('team board layout', () => {
       .toBe('Open the deviation and hold the batch.');
     expect(jobLine({ name: 'Workbench builder', prompt: 'Workbench builder: implement it.' })).toBe('Implement it.');
     expect(jobLine({ name: 'x', prompt: 'a'.repeat(200) }, 20)).toHaveLength(20);
-    expect(modelBadge(agent('a', { model: 'haiku' }))).toBe('Claude Code · Haiku');
-    expect(modelBadge(agent('a'))).toBe('Claude Code · Sonnet');
-    expect(modelBadge(agent('a', { kind: 'codex' }))).toBe('Codex · Default model');
+    expect(agentModelLine(agent('a', { model: 'haiku' }))).toBe('Claude Code · Haiku');
+    expect(agentModelLine(agent('a'))).toBe('Claude Code · Sonnet');
+    expect(agentModelLine(agent('a', { kind: 'codex' }))).toBe('Codex · Default model');
   });
 });
 

@@ -3,7 +3,8 @@ import { useMemo } from 'react';
 import { Tag } from '../components/ui/status';
 import { cn } from '@/lib/cn';
 import type { AgentSpec, Runner, Team } from '../types';
-import { type BoardGroup, CARD_H, CARD_W, jobLine, layoutBoard, modelBadge } from './board';
+import { agentModelLine } from '../providers';
+import { type BoardGroup, CARD_H, CARD_W, jobLine, layoutBoard } from './board';
 
 type CardData = { agent: AgentSpec; decides: string[]; selected: boolean };
 type ZoneData = { group: BoardGroup };
@@ -21,7 +22,7 @@ function AgentCard({ data }: NodeProps<CardNode>) {
       <span className="truncate text-sm font-medium">{a.name}</span>
       <span className="line-clamp-2 text-xs leading-4 text-muted">{jobLine(a) || 'No prompt yet.'}</span>
       <span className="mt-auto flex min-w-0 flex-wrap gap-1 overflow-hidden" style={{ maxHeight: 18 }}>
-        <Tag>{modelBadge(a)}</Tag>
+        <Tag>{agentModelLine(a)}</Tag>
         {a.read_only && <Tag>Read-only</Tag>}
         {decides.map((d) => <Tag key={d} title="A decision this agent owns">◆ {d}</Tag>)}
       </span>

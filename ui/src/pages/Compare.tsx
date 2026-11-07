@@ -47,7 +47,7 @@ export function Side({ id, s, team, label = '' }: { id: string; s: CompareSide; 
         {row('Seconds', <span className="font-mono">{s.seconds != null ? s.seconds.toFixed(1) : '–'}</span>)}
         {row('Tokens', <span className="font-mono">{s.tokens?.toLocaleString() ?? '–'}</span>)}
         {row('Cost', formatCost(s.cost_usd, s.cost_source, unknown))}
-        {team && row('Agents', <ul className="flex flex-col gap-0.5 text-xs">{team.agents.map((a) => <li key={a.id}>{a.name}: <span className="font-mono text-2xs text-muted">{agentModelLine(a)}</span></li>)}</ul>)}
+        {team && row('Agents', <ul className="flex flex-col gap-0.5 text-xs">{team.agents.map((a) => <li key={a.id}>{a.name}: <span className="text-2xs text-muted">{agentModelLine(a)}</span></li>)}</ul>)}
       </dl>
     </Panel>
   );

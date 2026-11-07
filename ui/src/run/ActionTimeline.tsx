@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { cn } from '@/lib/cn';
-import { modelBadge } from '../board/board';
+import { agentModelLine } from '../providers';
 import type { Team } from '../types';
 import type { Pause } from './flow';
 import { LANE_H, type Layout, type Placed, type Shape, layoutTimeline, shapeOf, shortLabel } from './timelineLayout';
@@ -100,7 +100,7 @@ function LaneLabels({ lanes, team, width }: { lanes: LaneRow[]; team: Team; widt
       <div className="border-b border-line px-2 text-2xs leading-[21px] font-medium text-muted" style={{ height: RULER_H }}>Agent</div>
       {lanes.map((l) => {
         const agent = team.agents.find((a) => a.id === l.id);
-        const model = agent ? modelBadge(agent) : l.id === WORLD_LANE ? 'Links and world events' : l.id === CHECK_LANE ? 'Scoring' : '';
+        const model = agent ? agentModelLine(agent) : l.id === WORLD_LANE ? 'Links and world events' : l.id === CHECK_LANE ? 'Scoring' : '';
         return (
           <div key={l.id} className="flex flex-col justify-center border-b border-line/60 px-2 last:border-b-0" style={{ height: LANE_H }} title={model ? `${l.id} · ${model}` : l.id}>
             <span className="truncate text-xs font-medium">{agent?.name ?? l.name}</span>

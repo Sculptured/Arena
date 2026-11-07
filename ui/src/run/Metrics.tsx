@@ -1,3 +1,4 @@
+import { agentModelLine } from '../providers';
 import { Table, Td, Th, Tr } from '../components/ui/table';
 import type { Cost, Metrics, Overhead } from '../types';
 
@@ -56,7 +57,7 @@ function AgentsTable({ m }: { m: Metrics }) {
         {m.agents.map((a, i) => (
           <Tr key={`${a.agent}-${i}`}>
             <Td className="font-mono">{a.agent}</Td>
-            <Td className="font-mono">{a.model ?? '–'}{a.provider ? ` · ${a.provider}` : ''}</Td>
+            <Td>{a.kind ? agentModelLine({ kind: a.kind, model: a.model, provider: a.provider }) : a.model ?? '–'}</Td>
             <Td className="text-right font-mono">{a.tokens}{a.prompt_tokens != null ? ` (${a.prompt_tokens} / ${a.completion_tokens ?? 0})` : ''}</Td>
             <Td title={a.cost.source ?? ''}>{costText(a.cost)}</Td>
           </Tr>

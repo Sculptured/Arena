@@ -2,7 +2,6 @@
 // groups, with "hands work to" arrows. A team from Sculptured keeps its own places; any other is
 // laid out from how it runs (in order: left to right in rows, with an arrow to the next; at once:
 // one row). Each card says, in a line, what the agent does and what it runs on.
-import { MODE_LABEL, agentModelLine, providerName, providerOf } from '../providers';
 import type { AgentSpec, Runner, Team } from '../types';
 
 export const CARD_W = 216;
@@ -49,21 +48,6 @@ export interface BoardLayout {
 }
 
 const capital = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-
-/** "sonnet" → "Sonnet"; a full model id stays as it is. */
-export const modelWord = (m: string) => (/^[a-z]+$/.test(m) ? capital(m) : m);
-
-/** The model an agent runs on, in words: "Sonnet", "Default model", "deepseek/… (OpenRouter)". */
-export function modelOf(a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>): string {
-  const m = a.model?.trim();
-  if (a.kind === 'open') return `${m || 'Default model'} (${providerName(providerOf(a))})`;
-  // arenad starts Claude Code with Sonnet when the team names no model.
-  if (!m) return a.kind === 'claude_code' ? 'Sonnet' : 'Default model';
-  return modelWord(m);
-}
-
-/** "Claude Code · Sonnet", "llama3.3 · ollama (local)": where an agent runs and on which model. */
-export const modelBadge = (a: Pick<AgentSpec, 'kind' | 'model' | 'provider'>) => (a.kind === 'open' ? agentModelLine(a) : `${MODE_LABEL[a.kind]} · ${modelOf(a)}`);
 
 /** What an agent does, in one line: its prompt's first sentence that isn't "You are …", without a leading "Name:". */
 export function jobLine(a: Pick<AgentSpec, 'name' | 'prompt'>, max = 96): string {

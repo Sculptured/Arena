@@ -15,8 +15,8 @@ const team: Team = { id: 't', name: 't', agents: [
 describe('action timeline', () => {
   it('each lane shows its agent, model and provider', () => {
     const html = renderToStaticMarkup(<ActionTimeline lanes={[{ id: 'resolver', name: 'resolver', marks: [] }]} team={team} span={null} selected={null} onSelect={() => {}} models onModels={() => {}} />);
-    expect(text(html)).toContain('Resolver llama3.3 · ollama (local)');
-    expect(html).toContain('title="resolver · llama3.3 · ollama (local)"');
+    expect(text(html)).toContain('Resolver ollama (local) · llama3.3');
+    expect(html).toContain('title="resolver · ollama (local) · llama3.3"');
   });
   it('labels marks by system kind and read/write, and says when an action was refused', () => {
     const lanes = buildLanes(events, fixtureTeam);
