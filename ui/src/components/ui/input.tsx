@@ -24,7 +24,7 @@ export function Checkbox({ className, ...props }: Omit<ComponentProps<'input'>, 
 export function Field({ label, hint, className, children }: { label: ReactNode; hint?: ReactNode; className?: string; children: ReactNode }) {
   return (
     <label className={cn('flex min-w-0 flex-col gap-1', className)}>
-      <span className="text-2xs font-medium tracking-wide text-muted uppercase">{label}</span>
+      <span className="text-2xs font-medium text-muted">{label}</span>
       {children}
       {hint && <span className="text-xs text-muted">{hint}</span>}
     </label>

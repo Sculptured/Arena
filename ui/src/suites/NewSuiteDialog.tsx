@@ -14,7 +14,7 @@ export const RUNNERS: Record<Runner, string> = { chain: 'one after another', con
 function Scenarios({ tasks, picked, toggle, busy }: { tasks: TaskSummary[] | null; picked: string[]; toggle: (id: string) => void; busy: boolean }) {
   return (
     <fieldset className="flex flex-col gap-1">
-      <legend className="mb-1 text-2xs font-medium tracking-wide text-muted uppercase">Scenarios {picked.length ? `(${picked.length} picked)` : '(all, unless you pick some)'}</legend>
+      <legend className="mb-1 text-2xs font-medium text-muted">Scenarios {picked.length ? `(${picked.length} picked)` : '(all, unless you pick some)'}</legend>
       {!tasks && <span className="text-xs text-muted">Loading scenarios…</span>}
       <div className="max-h-56 overflow-auto rounded-md border border-line bg-raised">
         {tasks?.map((t) => (

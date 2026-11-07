@@ -70,7 +70,7 @@ function AgentsTable({ m }: { m: Metrics }) {
 export default function MetricsPanel({ m }: { m: Metrics }) {
   return (
     <div className="flex flex-col gap-3 p-3">
-      <p className="text-sm"><span className="text-2xs font-medium tracking-wide text-muted uppercase">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
+      <p className="text-sm"><span className="text-2xs font-medium text-muted">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div className="min-w-0 rounded-md border border-line"><OverheadTable lines={overheadLines(m.overhead_ms)} /></div>
         <div className="min-w-0 rounded-md border border-line"><AgentsTable m={m} /></div>

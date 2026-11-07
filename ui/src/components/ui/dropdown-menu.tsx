@@ -21,5 +21,5 @@ export function DropdownMenuItem({ className, ...props }: ComponentProps<typeof 
 }
 
 export function DropdownMenuLabel({ className, ...props }: ComponentProps<typeof Menu.Label>) {
-  return <Menu.Label className={cn('px-2 py-1 text-2xs font-medium tracking-wide text-muted uppercase', className)} {...props} />;
+  return <Menu.Label className={cn('px-2 py-1 text-2xs font-medium text-muted', className)} {...props} />;
 }

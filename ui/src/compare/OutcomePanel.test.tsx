@@ -42,6 +42,6 @@ describe('scenario builder', () => {
 describe('twin tile', () => {
   it('carries a glyph and a word, and what changed', () => {
     const html = text(renderToStaticMarkup(<TwinTile item={{ id: 'CVX-2611', label: 'CVX-2611', status: 'on hold', abnormal: true, qty: 3600, unit: 'syr' }} change="quarantined → on hold" />));
-    expect(html).toContain('CVX-2611 ■ on hold 3,600 syr ▸ quarantined → on hold');
+    expect(html).toContain('CVX-2611 ■ On hold 3,600 syr ▸ quarantined → on hold');
   });
 });

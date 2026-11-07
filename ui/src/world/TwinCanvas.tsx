@@ -12,7 +12,7 @@ function ZoneHead({ area, className }: { area: TwinArea; className?: string }) {
   return (
     <div className={cn('flex h-[30px] items-center gap-1.5 px-2', className)}>
       <ZoneGlyph kind={area.kind} />
-      <span className="truncate text-2xs font-semibold tracking-wide text-muted uppercase">{area.label}</span>
+      <span className="truncate text-2xs font-semibold text-muted">{area.label}</span>
       <span className="font-mono text-2xs text-faint">{area.items.length}</span>
       {bad > 0 && <span className="ml-auto font-mono text-2xs font-semibold text-alarm">⚠ {bad}</span>}
     </div>

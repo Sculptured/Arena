@@ -9,9 +9,9 @@ import type { Rewind } from './page';
 import type { ItemChange } from './twin';
 
 const MARK: Record<TrackMark['kind'], { glyph: string; word: string; cls: string }> = {
-  disruption: { glyph: '▼', word: 'disruption', cls: 'text-warn' },
-  refusal: { glyph: '▲', word: 'refused', cls: 'text-alarm' },
-  fork: { glyph: '┃', word: 'fork', cls: 'text-muted' },
+  disruption: { glyph: '▼', word: 'Disruption', cls: 'text-warn' },
+  refusal: { glyph: '▲', word: 'Refused', cls: 'text-alarm' },
+  fork: { glyph: '┃', word: 'Fork', cls: 'text-muted' },
 };
 
 const pct = (seq: number, t: Track) => `${trackAt(seq, t) * 100}%`;

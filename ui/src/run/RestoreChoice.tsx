@@ -63,7 +63,7 @@ export function RestoreChoice({ mode, onMode, plan }: { mode: RestoreMode; onMod
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-3 text-sm" role="radiogroup" aria-label="Restore">
-        <span className="text-2xs font-medium tracking-wide text-muted uppercase">Restore</span>
+        <span className="text-2xs font-medium text-muted">Restore</span>
         {MODES.map((m) => (
           <label key={m.id} className="flex items-center gap-1.5" title={m.hint}>
             <input type="radio" name="restore" value={m.id} checked={mode === m.id} onChange={() => onMode(m.id)} className="accent-[var(--accent)]" />

@@ -71,7 +71,7 @@ describe('twin views', () => {
     expect(statusGlyph('filling', false)).toBe('◐');
     expect(statusGlyph('weird', true)).toBe('⚠');
     expect(statusGlyph('weird', false)).toBe('●');
-    expect(statusMark({ status: 'no capacity', abnormal: true })).toEqual({ glyph: '⚠', word: 'no capacity', abnormal: true });
+    expect(statusMark({ status: 'no capacity', abnormal: true })).toEqual({ glyph: '⚠', word: 'No capacity', abnormal: true });
   });
 });
 
