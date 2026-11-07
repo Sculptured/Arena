@@ -168,7 +168,7 @@ delete the run. The Rust build directory `core/target` also grows; `cd core && c
 cargo test                                     # at the repository root: kit, integrations, benchmarks (some need the Postgres)
 cargo test -- --ignored live_                  # live integration tests: they start Docker containers or real servers
 (cd integrations/ridgeline-hub && uv run --with pytest pytest -q)    # likewise integrations/isaac-sim and kits/python
-(cd core && cargo test -- --ignored live_)     # live CLI tests: they call real Claude Code and Codex and cost money
+(cd core && cargo test -- --ignored live_ --test-threads 1)   # live arenad tests: real models (see below); they cost money
 (cd ui && npx vitest run && npm run build)
 ```
 
@@ -177,8 +177,19 @@ The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the 
 public yet**: without it every test of those two packages is skipped, and the packages can't start. The Sculptured
 program that `integrations/sculptured` runs is not published yet either; its live test is skipped without it.
 
-Tests never call a real model unless they are `live_`. Never start arenad while tests run: the tests make
-databases that arenad's startup cleanup would drop.
+Tests never call a real model unless they are `live_`, and no test uses a fake model server or a scripted
+agent: everything an agent does in a test is done by a real model. arenad's `live_` tests
+(`core/crates/arenad/tests/support/live.rs`) run on Claude Code (`claude`, signed in) with `ARENA_LIVE_MODEL`
+(default `haiku`), or on arenad's own agent loop when a provider key is set (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ARENA_LOCAL_MODELS` with `ARENA_LIVE_MODEL`); `ARENA_LIVE_AGENT=claude`
+or `=api` picks one. A test that needs arenad's own loop (its model calls recorded, a fork resuming
+mid-conversation, a provider's request and cost) skips without a key, and every live test prints `skipped: …` and
+passes when no model is available. Models vary from run to run, so these tests check what Arena records and
+enforces (every step and its fields, gates, checks, restores), never one path through a task; where a model did not
+make the call a check needs, the test prints `note: …`. What the fakes used to cover that a real model can't be
+made to do (arguments cut off, a refusal, an overloaded provider, a model list over the bound) is tested on the
+functions that handle it. Never start arenad while tests run: the tests make databases that arenad's startup
+cleanup would drop.
 
 CI (`.github/workflows/ci.yml`) runs the format, Clippy and test checks of both Cargo workspaces, the Python
 kit's tests, an import check of the two Python integrations, and the UI's tests and build, but no `live_`

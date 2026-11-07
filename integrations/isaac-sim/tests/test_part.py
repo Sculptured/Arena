@@ -97,8 +97,9 @@ def test_advance_split_does_not_matter():
     assert docs(one, "a") == docs(many, "b")
 
 
-def scripted(part, instance):
-    """Tool calls and advances on the arena clock; returns every result and event, in order."""
+def same_inputs(part, instance):
+    """The same tool calls and advances on the arena clock (the part's inputs, no agent); every
+    result and event, in order."""
     out = [part.call_tool(instance, "set_line_status", {"line": "LINE-B", "status": "running", "rate": 1.2}, 2_000),
            part.advance(instance, 4_000),
            part.call_tool(instance, "dispatch_technician",
@@ -111,13 +112,13 @@ def scripted(part, instance):
 def test_replay_equals():
     a = started("a")
     b = started("b", part=a)  # two instances in one process, as arenad runs them
-    assert scripted(a, "a") == scripted(a, "b")
+    assert same_inputs(a, "a") == same_inputs(a, "b")
     assert docs(a, "a") == docs(a, "b")
     assert docs(a, "a")["technician/T-1"]["machine"] == "PR-C1"
     assert docs(a, "a")["line/LINE-B"]["boost"] == 1.2
     assert a.diff({"instance": "a"}, {"instance": "b"}) == {"differing": []} and b is a
     other = started("c", seed=11)
-    assert scripted(other, "c") != scripted(a, "a")  # floor noise follows the seed
+    assert same_inputs(other, "c") != same_inputs(a, "a")  # floor noise follows the seed
 
 
 def test_approximate_restore_continues(saves_root):

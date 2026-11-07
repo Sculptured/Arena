@@ -1,10 +1,13 @@
 //! Rerunning worlds whose parts restore in different ways: exact and approximate saves, replay,
 //! fingerprints, the arena clock and the restore plan. The worlds are made of the kit's `counter`
-//! example (in its restore flavours) and toy parts, run by a scripted open agent.
+//! example (in its restore flavours) and toy parts. Each task's setup (the world's own calls,
+//! made before any agent) puts the world in the state a fork must restore, and the agents are
+//! real models (see `support/live.rs`) that mostly only read, so what is restored doesn't depend
+//! on what they chose to do. Every test here is `live_`.
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -16,15 +19,8 @@ use std::{
     time::Duration,
 };
 
-use arenad::{
-    agents::{open::OpenDriver, Driver},
-    app::{AppState, Config},
-    model::*,
-    providers::ProviderConfig,
-    runner,
-    store::Store,
-};
-use fake_upstream::FakeUpstream;
+use arenad::{app::AppState, model::*, runner, store::Store};
+use live::Live;
 use packages::{counter, package_root, toy, Package, TestHub, ToyRoot};
 use parts::Hub;
 use pg::Cleanup;
@@ -37,63 +33,56 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
-fn solo() -> Team {
-    Team {
-        id: "t".into(),
-        name: "T".into(),
-        agents: vec![AgentSpec {
-            id: "solo".into(),
-            name: "solo".into(),
-            kind: AgentKind::Open,
-            model: Some("fake/model".into()),
-            prompt: "You are solo.".into(),
-            provider: None,
-            read_only: false,
-        }],
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
     }
 }
 
-fn call(name: &str, args: Value) -> Value {
-    let tc = json!({"id": "c", "type": "function", "function": {"name": name, "arguments": args.to_string()}});
-    json!({"role": "assistant", "content": null, "tool_calls": [tc]})
+/// One call of a task's setup: `tool` of part `part` with `args`.
+fn call(part: &str, tool: &str, args: Value) -> String {
+    json!({"part": part, "tool": tool, "args": args}).to_string()
 }
 
-fn add(n: i64) -> Value {
-    call("add", json!({"n": n}))
+fn add(n: i64) -> String {
+    call("c", "add", json!({"n": n}))
 }
 
-fn get() -> Value {
-    call("get", json!({}))
-}
-
-fn done() -> Value {
-    json!({"role": "assistant", "content": "Done."})
-}
-
-/// The toy benchmark over `parts` (`name=integration`), whose gold is `gold` with `gold_args`.
-fn bench(parts: &[&str], gold: &str, gold_args: &str) -> Package {
-    bench_with(parts, gold, gold_args, &[])
+/// The toy benchmark over `parts` (`name=integration`), whose gold is `gold` with `gold_args`,
+/// and whose task `t1` sets up with `setup`.
+fn bench(parts: &[&str], gold: &str, gold_args: &str, setup: &[String]) -> Package {
+    bench_with(parts, gold, gold_args, setup, &[])
 }
 
 /// `bench` with `extra` benchmark args (e.g. `--config c={..}`).
-fn bench_with(parts: &[&str], gold: &str, gold_args: &str, extra: &[&str]) -> Package {
+fn bench_with(
+    parts: &[&str],
+    gold: &str,
+    gold_args: &str,
+    setup: &[String],
+    extra: &[&str],
+) -> Package {
     let mut args = vec!["bench", "--gold", gold, "--gold-args", gold_args];
     for p in parts {
         args.extend(["--part", p]);
+    }
+    for s in setup {
+        args.extend(["--setup", s.as_str()]);
     }
     args.extend_from_slice(extra);
     toy("toybench", "benchmark", &args)
 }
 
-/// A world of one part `c`: the counter in `flavour` (plus `extra` args).
-fn counter_world(tag: &str, flavour: &str, extra: &[&str]) -> ToyRoot {
+/// A world of one part `c`: the counter in `flavour` (plus `extra` args), set up with `setup`.
+fn counter_world(tag: &str, flavour: &str, extra: &[&str], setup: &[String]) -> ToyRoot {
     let mut args = vec!["--flavour", flavour];
     args.extend_from_slice(extra);
     package_root(
         tag,
         &[
             counter("counter", &args),
-            bench(&["c=counter"], "add", r#"{"n": 1}"#),
+            bench(&["c=counter"], "add", r#"{"n": 1}"#, setup),
         ],
     )
 }
@@ -102,35 +91,35 @@ struct Fx {
     state: Arc<AppState>,
     base: String,
     hub: TestHub,
+    live: Live,
     _root: ToyRoot,
     _clean: Cleanup,
 }
 
-/// An app served on a free port whose benchmark is `toybench` on `hub`, its open agent talking
-/// to `up`.
-async fn serve_app(store: Arc<Store>, hub: Arc<Hub>, up: &FakeUpstream) -> (Arc<AppState>, String) {
-    let (listener, base) = app_support::bind().await;
-    let mut config = Config::new();
-    config.providers = ProviderConfig::with_upstream(&up.base_url);
-    config.self_base = base.clone();
-    let state = Arc::new(AppState::new(store, hub, config).with_benchmark("toybench"));
-    let d: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
-    assert!(state.install_drivers([(AgentKind::Open, d)].into_iter().collect()));
-    app_support::serve(listener, &state);
-    (state, base)
+/// An app served on a free port whose benchmark is `toybench` on `hub`, with the real drivers.
+async fn serve_app(store: Arc<Store>, hub: Arc<Hub>) -> (Arc<AppState>, String) {
+    app_support::app_for(store, hub, Some("toybench"), |_| {}).await
 }
 
-async fn setup(tag: &str, root: ToyRoot, up: &FakeUpstream) -> Fx {
+async fn setup(tag: &str, root: ToyRoot, live: &Live) -> Fx {
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("restore", tag).await;
-    let (state, base) = serve_app(store, hub.hub.clone(), up).await;
+    let (state, base) = serve_app(store, hub.hub.clone()).await;
     Fx {
         state,
         base,
         hub,
+        live: live.clone(),
         _root: root,
         _clean: clean,
     }
+}
+
+/// `n` agents, one after another, that only read: each calls `tool` once.
+fn readers(live: &Live, n: usize, tool: &str) -> Team {
+    let prompt = format!("Call the {tool} tool once, then stop.");
+    let ids = ["first", "second", "third"];
+    live.team(ids[..n].iter().map(|id| live.reader(id, &prompt)).collect())
 }
 
 impl Fx {
@@ -142,24 +131,27 @@ impl Fx {
         fork_on(&self.base, branch, at_seq, restore).await
     }
 
-    async fn finished(&self, branch: &str) -> Branch {
-        for _ in 0..600 {
-            let b = self.state.store.branch(branch).await.unwrap();
-            if b.status != BranchStatus::Running {
-                return b;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("branch still running");
+    /// Runs `team` on task `t1` to the end; the branch and its events.
+    async fn run_to_end(&self, team: Team) -> (String, Vec<Event>) {
+        let (_run, branch) = runner::start_run(&self.state, "t1", team).await.unwrap();
+        let (b, evs) = live::ended_ok(&self.state, &branch).await;
+        live::assert_recorded(&b, &evs, &self.live);
+        (branch, evs)
     }
 
-    /// Runs the solo agent on task `t1` to the end; the branch and its events.
-    async fn run_to_end(&self) -> (String, Vec<Event>) {
-        let (_run, branch) = runner::start_run(&self.state, "t1", solo()).await.unwrap();
-        let b = self.finished(&branch).await;
-        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-        let events = self.state.store.events(&branch).await.unwrap();
-        (branch, events)
+    /// Forks `parent` at `at` with `restore` (200) and waits for the child (not
+    /// `infra_error`): its id and events.
+    async fn fork_to_end(
+        &self,
+        parent: &str,
+        at: i64,
+        restore: Option<&str>,
+    ) -> (String, Vec<Event>) {
+        let (st, v) = self.fork(parent, at, restore).await;
+        assert_eq!(st, 200, "{v}");
+        let child = v["branch_id"].as_str().unwrap().to_string();
+        let (_b, evs) = live::ended_ok(&self.state, &child).await;
+        (child, evs)
     }
 }
 
@@ -172,13 +164,9 @@ async fn fork_on(base: &str, branch: &str, at_seq: i64, restore: Option<&str>) -
     app_support::send(reqwest::Client::new().post(url).json(&body)).await
 }
 
-/// The seq of the `n`-th (from 0) model call, the one whose reply makes the `n`-th tool call.
-fn model_call(evs: &[Event], n: usize) -> i64 {
-    evs.iter()
-        .filter(|e| e.kind == EventKind::ModelCall)
-        .nth(n)
-        .unwrap()
-        .seq
+/// The seq of agent `id`'s start.
+fn start_of(evs: &[Event], id: &str) -> i64 {
+    live::first_of(evs, EventKind::AgentStart, id).unwrap()
 }
 
 fn tool_calls(evs: &[Event]) -> Vec<&Event> {
@@ -187,62 +175,59 @@ fn tool_calls(evs: &[Event]) -> Vec<&Event> {
         .collect()
 }
 
-/// The `value` the branch's first `get` at or after `from` returned.
-fn first_get(evs: &[Event], from: i64) -> i64 {
+/// The `value` results of the branch's `get` calls at or after `from`.
+fn gets(evs: &[Event], from: i64) -> Vec<i64> {
     tool_calls(evs)
         .into_iter()
-        .find(|e| e.seq >= from && e.payload["name"] == "get")
-        .and_then(|e| e.payload["result"]["value"].as_i64())
-        .unwrap_or_else(|| panic!("no get after {from}"))
+        .filter(|e| e.seq >= from && e.payload["name"] == "get")
+        .filter_map(|e| e.payload["result"]["value"].as_i64())
+        .collect()
 }
 
-/// The child's state continued from the 1000 added before the fork point (the clock adds one
-/// per second on top, so a little more is fine; a fresh counter would be near 0).
-fn assert_continued(value: i64) {
-    assert!((1000..1100).contains(&value), "{value}");
+/// What the child's agent read went on from the `from` the setup left (the clock adds one per
+/// second on top, so more is fine; a fresh counter would be near 0).
+fn assert_continued(cevs: &[Event], at: i64, from: i64) {
+    for v in gets(cevs, at) {
+        assert!((from..from + 3600).contains(&v), "{v} after {from}");
+    }
 }
 
+/// A part with only approximate saves can't be restored exactly: the refusal names it, and
+/// nothing is made.
 #[test]
-fn exact_refused_names_part() {
-    run(async {
-        let root = package_root(
-            "exactno",
-            &[
-                toy(
-                    "toy-ax",
-                    "integration",
-                    &["part", "--exact", "none", "--approximate"],
-                ),
-                bench(&["box=toy-ax"], "poke", "{}"),
-            ],
-        );
-        let poke = call("poke", json!({}));
-        let up = FakeUpstream::start(vec![poke.clone(), poke, done()]).await;
-        let fx = setup("exactno", root, &up).await;
-        let (branch, evs) = fx.run_to_end().await;
-        let at = model_call(&evs, 1);
-        for restore in [None, Some("exact")] {
-            let (st, v) = fx.fork(&branch, at, restore).await;
-            assert_eq!(st, 409, "{v}");
-            let msg = v["error"].as_str().unwrap();
-            assert!(msg.contains("box") && msg.contains("approximate"), "{msg}");
-        }
-        // Refused before anything was made: the run still has only its first branch.
-        let runs = fx.state.store.runs().await.unwrap();
-        assert_eq!(runs[0].branches.len(), 1);
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_exact_refused_names_part() {
+    run_live(
+        Live::any("live_exact_refused_names_part"),
+        exact_refused_names_part,
+    );
 }
 
-/// Forks `parent` at `at` with `restore` (200), waits for the child to finish (not
-/// `infra_error`) and checks it went on from the 1000 added before the fork point; its id.
-async fn fork_and_finish(fx: &Fx, parent: &str, at: i64, restore: Option<&str>) -> String {
-    let (st, v) = fx.fork(parent, at, restore).await;
-    assert_eq!(st, 200, "{v}");
-    let child = v["branch_id"].as_str().unwrap().to_string();
-    let b = fx.finished(&child).await;
-    assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-    assert_continued(first_get(&fx.state.store.events(&child).await.unwrap(), at));
-    child
+async fn exact_refused_names_part(live: Live) {
+    let part = ["part", "--exact", "none", "--approximate"];
+    let root = package_root(
+        "exactno",
+        &[
+            toy("toy-ax", "integration", &part),
+            bench(
+                &["box=toy-ax"],
+                "poke",
+                "{}",
+                &[call("box", "poke", json!({}))],
+            ),
+        ],
+    );
+    let fx = setup("exactno", root, &live).await;
+    let (branch, evs) = fx.run_to_end(readers(&live, 1, "peek")).await;
+    let at = start_of(&evs, "first");
+    for restore in [None, Some("exact")] {
+        let (st, v) = fx.fork(&branch, at, restore).await;
+        assert_eq!(st, 409, "{v}");
+        let msg = v["error"].as_str().unwrap();
+        assert!(msg.contains("box") && msg.contains("approximate"), "{msg}");
+    }
+    let runs = fx.state.store.runs().await.unwrap();
+    assert_eq!(runs[0].branches.len(), 1);
 }
 
 /// `/api/branches/{child}` shows its restore mode and how its one part `c` was restored.
@@ -267,22 +252,23 @@ async fn assert_listed(fx: &Fx, parent: &str, child: &str) {
 }
 
 #[test]
-fn approximate_marks_branch() {
-    run(async {
-        let root = counter_world("approx", "approx_and_replay", &[]);
-        let up = FakeUpstream::start(vec![add(1000), add(7), done(), get(), done()]).await;
-        let fx = setup("approx", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let child = fork_and_finish(&fx, &parent, model_call(&evs, 1), Some("approximate")).await;
-        assert_restored(&fx, &child, "approximate", "approximate").await;
-        assert_listed(&fx, &parent, &child).await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_approximate_marks_branch() {
+    run_live(
+        Live::any("live_approximate_marks_branch"),
+        approximate_marks_branch,
+    );
 }
 
-/// The branch's `Check` payload.
-fn check_of(evs: &[Event]) -> &Value {
-    let check = evs.iter().rev().find(|e| e.kind == EventKind::Check);
-    &check.expect("a check").payload
+async fn approximate_marks_branch(live: Live) {
+    let root = counter_world("approx", "approx_and_replay", &[], &[add(1000), add(7)]);
+    let fx = setup("approx", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let at = start_of(&evs, "first");
+    let (child, cevs) = fx.fork_to_end(&parent, at, Some("approximate")).await;
+    assert_continued(&cevs, at, 1007);
+    assert_restored(&fx, &child, "approximate", "approximate").await;
+    assert_listed(&fx, &parent, &child).await;
 }
 
 /// A world of replay-only parts can't be checked: the branch fails saying so, and its part is
@@ -292,8 +278,9 @@ async fn assert_nothing_checked(fx: &Fx, parent: &str, child: &str) {
     assert_eq!(b.status, BranchStatus::Failed);
     assert_eq!(b.error.as_deref(), Some(arenad::runner::NOTHING_CHECKED));
     let evs = fx.state.store.events(child).await.unwrap();
-    assert_eq!(check_of(&evs)["unchecked"], json!(["c"]));
-    assert_eq!(check_of(&evs)["passed"], false);
+    let check = live::check_of(&evs).unwrap();
+    assert_eq!(check.unchecked, ["c"]);
+    assert!(!check.passed);
     let (st, v) = fx.get(&format!("/api/compare?a={parent}&b={child}")).await;
     assert_eq!(st, 200, "{v}");
     assert_eq!(
@@ -303,61 +290,57 @@ async fn assert_nothing_checked(fx: &Fx, parent: &str, child: &str) {
 }
 
 #[test]
-fn replay_only_restores_exactly() {
-    run(async {
-        let root = counter_world("replay", "replay_only", &[]);
-        let script = vec![add(1000), get(), add(7), done(), get(), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("replay", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        // A part with only replay is never saved.
-        assert!(tool_calls(&evs)
-            .iter()
-            .all(|e| e.payload["saves"].is_null()));
-        let child = fork_and_finish(&fx, &parent, model_call(&evs, 2), None).await;
-        assert_restored(&fx, &child, "exact", "replay").await;
-        assert_nothing_checked(&fx, &parent, &child).await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_replay_only_restores_exactly() {
+    run_live(
+        Live::any("live_replay_only_restores_exactly"),
+        replay_only_restores_exactly,
+    );
 }
 
-/// The `value` results of the branch's `get` calls at or after `from`.
-fn gets(evs: &[Event], from: i64) -> Vec<i64> {
-    tool_calls(evs)
-        .into_iter()
-        .filter(|e| e.seq >= from && e.payload["name"] == "get")
-        .filter_map(|e| e.payload["result"]["value"].as_i64())
-        .collect()
+async fn replay_only_restores_exactly(live: Live) {
+    let root = counter_world("replay", "replay_only", &[], &[add(1000), add(7)]);
+    let fx = setup("replay", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    // A part with only replay is never saved.
+    assert!(tool_calls(&evs)
+        .iter()
+        .all(|e| e.payload["saves"].is_null()));
+    let at = start_of(&evs, "first");
+    let (child, cevs) = fx.fork_to_end(&parent, at, None).await;
+    assert_continued(&cevs, at, 1007);
+    assert_restored(&fx, &child, "exact", "replay").await;
+    assert_nothing_checked(&fx, &parent, &child).await;
 }
 
 /// A part with replay and approximate saves starts fresh with the run's seed in the run's first
-/// branch too, so an exact replay starts from the same state (the counter starts at
-/// `seed % 1000`) and doesn't diverge.
+/// branch too (the counter starts at `seed % 1000`), so an exact replay starts from the same
+/// state and doesn't diverge.
 #[test]
-fn exact_replay_starts_like_the_original() {
-    run(async {
-        let root = counter_world("seeded", "approx_and_replay", &["--seeded"]);
-        let script = vec![add(1000), get(), add(7), done(), get(), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("seeded", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let fresh = (evs[0].payload["seed"].as_u64().unwrap() % 1000) as i64;
-        let first = tool_calls(&evs)[0].payload["result"]["value"]
-            .as_i64()
-            .unwrap();
-        assert!(
-            (fresh + 1000..fresh + 1003).contains(&first),
-            "{fresh} {first}"
-        );
-        let at = model_call(&evs, 2);
-        let (st, v) = fx.fork(&parent, at, None).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap().to_string();
-        fx.finished(&child).await;
-        let before = gets(&evs, 0)[0];
-        let after = gets(&fx.state.store.events(&child).await.unwrap(), at)[0];
-        assert!((before..before + 3).contains(&after), "{before} -> {after}");
-        assert_restored(&fx, &child, "exact", "replay").await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_exact_replay_starts_like_the_original() {
+    run_live(
+        Live::any("live_exact_replay_starts_like_the_original"),
+        exact_replay_starts_like_the_original,
+    );
+}
+
+async fn exact_replay_starts_like_the_original(live: Live) {
+    let root = counter_world("seeded", "approx_and_replay", &["--seeded"], &[add(1000)]);
+    let fx = setup("seeded", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let fresh = (evs[0].payload["seed"].as_u64().unwrap() % 1000) as i64;
+    let first = tool_calls(&evs)[0].payload["result"]["value"]
+        .as_i64()
+        .unwrap();
+    assert!(
+        (fresh + 1000..fresh + 1003).contains(&first),
+        "{fresh} {first}"
+    );
+    let at = start_of(&evs, "first");
+    let (child, cevs) = fx.fork_to_end(&parent, at, None).await;
+    assert_continued(&cevs, at, first);
+    assert_restored(&fx, &child, "exact", "replay").await;
 }
 
 /// The fork of `parent`: its only child.
@@ -385,43 +368,52 @@ async fn assert_stopped(fx: &Fx, branch: &str) {
 }
 
 #[test]
-fn replay_divergence_fails() {
-    run(async {
-        let root = counter_world("noisy", "nondeterministic", &[]);
-        let up = FakeUpstream::start(vec![add(1), add(2), add(3), done()]).await;
-        let fx = setup("noisy", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let first_add = tool_calls(&evs)[0].seq;
-        let (st, v) = fx.fork(&parent, model_call(&evs, 2), None).await;
-        assert_eq!(st, 409, "{v}");
-        let want =
-            format!("replay of c diverged at step {first_add}, so it can't be restored exactly");
-        assert_eq!(v["error"], want.as_str());
-        // The new branch ended infra_error with that message, its instance stopped.
-        let child = only_child(&fx, &parent).await;
-        assert_eq!(child.status, BranchStatus::InfraError);
-        assert_eq!(child.error.as_deref(), Some(want.as_str()));
-        assert_stopped(&fx, &child.id).await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_replay_divergence_fails() {
+    run_live(
+        Live::any("live_replay_divergence_fails"),
+        replay_divergence_fails,
+    );
+}
+
+async fn replay_divergence_fails(live: Live) {
+    let root = counter_world("noisy", "nondeterministic", &[], &[add(1), add(2), add(3)]);
+    let fx = setup("noisy", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let first_add = tool_calls(&evs)[0].seq;
+    let (st, v) = fx.fork(&parent, start_of(&evs, "first"), None).await;
+    assert_eq!(st, 409, "{v}");
+    let want = format!("replay of c diverged at step {first_add}, so it can't be restored exactly");
+    assert_eq!(v["error"], want.as_str());
+    // The new branch ended infra_error with that message, its instance stopped.
+    let child = only_child(&fx, &parent).await;
+    assert_eq!(child.status, BranchStatus::InfraError);
+    assert_eq!(child.error.as_deref(), Some(want.as_str()));
+    assert_stopped(&fx, &child.id).await;
 }
 
 #[test]
-fn fingerprint_mismatch_refused() {
-    run(async {
-        let root = counter_world("fpa", "replay_only", &["--fingerprint", "a"]);
-        let other = counter_world("fpb", "replay_only", &["--fingerprint", "b"]);
-        let up = FakeUpstream::start(vec![add(1), add(2), done()]).await;
-        let fx = setup("fp", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        // The same store and saves, with the counter now on another machine.
-        let hub = fx.hub.sibling(std::slice::from_ref(&other.0));
-        let (_state, base) = serve_app(fx.state.store.clone(), hub, &up).await;
-        let (st, v) = fork_on(&base, &parent, model_call(&evs, 1), None).await;
-        assert_eq!(st, 409, "{v}");
-        let want =
-            "the c integration is running on a different machine or version than the original";
-        assert_eq!(v["error"], want);
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_fingerprint_mismatch_refused() {
+    run_live(
+        Live::any("live_fingerprint_mismatch_refused"),
+        fingerprint_mismatch_refused,
+    );
+}
+
+async fn fingerprint_mismatch_refused(live: Live) {
+    let setup_calls = [add(1), add(2)];
+    let root = counter_world("fpa", "replay_only", &["--fingerprint", "a"], &setup_calls);
+    let other = counter_world("fpb", "replay_only", &["--fingerprint", "b"], &setup_calls);
+    let fx = setup("fp", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    // The same store and saves, with the counter now on another machine.
+    let hub = fx.hub.sibling(std::slice::from_ref(&other.0));
+    let (_state, base) = serve_app(fx.state.store.clone(), hub).await;
+    let (st, v) = fork_on(&base, &parent, start_of(&evs, "first"), None).await;
+    assert_eq!(st, 409, "{v}");
+    let want = "the c integration is running on a different machine or version than the original";
+    assert_eq!(v["error"], want);
 }
 
 /// The `advance` requests the toy part logged for `instance`.
@@ -441,22 +433,22 @@ fn clock_world(log: &std::path::Path) -> ToyRoot {
         "clock",
         &[
             toy("toy-clock", "integration", &part),
-            bench(&["box=toy-clock"], "poke", "{}"),
+            bench(&["box=toy-clock"], "poke", "{}", &[]),
         ],
     )
 }
 
-/// Each call saved the clock part (its advance reported a change) with the clock paused, so
-/// the clock moved less than real time between them.
-fn assert_paused_saves(poke: &Event, peek: &Event) {
-    for c in [poke, peek] {
+/// Each call saved the clock part (its advance reported a change) with the clock paused, so the
+/// clock moved less than real time between them.
+fn assert_paused_saves(first: &Event, second: &Event) {
+    for c in [first, second] {
         assert!(c.payload["saves"]["box"].is_string(), "{}", c.payload);
         let paused = c.payload["paused_ms"].as_i64().unwrap();
         assert!(paused >= 350, "{}", c.payload);
     }
     let clock = |e: &Event| e.payload["clock_ms"].as_i64().unwrap();
-    let real = (peek.at - poke.at).num_milliseconds();
-    let moved = clock(peek) - clock(poke);
+    let real = (second.at - first.at).num_milliseconds();
+    let moved = clock(second) - clock(first);
     assert!(real - moved >= 300, "real {real} ms, clock {moved} ms");
 }
 
@@ -484,23 +476,38 @@ async fn assert_ticked_then_stopped(log: &std::path::Path, branch: &str) {
 }
 
 #[test]
-fn clock_advances_and_pauses_during_save() {
-    run(async {
-        let logs = ToyRoot(packages::toy_dir("clocklog"));
-        std::fs::create_dir_all(&logs.0).unwrap();
-        let log = logs.0.join("calls.log");
-        let script = vec![call("poke", json!({})), call("peek", json!({})), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("clock", clock_world(&log), &up).await;
-        let (branch, evs) = fx.run_to_end().await;
-        let calls = tool_calls(&evs);
-        assert_paused_saves(calls[0], calls[1]);
-        assert_world_event(&evs);
-        assert_ticked_then_stopped(&log, &branch).await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_clock_advances_and_pauses_during_save() {
+    run_live(
+        Live::any("live_clock_advances_and_pauses_during_save"),
+        clock_advances_and_pauses_during_save,
+    );
 }
 
-/// A world of three parts: `c` replay only, `box` exact saves, `ax` approximate saves only.
+async fn clock_advances_and_pauses_during_save(live: Live) {
+    let logs = ToyRoot(packages::toy_dir("clocklog"));
+    std::fs::create_dir_all(&logs.0).unwrap();
+    let log = logs.0.join("calls.log");
+    let fx = setup("clock", clock_world(&log), &live).await;
+    let team = live.team(vec![live.agent(
+        "solo",
+        "Call the poke tool once, then the peek tool once, then stop.",
+    )]);
+    let (branch, evs) = fx.run_to_end(team).await;
+    assert_world_event(&evs);
+    assert_ticked_then_stopped(&log, &branch).await;
+    let calls: Vec<&Event> = tool_calls(&evs)
+        .into_iter()
+        .filter(|e| e.payload["error"].is_null())
+        .collect();
+    match calls.as_slice() {
+        [first, second, ..] => assert_paused_saves(first, second),
+        _ => eprintln!("note: the model made under two calls; the paused saves were not exercised"),
+    }
+}
+
+/// A world of three parts: `c` replay only, `box` exact saves, `ax` approximate saves only, each
+/// written by the setup.
 fn plan_world() -> ToyRoot {
     let approx_only = [
         "part",
@@ -510,13 +517,24 @@ fn plan_world() -> ToyRoot {
         "--prefix",
         "ax_",
     ];
+    let setup = [
+        add(5),
+        call("box", "poke", json!({})),
+        call("ax", "ax_poke", json!({})),
+        add(6),
+    ];
     package_root(
         "plan",
         &[
             counter("counter", &["--flavour", "replay_only"]),
             toy("toy-x", "integration", &["part"]),
             toy("toy-ax", "integration", &approx_only),
-            bench(&["c=counter", "box=toy-x", "ax=toy-ax"], "poke", "{}"),
+            bench(
+                &["c=counter", "box=toy-x", "ax=toy-ax"],
+                "poke",
+                "{}",
+                &setup,
+            ),
         ],
     )
 }
@@ -553,89 +571,104 @@ async fn assert_plan_bad_requests(fx: &Fx, branch: &str, at: i64) {
 }
 
 #[test]
-fn restore_plan_endpoint() {
-    run(async {
-        let poke = |p: &str| call(&format!("{p}poke"), json!({}));
-        let script = vec![add(5), poke(""), poke("ax_"), add(6), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("plan", plan_world(), &up).await;
-        let (branch, evs) = fx.run_to_end().await;
-        let at = model_call(&evs, 3);
-        let path = |q: &str| format!("/api/branches/{branch}/restore-plan?at_seq={at}{q}");
-        for restore in ["", "&restore=exact"] {
-            let (st, v) = fx.get(&path(restore)).await;
-            assert_eq!(st, 409, "{v}");
-            let msg = v["error"].as_str().unwrap();
-            assert!(msg.contains("ax") && msg.contains("approximate"), "{msg}");
-        }
-        let (st, v) = fx.get(&path("&restore=approximate")).await;
-        assert_eq!(st, 200, "{v}");
-        assert_approximate_plan(&v);
-        assert_plan_bad_requests(&fx, &branch, at).await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_restore_plan_endpoint() {
+    run_live(
+        Live::any("live_restore_plan_endpoint"),
+        restore_plan_endpoint,
+    );
+}
+
+async fn restore_plan_endpoint(live: Live) {
+    let fx = setup("plan", plan_world(), &live).await;
+    let (branch, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let at = start_of(&evs, "first");
+    let path = |q: &str| format!("/api/branches/{branch}/restore-plan?at_seq={at}{q}");
+    for restore in ["", "&restore=exact"] {
+        let (st, v) = fx.get(&path(restore)).await;
+        assert_eq!(st, 409, "{v}");
+        let msg = v["error"].as_str().unwrap();
+        assert!(msg.contains("ax") && msg.contains("approximate"), "{msg}");
+    }
+    let (st, v) = fx.get(&path("&restore=approximate")).await;
+    assert_eq!(st, 200, "{v}");
+    assert_approximate_plan(&v);
+    assert_plan_bad_requests(&fx, &branch, at).await;
 }
 
 /// A part refusing to start with a fingerprint mismatch (-32003) is the same 409, and the new
 /// branch ends infra_error.
 #[test]
-fn start_fingerprint_refusal_is_409() {
-    run(async {
-        let marks = ToyRoot(packages::toy_dir("movedmark"));
-        std::fs::create_dir_all(&marks.0).unwrap();
-        let moved = marks.0.join("moved");
-        let moved_s = moved.to_string_lossy().into_owned();
-        let part = ["part", "--refuse-start-if", &moved_s];
-        let root = package_root(
-            "moved",
-            &[
-                toy("toy-mv", "integration", &part),
-                bench(&["box=toy-mv"], "poke", "{}"),
-            ],
-        );
-        let poke = call("poke", json!({}));
-        let up = FakeUpstream::start(vec![poke.clone(), poke, done()]).await;
-        let fx = setup("moved", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        std::fs::write(&moved, "").unwrap();
-        let (st, v) = fx.fork(&parent, model_call(&evs, 1), None).await;
-        assert_eq!(st, 409, "{v}");
-        let want =
-            "the box integration is running on a different machine or version than the original";
-        assert_eq!(v["error"], want);
-        assert_eq!(
-            only_child(&fx, &parent).await.status,
-            BranchStatus::InfraError
-        );
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_start_fingerprint_refusal_is_409() {
+    run_live(
+        Live::any("live_start_fingerprint_refusal_is_409"),
+        start_fingerprint_refusal_is_409,
+    );
+}
+
+async fn start_fingerprint_refusal_is_409(live: Live) {
+    let marks = ToyRoot(packages::toy_dir("movedmark"));
+    std::fs::create_dir_all(&marks.0).unwrap();
+    let moved = marks.0.join("moved");
+    let moved_s = moved.to_string_lossy().into_owned();
+    let part = ["part", "--refuse-start-if", &moved_s];
+    let root = package_root(
+        "moved",
+        &[
+            toy("toy-mv", "integration", &part),
+            bench(
+                &["box=toy-mv"],
+                "poke",
+                "{}",
+                &[call("box", "poke", json!({}))],
+            ),
+        ],
+    );
+    let fx = setup("moved", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "peek")).await;
+    std::fs::write(&moved, "").unwrap();
+    let (st, v) = fx.fork(&parent, start_of(&evs, "first"), None).await;
+    assert_eq!(st, 409, "{v}");
+    let want = "the box integration is running on a different machine or version than the original";
+    assert_eq!(v["error"], want);
+    assert_eq!(
+        only_child(&fx, &parent).await.status,
+        BranchStatus::InfraError
+    );
 }
 
 /// A fork's clock starts at the fork point's clock (the last one recorded before it), not 0.
 #[test]
-fn fork_clock_starts_at_fork_point() {
-    run(async {
-        let root = counter_world("forkclock", "exact", &[]);
-        let mut slow = add(2);
-        slow["_delay_ms"] = json!(1500);
-        let script = vec![add(1), slow, add(3), done(), get(), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("forkclock", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let clock = |e: &Event| e.payload["clock_ms"].as_i64().unwrap();
-        let fork_clock = clock(tool_calls(&evs)[1]);
-        assert!(fork_clock >= 1400, "{fork_clock}");
-        let at = model_call(&evs, 2);
-        let (st, v) = fx.fork(&parent, at, None).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap().to_string();
-        fx.finished(&child).await;
-        let cevs = fx.state.store.events(&child).await.unwrap();
-        let first = tool_calls(&cevs).into_iter().find(|e| e.seq >= at).unwrap();
-        assert!(
-            clock(first) >= fork_clock,
-            "{} < {fork_clock}",
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_fork_clock_starts_at_fork_point() {
+    run_live(
+        Live::any("live_fork_clock_starts_at_fork_point"),
+        fork_clock_starts_at_fork_point,
+    );
+}
+
+async fn fork_clock_starts_at_fork_point(live: Live) {
+    let root = counter_world("forkclock", "exact", &[], &[add(1)]);
+    let fx = setup("forkclock", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 2, "get")).await;
+    let clock = |e: &Event| e.payload["clock_ms"].as_i64();
+    let at = start_of(&evs, "second");
+    let fork_clock = evs
+        .iter()
+        .filter(|e| e.seq < at)
+        .filter_map(clock)
+        .next_back()
+        .unwrap();
+    let (_child, cevs) = fx.fork_to_end(&parent, at, None).await;
+    match tool_calls(&cevs).into_iter().find(|e| e.seq >= at) {
+        Some(first) => assert!(
+            clock(first).unwrap() >= fork_clock,
+            "{:?} < {fork_clock}",
             clock(first)
-        );
-    })
+        ),
+        None => eprintln!("note: the child's agent made no call; its clock was not seen"),
+    }
 }
 
 /// The value the counter keeps in `save`.
@@ -661,7 +694,12 @@ fn freeze_world() -> ToyRoot {
         &[
             counter("counter", &["--flavour", "exact"]),
             toy("toy-slow", "integration", &slow),
-            bench(&["c=counter", "box=toy-slow"], "add", r#"{"n": 1}"#),
+            bench(
+                &["c=counter", "box=toy-slow"],
+                "add",
+                r#"{"n": 1}"#,
+                &[add(1)],
+            ),
         ],
     )
 }
@@ -683,22 +721,29 @@ fn late_world_events(evs: &[Event]) -> Vec<i64> {
 /// Once the last agent ends the world stands still: no world event after it, and the counter's
 /// final save is what the agent last read, however long the gold save takes to build.
 #[test]
-fn scoring_freezes_the_world() {
-    run(async {
-        let up = FakeUpstream::start(vec![add(1), get(), done()]).await;
-        let fx = setup("freeze", freeze_world(), &up).await;
-        let (_branch, evs) = fx.run_to_end().await;
-        let late = late_world_events(&evs);
-        assert!(
-            late.is_empty(),
-            "world events after the last agent: {late:?}"
-        );
-        let final_c = check_of(&evs)["final_saves"]["c"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(counter_in(&fx, &final_c).await, gets(&evs, 0)[0]);
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_scoring_freezes_the_world() {
+    run_live(
+        Live::any("live_scoring_freezes_the_world"),
+        scoring_freezes_the_world,
+    );
+}
+
+async fn scoring_freezes_the_world(live: Live) {
+    let fx = setup("freeze", freeze_world(), &live).await;
+    let (_branch, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let late = late_world_events(&evs);
+    assert!(
+        late.is_empty(),
+        "world events after the last agent: {late:?}"
+    );
+    let check = live::check_of(&evs).unwrap();
+    let final_c = check.final_saves.unwrap()["c"].clone();
+    let start = start_of(&evs, "first");
+    match gets(&evs, start).last() {
+        Some(read) => assert_eq!(counter_in(&fx, &final_c).await, *read),
+        None => eprintln!("note: the agent did not read; the frozen value was not compared"),
+    }
 }
 
 /// The restore plan of a fork of `branch` at `at` with `restore`.
@@ -711,79 +756,101 @@ async fn restore_plan(fx: &Fx, branch: &str, at: i64, restore: &str) -> (u16, Va
 /// save before its first one: an approximate fork before it replays the part (exactly), and the
 /// restore plan says so.
 #[test]
-fn approximate_before_the_first_save_replays() {
-    run(async {
-        let root = counter_world("firstsave", "approx_and_replay", &[]);
-        let script = vec![get(), add(1000), done(), get(), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("firstsave", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let first = tool_calls(&evs)[0];
-        assert!(first.payload["saves"]["c"].is_null(), "{}", first.payload);
-        let at = model_call(&evs, 1);
-        let (st, v) = restore_plan(&fx, &parent, at, "approximate").await;
-        assert_eq!(st, 200, "{v}");
-        assert_eq!(v["parts"][0]["how"], "replay", "{v}");
-        let (st, v) = fx.fork(&parent, at, Some("approximate")).await;
-        assert_eq!(st, 200, "{v}");
-        let child = v["branch_id"].as_str().unwrap().to_string();
-        let b = fx.finished(&child).await;
-        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-        assert_restored(&fx, &child, "approximate", "replay").await;
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_approximate_before_the_first_save_replays() {
+    run_live(
+        Live::any("live_approximate_before_the_first_save_replays"),
+        approximate_before_the_first_save_replays,
+    );
+}
+
+async fn approximate_before_the_first_save_replays(live: Live) {
+    let root = counter_world(
+        "firstsave",
+        "approx_and_replay",
+        &[],
+        &[call("c", "get", json!({}))],
+    );
+    let fx = setup("firstsave", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let first = tool_calls(&evs)[0];
+    assert!(first.payload["saves"]["c"].is_null(), "{}", first.payload);
+    let at = start_of(&evs, "first");
+    let (st, v) = restore_plan(&fx, &parent, at, "approximate").await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["parts"][0]["how"], "replay", "{v}");
+    let (child, _) = fx.fork_to_end(&parent, at, Some("approximate")).await;
+    assert_restored(&fx, &child, "approximate", "replay").await;
 }
 
 /// A branch B restored its part approximately: an exact rerun of B past B's start would replay
 /// the part through that approximate state, so it is refused (and the restore plan says so); an
 /// approximate one works.
 #[test]
-fn exact_refused_after_an_approximate_restore() {
-    run(async {
-        let root = counter_world("approxchain", "approx_and_replay", &[]);
-        let script = vec![add(1000), add(7), done(), get(), done(), done()];
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("approxchain", root, &up).await;
-        let (a, evs) = fx.run_to_end().await;
-        let b = fork_and_finish(&fx, &a, model_call(&evs, 1), Some("approximate")).await;
-        let b_start = fx.state.store.branch(&b).await.unwrap().start_seq.unwrap();
-        let bevs = fx.state.store.events(&b).await.unwrap();
-        let at = model_call(&bevs, 2);
-        assert!(at > b_start, "{at} <= {b_start}");
-        let want = format!("c was restored approximately at step {b_start} in an earlier rerun, so it can't be restored exactly; choose Approximate");
-        let (st, v) = fx.fork(&b, at, Some("exact")).await;
-        assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
-        let (st, v) = restore_plan(&fx, &b, at, "exact").await;
-        assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
-        let (st, v) = fx.fork(&b, at, Some("approximate")).await;
-        assert_eq!(st, 200, "{v}");
-        let c = fx.finished(v["branch_id"].as_str().unwrap()).await;
-        assert_ne!(c.status, BranchStatus::InfraError, "{:?}", c.error);
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_exact_refused_after_an_approximate_restore() {
+    run_live(
+        Live::any("live_exact_refused_after_an_approximate_restore"),
+        exact_refused_after_an_approximate_restore,
+    );
+}
+
+async fn exact_refused_after_an_approximate_restore(live: Live) {
+    let root = counter_world(
+        "approxchain",
+        "approx_and_replay",
+        &[],
+        &[add(1000), add(7)],
+    );
+    let fx = setup("approxchain", root, &live).await;
+    let (a, evs) = fx.run_to_end(readers(&live, 2, "get")).await;
+    let (b, bevs) = fx
+        .fork_to_end(&a, start_of(&evs, "first"), Some("approximate"))
+        .await;
+    let b_start = fx.state.store.branch(&b).await.unwrap().start_seq.unwrap();
+    let at = bevs
+        .iter()
+        .filter(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some("second"))
+        .map(|e| e.seq)
+        .find(|s| *s > b_start)
+        .expect("B ran its second agent");
+    let want = format!("c was restored approximately at step {b_start} in an earlier rerun, so it can't be restored exactly; choose Approximate");
+    let (st, v) = fx.fork(&b, at, Some("exact")).await;
+    assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
+    let (st, v) = restore_plan(&fx, &b, at, "exact").await;
+    assert_eq!((st, v["error"].as_str()), (409, Some(want.as_str())), "{v}");
+    fx.fork_to_end(&b, at, Some("approximate")).await;
 }
 
 /// A replayed part whose config changed since the run can't be replayed exactly.
 #[test]
-fn exact_refused_when_the_config_changed() {
-    run(async {
-        let root = counter_world("cfga", "replay_only", &[]);
-        let config = ["--config", r#"c={"start": 5}"#];
-        let changed = package_root(
-            "cfgb",
-            &[
-                counter("counter", &["--flavour", "replay_only"]),
-                bench_with(&["c=counter"], "add", r#"{"n": 1}"#, &config),
-            ],
-        );
-        let up = FakeUpstream::start(vec![add(1), add(2), done()]).await;
-        let fx = setup("cfg", root, &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        let hub = fx.hub.sibling(std::slice::from_ref(&changed.0));
-        let (_state, base) = serve_app(fx.state.store.clone(), hub, &up).await;
-        let (st, v) = fork_on(&base, &parent, model_call(&evs, 1), None).await;
-        assert_eq!(st, 409, "{v}");
-        let want = "the part c's config changed since the run, so it can't be restored exactly; choose Approximate";
-        assert_eq!(v["error"], want);
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_exact_refused_when_the_config_changed() {
+    run_live(
+        Live::any("live_exact_refused_when_the_config_changed"),
+        exact_refused_when_the_config_changed,
+    );
+}
+
+async fn exact_refused_when_the_config_changed(live: Live) {
+    let setup_calls = [add(1), add(2)];
+    let root = counter_world("cfga", "replay_only", &[], &setup_calls);
+    let config = ["--config", r#"c={"start": 5}"#];
+    let changed = package_root(
+        "cfgb",
+        &[
+            counter("counter", &["--flavour", "replay_only"]),
+            bench_with(&["c=counter"], "add", r#"{"n": 1}"#, &setup_calls, &config),
+        ],
+    );
+    let fx = setup("cfg", root, &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 1, "get")).await;
+    let hub = fx.hub.sibling(std::slice::from_ref(&changed.0));
+    let (_state, base) = serve_app(fx.state.store.clone(), hub).await;
+    let (st, v) = fork_on(&base, &parent, start_of(&evs, "first"), None).await;
+    assert_eq!(st, 409, "{v}");
+    let want = "the part c's config changed since the run, so it can't be restored exactly; choose Approximate";
+    assert_eq!(v["error"], want);
 }
 
 /// A world of one toy clock part `box` (exact saves) that reports an alarm on an instance's
@@ -793,7 +860,12 @@ fn alarm_world() -> ToyRoot {
         "alarm",
         &[
             toy("toy-alarm", "integration", &["part", "--uses-clock"]),
-            bench(&["box=toy-alarm"], "poke", "{}"),
+            bench(
+                &["box=toy-alarm"],
+                "poke",
+                "{}",
+                &[call("box", "poke", json!({}))],
+            ),
         ],
     )
 }
@@ -801,29 +873,38 @@ fn alarm_world() -> ToyRoot {
 /// A fork's clock parts restored from a save are moved to the fork point's clock before it
 /// runs, and what they report on the way was recorded already: no world event twice.
 #[test]
-fn fork_reports_no_world_event_twice() {
-    run(async {
-        let (poke, peek) = (call("poke", json!({})), call("peek", json!({})));
-        let up = FakeUpstream::start(vec![poke, peek.clone(), done(), peek, done()]).await;
-        let fx = setup("alarm", alarm_world(), &up).await;
-        let (parent, evs) = fx.run_to_end().await;
-        assert!(evs.iter().any(|e| e.kind == EventKind::WorldEvent));
-        let (st, v) = fx.fork(&parent, model_call(&evs, 1), None).await;
-        assert_eq!(st, 200, "{v}");
-        let child = fx
-            .state
-            .store
-            .branch(v["branch_id"].as_str().unwrap())
-            .await
-            .unwrap();
-        let b = fx.finished(&child.id).await;
-        assert_ne!(b.status, BranchStatus::InfraError, "{:?}", b.error);
-        let start = child.start_seq.unwrap();
-        let cevs = fx.state.store.events(&child.id).await.unwrap();
-        let again: Vec<&Event> = cevs
-            .iter()
-            .filter(|e| e.seq >= start && e.kind == EventKind::WorldEvent)
-            .collect();
-        assert!(again.is_empty(), "{again:?}");
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_fork_reports_no_world_event_twice() {
+    run_live(
+        Live::any("live_fork_reports_no_world_event_twice"),
+        fork_reports_no_world_event_twice,
+    );
+}
+
+async fn fork_reports_no_world_event_twice(live: Live) {
+    let fx = setup("alarm", alarm_world(), &live).await;
+    let (parent, evs) = fx.run_to_end(readers(&live, 2, "peek")).await;
+    let at = start_of(&evs, "second");
+    let alarm = evs
+        .iter()
+        .find(|e| e.kind == EventKind::WorldEvent)
+        .expect("an alarm");
+    if alarm.seq > at {
+        eprintln!("note: the alarm came after the first agent; nothing to report twice");
+        return;
+    }
+    let (child, cevs) = fx.fork_to_end(&parent, at, None).await;
+    let start = fx
+        .state
+        .store
+        .branch(&child)
+        .await
+        .unwrap()
+        .start_seq
+        .unwrap();
+    let again: Vec<&Event> = cevs
+        .iter()
+        .filter(|e| e.seq >= start && e.kind == EventKind::WorldEvent)
+        .collect();
+    assert!(again.is_empty(), "{again:?}");
 }

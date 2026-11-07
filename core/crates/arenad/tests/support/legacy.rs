@@ -61,9 +61,10 @@ fn tool_call(id: &str, name: &str) -> Value {
     json!({"id": id, "type": "function", "function": {"name": name, "arguments": "{}"}})
 }
 
-/// A model call the way the open agent recorded it: the messages sent and the reply.
+/// A model call the way the open agent recorded it (data written by hand in the old format; no
+/// model or agent runs): the messages sent and the reply.
 fn model_call(messages: Value, reply: Value) -> Value {
-    json!({"request": {"model": "fake/model", "messages": messages},
+    json!({"request": {"model": "old/model", "messages": messages},
            "response": {"choices": [{"index": 0, "message": reply, "finish_reason": "stop"}]}})
 }
 

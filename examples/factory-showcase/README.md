@@ -27,7 +27,7 @@ RESULTS_PLACEHOLDER
 | `designs/usage.py` | Counts an agent's model calls from Claude Code's stream once each, with the real output tokens and the calls the stream never shows (a compaction's), so Arena's totals match what Claude Code billed |
 | `designs/engine.py` | Routes Arena's recorded messages to the agents, wakes waiting agents, ends the run |
 | `designs/run.py` | Runs a design (or a fork of a recorded run) through Arena's external-run API |
-| `designs/test_engine.py` | Offline tests of the engine (no model, no Arena) |
+| `designs/test_engine.py` | Offline tests of the engine's routing and status rules on the designs' data (no model, no agent, no Arena) |
 | `make_video.sh` | The video from recorded runs: metrics, UI captures, charts, narration, edit |
 | `capture/` | Playwright captures of Arena's UI on the runs (`shots.py` lists them from `metrics.json`) |
 | `export_metrics.py` | `metrics.json` for the video (`arena-video`'s `video/README.md`), from Arena's API only |

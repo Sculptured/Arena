@@ -201,7 +201,7 @@ and refusals the only colour), with its duration and outcome; trends (actions pe
 model call, tokens and cost); and the inspector for one step. It follows a running branch over the event stream.
 Suites have an overview (`/suites/{id}`: scenarios × repeats, pass rates, safety, spread) and a comparison
 (`/suites/compare/{a}/{b}`). Checked by eye on two external suites of the retail benchmark driven by a script
-(no model).
+before scripted drivers were removed; not yet checked again with real agents.
 
 ## Test suites
 
@@ -227,9 +227,10 @@ it does something unsafe, and how much its runs vary.
   a pass rate counts; time, tokens and cost count only beyond 10% of the first suite's mean, as runs vary a little.
   A suite whose task lacks a check the other has shows it as `incomparable`.
 
-Verified by `core/crates/arenad/tests/suites.rs` on a toy world with scripted agents (no model): a built-in
-suite of 2 tasks × 2 repeats, a comparison that flags a safety regression and a goal improvement, and an external
-suite claimed and driven over HTTP.
+Verified by `core/crates/arenad/tests/suites.rs` (`live_`) on a toy world with agents on a real model (Claude Code,
+haiku): a built-in suite of 2 tasks, whose report must add up its runs' checks; a comparison whose verdicts must
+follow each check's pass rates; and an external suite claimed and driven over HTTP with Claude Code as its agent.
+Only the built-in suite has been run (2026-11-07).
 
 ## Overhead and estimates
 

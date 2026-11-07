@@ -295,7 +295,9 @@ export ARENA_RUN_ISAAC_SIM="exec ssh -p <port> -i <key> -o BatchMode=yes isaac@<
   `--backend isaac`, ERPNext (`frappe/erpnext:v16.53.0`), `ridgeline-hub` and Sculptured.
 - arenad started the part over `ssh` (`ARENA_RUN_ISAAC_SIM`, `remote/sshd.py` on the pod), with
   `ARENA_CLOCK_SPEED=0.1` and `{"record": "factory-gold.mp4", "camera": "auto", "record_fps": 10}`.
-- The team was the scripted, no-model team, on the gold path.
+- The team was the scripted, no-model team, on the gold path. Arena no longer has that team: the factory's live
+  test (now `live_factory_team_runs_the_incident_and_arena_scores_it`) runs the benchmark's team on a real model,
+  and has not run on Isaac Sim.
 
 **Result.**
 - The branch passed, with all nine checks.

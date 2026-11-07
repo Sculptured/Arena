@@ -75,7 +75,7 @@ restore of the world, rerun from there, and compare the runs.
   </tr>
 </table>
 
-<sub>Captured from Arena's web UI on a small test world (a toy part and the kit's counter, with agents on a fake model).</sub>
+<sub>Captured from Arena's web UI on a small test world (a toy part and the kit's counter). The agents in these captures ran on a test model server that Arena has since removed; captures with real agents are not made yet.</sub>
 
 ## How it works
 
@@ -230,20 +230,22 @@ other integration is checked on its own, and API mode has not been measured.
 - Two benchmarks are included: the retail example and `benchmarks/factory`, which needs a factory example that is
   not public yet. arenad runs one benchmark at a time.
 - arenad's own runners run a team one after another or all at once; any other shape needs the design's own code
-  to drive the run through the external API (`docs/concepts.md`, "External designs"), which is tested with a
-  scripted client and fake model server only. Any agent may write unless its team marks it `read_only`.
+  to drive the run through the external API (`docs/concepts.md`, "External designs"), which is tested with
+  Claude Code as the external system's agent (`core/crates/arenad/tests/external.rs`, `live_`). Any agent may
+  write unless its team marks it `read_only`.
 - The production estimate (measured time minus arena's overhead) has been checked by tests only, not against a
   production deployment. Costs not reported by a provider are estimated only for the models in
   `docs/prices.toml`; every other cost shows as unknown.
-- API mode has not been measured with any provider. Its providers (OpenRouter, OpenAI, the Claude API, local
-  servers) are tested against fake servers only, with no real model call.
+- API mode has not been measured with any provider. Its providers' request and answer translation is unit-tested
+  on data; its `live_` tests call a real provider only when its key is set, and none has run yet (only a rejected
+  key, against OpenAI and the Claude API).
 - Isaac Sim on hardware: the `isaac` backend of `isaac-sim` has never run on Isaac Sim 6.2 (needs a 16 GB GPU).
 - Cross-part calls: parts only reach each other through a benchmark's `links`, one tool call per event
   (`docs/protocol.md`); tested with toy parts. `proposal_id` on the `ridgeline-hub` and `isaac-sim` tools binds
   only in a world whose benchmark puts a gate on them.
 - A world with real agents made of several integrations has not been run. `benchmarks/factory` builds one (ERPNext,
-  the hub, Sculptured and the plant) and reads a factory example that is not public yet; it has run with a scripted
-  team only.
+  the hub, Sculptured and the plant) and reads a factory example that is not public yet; its live test now runs the
+  benchmark's own team on a real model and has not been run yet (earlier runs used a scripted team, since removed).
 - Comparing a world made only of replay parts: there is no final save to compare, so compare answers 409 and
   the branch fails with "no part of this world can be checked against the task's expected result".
 - Community publishing of integrations and benchmarks (design only). Packages install from a local folder.

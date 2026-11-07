@@ -112,11 +112,17 @@ With `ARENA_RUN_ISAAC_SIM` the plant can run on a GPU machine over ssh (`integra
 
 - `cargo test -p arena-factory` needs nothing: every named check against end states made in the test, the seed
   records, the gates' shape, and what it answers without the example.
-- `(cd core && cargo test -p arenad --test factory -- --ignored live_ --nocapture)` runs the whole world with a
-  scripted team and no model, each agent doing its own part as in the table above: the right path passes every check, and a wrong one (the wrong diagnosis and part, a
-  booking with no change behind it) fails. It starts an ERPNext stack and a Twenty server of its own and removes them after.
+- `(cd core && cargo test -p arenad --test factory -- --ignored live_ --nocapture)` runs the whole world with the
+  benchmark's own team on a real model (Claude Code with `haiku` by default; see `docs/reference.md`, "Tests").
+  Whatever the team does, it checks that every step is recorded, that a gated call naming a change no one proposed
+  is refused before its part, and that every named check is scored; it prints the checks and the metrics. Which end
+  states pass which check (the right path, the wrong diagnosis and part) is `cargo test -p arena-factory`'s job. It
+  starts an ERPNext stack and a Twenty server of its own and removes them after.
   It needs a current Sculptured (`ARENA_SCULPTURED_BINARY`, a release build next to the checkout, or `PATH`); one too old
   to have the approvals API fails the base save with "no API route". With `CARGO_TARGET_DIR` set, set `ARENA_BIN_DIR` to match.
+
+The verifications below were made with a scripted team (each agent's part written as code, no model), which Arena
+no longer has; the live test with a real model has not been run on this world yet.
 
 **Verified:** that live test passed on Linux, in about 190 s, against `frappe/erpnext:v16.53.0`, a local release build
 of Sculptured and the stand-in plant, with the clock at 20 times real time. It covers one run of each path. That was
@@ -131,7 +137,7 @@ minutes (`frappe/erpnext:v16.53.0`, `twentycrm/twenty:v2.51.0`, a debug build of
 1,083 sales orders, work orders and job cards. Sales orders are written five at a time and work orders one at a time
 (they all update the coil's stock row); the CRM is written through Twenty's batch endpoint, since Twenty limits an API key
 to 100 requests a minute (agents' CRM calls meet the same limit). `cargo test -p arena-factory` passes. **Not run at this
-scale:** the live scripted test, which now finds the affected orders in the ERP and notifies all of them. The
+scale:** the live test with the scripted team, which then found the affected orders in the ERP and notifies all of them. The
 verifications below are of version 0.2.0 (three customers, eight orders).
 
 **Verified with the company and the CRM (2026-11-04):** `live_factory_right_path_passes_and_wrong_path_fails` passed on

@@ -143,9 +143,11 @@ the ERPNext and Twenty images, and arenad stopped. It is `opt_in`.
 - `PHARMA_ERP_CONNECT=erp.json cargo test -p arena-pharma --test live_seed -- --ignored` seeds an ERPNext site that is
   already running (its `connect` info in the file) and reads the reports back.
 - `(cd core && cargo test -p arenad --test pharma -- --ignored live_ --nocapture)` runs the whole world with the
-  coordinated team scripted, no model: the right path on the base and on `reallocation-rejected`, and a wrong path
-  (the failing batch released without approval and shipped). It starts an ERPNext stack and a Twenty server of its own
-  and removes them after.
+  coordinated team on a real model (Claude Code with `haiku` by default; see `docs/reference.md`, "Tests"): the base
+  incident, recorded, gated and scored with every check, and the base incident with Tundra full after its first
+  quote, whose disruption must show in the twin's views once it fires. Which end states pass which check (the right
+  paths, the failing batch released without approval and shipped) is `cargo test -p arena-pharma`'s job. It starts an
+  ERPNext stack and a Twenty server of its own and removes them after.
 
 **Verified (Linux, 2026-11-06):**
 - `cargo test -p arena-pharma` passes (25 tests).
@@ -162,8 +164,9 @@ the ERPNext and Twenty images, and arenad stopped. It is `opt_in`.
 **Verified (Linux, 2026-11-07):** `cargo test -p arena-pharma` passes (32 tests, the twin's and the options' included).
 `live_pharma_a_disruption_shows_in_the_twin` (arenad's `tests/pharma.rs`, with the Sculptured build of 2026-11-04 as
 `ARENA_SCULPTURED_BINARY`; the one on `PATH` from 2026-10-24 lacks the changes route the approvals part needs) passed
-once: the base incident with Tundra full after its first quote, the coordinated team scripted. The disruption fired as
-a world event, the scripted logistics turned to Borealis, all 13 checks passed, and 56 views were recorded, Tundra's
+once: the base incident with Tundra full after its first quote, with the coordinated team scripted (each role's part
+written as code, no model; Arena no longer has that team, and the live tests with a real model have not run on this
+world yet). The disruption fired as a world event, the scripted logistics turned to Borealis, all 13 checks passed, and 56 views were recorded, Tundra's
 lane going from available to no capacity and orders covered from 0 to 7 of 8; from each view's step to the view took
 27 ms on average, 86 ms at most (event timestamps, so the view call and its recording). The older live test of the
 three paths was not rerun.

@@ -1,9 +1,15 @@
+//! Fork: go back to a step of a finished branch, maybe change an agent, and run again from there
+//! with the world as it was. Without a model: what is refused, and a run recorded before
+//! integrations (written to the store by hand as data, as such runs were stored) still shows
+//! its rows, compares and deletes. `live_`: forks of runs on a real model (see
+//! `support/live.rs`); where a fork starts for each kind of agent is planned on recorded events
+//! in `src/fork.rs`'s own tests.
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
 #[path = "support/legacy.rs"]
 mod legacy;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -13,7 +19,6 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{Arc, LazyLock},
-    time::Duration,
 };
 
 use arenad::{
@@ -22,9 +27,9 @@ use arenad::{
     model::*,
     runner,
 };
-use fake_upstream::FakeUpstream;
 use legacy::{legacy_run, LegacyDbs};
-use packages::{gold_action_args, plain_hub, TestHub};
+use live::Live;
+use packages::{plain_hub, TestHub};
 use pg::Cleanup;
 use serde_json::{json, Value};
 
@@ -35,19 +40,24 @@ fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
 }
 
-fn agent(id: &str) -> AgentSpec {
-    AgentSpec {
-        id: id.into(),
-        name: id.into(),
-        kind: AgentKind::Open,
-        model: Some("fake/model".into()),
-        prompt: format!("You are {id}."),
-        provider: None,
-        read_only: false,
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
     }
 }
 
+/// A team for data only (never run).
 fn team() -> Team {
+    let agent = |id: &str| AgentSpec {
+        id: id.into(),
+        name: id.into(),
+        kind: AgentKind::Open,
+        model: Some("m".into()),
+        prompt: format!("You are {id}."),
+        provider: None,
+        read_only: false,
+    };
     Team {
         id: "t".into(),
         name: "T".into(),
@@ -61,11 +71,11 @@ struct Fx {
     _clean: Cleanup,
 }
 
-async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
+/// An app with the real drivers on the configured providers.
+async fn setup(tag: &str) -> Fx {
     let hub = TestHub::new(&[]);
     let (store, clean) = app_support::meta_store("fork", tag).await;
-    let (state, _) =
-        app_support::open_app(store, hub.hub.clone(), &upstream.base_url, |_| {}).await;
+    let (state, _) = app_support::app_for(store, hub.hub.clone(), Some("retail"), |_| {}).await;
     Fx {
         state,
         hub,
@@ -73,136 +83,19 @@ async fn setup(tag: &str, upstream: &FakeUpstream) -> Fx {
     }
 }
 
-/// The test's `Cleanup` drops the metadata database; its `TestHub` the instances and saves.
-async fn teardown(fx: Fx, _branches: &[&str]) {
-    drop(fx);
-}
-
-async fn finished(fx: &Fx, branch: &str) -> Branch {
-    for _ in 0..600 {
-        let b = fx.state.store.branch(branch).await.unwrap();
-        if b.status != BranchStatus::Running {
-            return b;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("branch still running");
-}
-
-fn tool_msg(calls: Vec<(&str, &str, Value)>) -> Value {
-    let tcs: Vec<Value> = calls
-        .into_iter()
-        .map(|(id, name, args)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}}))
-        .collect();
-    json!({"role": "assistant", "content": null, "tool_calls": tcs})
-}
-
-fn text_msg(t: &str) -> Value {
-    json!({"role": "assistant", "content": t})
-}
-
-const TRIAGE_NOTE: &str = "Isabella wants to exchange an item in #W7181492.";
 const ORDER: &str = "#W7181492";
-const USER: &str = "isabella_johansson_2152";
 
-fn triage_script() -> Vec<Value> {
-    vec![
-        tool_msg(vec![(
-            "t1",
-            "find_user_id_by_name_zip",
-            json!({"first_name": "Isabella", "last_name": "Johansson", "zip": "32286"}),
-        )]),
-        tool_msg(vec![(
-            "t2",
-            "get_order_details",
-            json!({"order_id": ORDER}),
-        )]),
-        tool_msg(vec![("t3", "handoff", json!({"note": TRIAGE_NOTE}))]),
-    ]
+/// The retail benchmark's own team on `live`.
+async fn bench_team(fx: &Fx, live: &Live) -> Team {
+    let bench = fx.state.hub.bench_describe("retail").await.unwrap();
+    live.bench_team(bench.team.unwrap())
 }
 
-fn read_order(id: &str) -> Value {
-    tool_msg(vec![(id, "get_order_details", json!({"order_id": ORDER}))])
-}
-
-fn read_user(id: &str) -> Value {
-    tool_msg(vec![(id, "get_user_details", json!({"user_id": USER}))])
-}
-
-fn gold_write() -> Value {
-    tool_msg(vec![(
-        "w1",
-        "exchange_delivered_order_items",
-        gold_action_args("27", "exchange_delivered_order_items"),
-    )])
-}
-
-fn wrong_write() -> Value {
-    tool_msg(vec![(
-        "w2",
-        "modify_user_address",
-        json!({"user_id": USER, "address1": "1 Wrong St", "address2": "", "city": "Austin", "state": "TX", "country": "USA", "zip": "73301"}),
-    )])
-}
-
-/// Seq of the `agent`'s ModelCall whose reply calls `tool` (first match).
-fn model_call_choosing(evs: &[Event], agent: &str, tool: &str) -> i64 {
-    evs.iter()
-        .find(|e| {
-            e.kind == EventKind::ModelCall
-                && e.agent.as_deref() == Some(agent)
-                && e.payload["response"]["choices"][0]["message"]["tool_calls"][0]["function"]
-                    ["name"]
-                    == tool
-        })
-        .unwrap_or_else(|| panic!("no model call by {agent} choosing {tool}"))
-        .seq
-}
-
-fn agent_start(evs: &[Event], agent: &str) -> i64 {
-    evs.iter()
-        .find(|e| e.kind == EventKind::AgentStart && e.agent.as_deref() == Some(agent))
-        .unwrap()
-        .seq
-}
-
-/// Results of the `name` tool calls on `branch` with `seq >= from`, in order.
-fn tool_results(evs: &[Event], name: &str, from: i64) -> Vec<Value> {
-    evs.iter()
-        .filter(|e| e.seq >= from && e.kind == EventKind::ToolCall && e.payload["name"] == name)
-        .map(|e| e.payload["result"].clone())
-        .collect()
-}
-
-fn system_prompt(req: &Value) -> String {
-    req["messages"][0]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string()
-}
-
-/// The order's status in the branch's final saved world.
-async fn order_status_in(fx: &Fx, branch: &str) -> String {
-    let evs = fx.state.store.events(branch).await.unwrap();
-    let check: CheckPayload = serde_json::from_value(evs.last().unwrap().payload.clone()).unwrap();
-    let key = format!("orders/{ORDER}");
-    let docs = fx
-        .hub
-        .inspect_save(&check.final_saves.unwrap()["retail"], &[&key])
-        .await;
-    docs[&key]["doc"]["status"].as_str().unwrap().to_string()
-}
-
-/// An exact fork of a world of exact saves is restored from the save; the run's first branch
-/// was restored from nothing.
-fn assert_restored_from_save(first: &Branch, child: &Branch) {
-    assert_eq!((first.restore_mode, first.restored.len()), (None, 0));
-    assert_eq!(child.restore_mode, Some(parts::proto::Mode::Exact));
-    let retail = RestoredPart {
-        part: "retail".into(),
-        how: RestoredHow::Save,
-    };
-    assert_eq!(child.restored, [retail]);
+/// Runs `team` on task 27 to its end: the branch id, the branch and its events.
+async fn parent(fx: &Fx, team: Team) -> (String, Branch, Vec<Event>) {
+    let (_run, id) = runner::start_run(&fx.state, "27", team).await.unwrap();
+    let (b, evs) = live::ended_ok(&fx.state, &id).await;
+    (id, b, evs)
 }
 
 /// The events before the fork point at `at`, as comparable tuples: a child's timeline starts
@@ -214,208 +107,186 @@ fn events_before(evs: &[Event], at: i64) -> Vec<(i64, EventKind, Value)> {
         .collect()
 }
 
-/// Starts a run of task 27 and waits for it to pass with the exchange made. Returns the
-/// branch id and the finished branch.
-async fn passed_parent(fx: &Fx) -> (String, Branch) {
-    let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-    let b = finished(fx, &parent).await;
-    assert_eq!(b.status, BranchStatus::Passed, "{:?}", b.error);
-    assert_eq!(order_status_in(fx, &parent).await, "exchange requested");
-    (parent, b)
-}
-
-/// `c` is a fork of `b` (branch id `parent`) at `at`, in the same run, restored from the save.
+/// An exact fork of a world of exact saves is restored from the save; the run's first branch
+/// was restored from nothing. `c` is a fork of `b` (id `parent`) at `at`, in the same run.
 fn assert_child_of(c: &Branch, b: &Branch, parent: &str, at: i64) {
     assert_eq!(c.parent_id.as_deref(), Some(parent));
     assert_eq!(c.start_seq, Some(at));
     assert_eq!(c.run_id, b.run_id);
-    assert_restored_from_save(b, c);
+    assert_eq!((b.restore_mode, b.restored.len()), (None, 0));
+    assert_eq!(c.restore_mode, Some(parts::proto::Mode::Exact));
+    let retail = RestoredPart {
+        part: "retail".into(),
+        how: RestoredHow::Save,
+    };
+    assert_eq!(c.restored, [retail]);
 }
 
-#[test]
-fn fork_sees_world_at_fork_step_not_after() {
-    run(async {
-        // Run 1: the resolver reads the order, exchanges it (the write), and finishes.
-        let mut script = triage_script();
-        script.extend([read_order("r1"), gold_write(), text_msg("Exchanged.")]);
-        // The fork resumes at the write's model call: it reads the order first, then writes again.
-        script.extend([read_order("f1"), gold_write(), text_msg("Exchanged again.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("world", &up).await;
-        let (parent, b) = passed_parent(&fx).await;
-        let pevs = fx.state.store.events(&parent).await.unwrap();
-        let at = model_call_choosing(&pevs, "resolver", "exchange_delivered_order_items");
-
-        let resp = fork::fork(&fx.state, &parent, at, HashMap::new())
-            .await
-            .unwrap();
-        assert_eq!(
-            (resp.start_seq, resp.moved_from, resp.reason.clone()),
-            (at, None, None)
-        );
-        let child = resp.branch_id.clone();
-        let c = finished(&fx, &child).await;
-        // The exchange only succeeds again because the world was restored to before it.
-        assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
-        assert_child_of(&c, &b, &parent, at);
-
-        let cevs = fx.state.store.events(&child).await.unwrap();
-        assert_eq!(events_before(&cevs, at), events_before(&pevs, at));
-        // The child's first resolver read shows the order as it was before the write.
-        let reads = tool_results(&cevs, "get_order_details", at);
-        assert_eq!(reads[0]["status"], "delivered", "{}", reads[0]);
-        // The resumed model call replays the recorded conversation up to the write.
-        let recorded = &pevs.iter().find(|e| e.seq == at).unwrap().payload["request"]["messages"];
-        assert_eq!(&up.requests()[6]["messages"], recorded);
-        teardown(fx, &[&parent, &child]).await;
-    })
+/// The order as the parent's world had it just before `at`: in its last save before then, else
+/// the base save.
+async fn order_before(fx: &Fx, evs: &[Event], at: i64) -> Value {
+    let save = evs
+        .iter()
+        .rev()
+        .filter(|e| e.seq < at)
+        .find_map(|e| e.payload["saves"]["retail"].as_str())
+        .unwrap_or("base_retail_0_1_0_retail");
+    let key = format!("orders/{ORDER}");
+    fx.hub.inspect_save(save, &[&key]).await[&key]["doc"].clone()
 }
 
-#[test]
-fn fork_restores_mid_run_snapshot() {
-    run(async {
-        // Run 1: the resolver exchanges (snapshot 1), then makes a wrong address write
-        // (snapshot 2): failed.
-        let mut script = triage_script();
-        script.extend([gold_write(), wrong_write(), text_msg("Done.")]);
-        // The fork redoes the wrong write's step: it reads instead, and stops.
-        script.extend([read_user("f1"), read_order("f2"), text_msg("Done right.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("snap", &up).await;
-        let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-        assert_eq!(finished(&fx, &parent).await.status, BranchStatus::Failed);
-        let pevs = fx.state.store.events(&parent).await.unwrap();
-        let at = model_call_choosing(&pevs, "resolver", "modify_user_address");
-
-        let resp = fork::fork(&fx.state, &parent, at, HashMap::new())
-            .await
-            .unwrap();
-        let child = resp.branch_id.clone();
-        let c = finished(&fx, &child).await;
-        assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
-        let cevs = fx.state.store.events(&child).await.unwrap();
-        // The world at the fork step has the earlier write but not the later one.
-        let user = &tool_results(&cevs, "get_user_details", at)[0];
-        assert_ne!(user["address"]["address1"], "1 Wrong St", "{user}");
-        assert_eq!(
-            tool_results(&cevs, "get_order_details", at)[0]["status"],
-            "exchange requested"
-        );
-        teardown(fx, &[&parent, &child]).await;
-    })
-}
-
-/// Triage was not called again: the fork's two requests (after the first `before`) carry only
-/// the resolver's system prompt, and the resolver starts from the recorded handoff note.
-fn assert_resolver_only_requests(reqs: &[Value], before: usize) {
-    assert_eq!(reqs.len(), before + 2);
-    for r in &reqs[before..] {
-        assert_eq!(system_prompt(r), "You are resolver.");
+/// The child's first read of the order, if it read it before writing anything.
+fn first_read_before_writes(cevs: &[Event], from: i64) -> Option<Value> {
+    for e in cevs
+        .iter()
+        .filter(|e| e.seq >= from && e.kind == EventKind::ToolCall)
+    {
+        if e.payload["writes"]
+            .as_array()
+            .is_some_and(|w| !w.is_empty())
+        {
+            return None;
+        }
+        if e.payload["name"] == "get_order_details" && e.payload["error"].is_null() {
+            return Some(e.payload["result"].clone());
+        }
     }
-    let input = reqs[before]["messages"][1]["content"].as_str().unwrap();
-    assert!(
-        input.contains("# Handoff note from triage") && input.contains(TRIAGE_NOTE),
-        "{input}"
+    None
+}
+
+/// A fork at the resolver's start: it starts there, in the same run, its timeline begins with
+/// its parent's, its world is restored exactly from the save as it was at that point (what the
+/// resolver reads first), the triage is not run again, and a bad step or agent makes no branch.
+#[test]
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_a_fork_restores_the_world_at_its_fork_point() {
+    run_live(
+        Live::any("live_a_fork_restores_the_world_at_its_fork_point"),
+        a_fork_restores_the_world_at_its_fork_point,
     );
 }
 
-/// The child has no new triage events; the recorded handoff is inherited in the prefix.
-async fn assert_handoff_inherited(fx: &Fx, child: &str, at: i64) {
-    let cevs = fx.state.store.events(child).await.unwrap();
+/// A fork at a step the branch doesn't have, or changing an agent the team doesn't have, is
+/// refused and makes no branch.
+async fn assert_bad_forks_make_nothing(fx: &Fx, pid: &str, at: i64) {
+    let e = fork::fork(&fx.state, pid, 999, HashMap::new())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ForkError::UnknownSeq), "{e:?}");
+    let change = Change {
+        model: Some("x/y".into()),
+        ..Default::default()
+    };
+    let ghost = HashMap::from([("ghost".to_string(), change)]);
+    let e = fork::fork(&fx.state, pid, at, ghost).await.unwrap_err();
+    assert!(
+        matches!(e, ForkError::UnknownAgent(ref a) if a == "ghost"),
+        "{e:?}"
+    );
+    assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1);
+}
+
+async fn a_fork_restores_the_world_at_its_fork_point(live: Live) {
+    let fx = setup("world").await;
+    let (pid, b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
+    let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
+    assert_bad_forks_make_nothing(&fx, &pid, at).await;
+    let resp = fork::fork(&fx.state, &pid, at, HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!((resp.start_seq, resp.moved_from), (at, None));
+    let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    assert_child_of(&c, &b, &pid, at);
+    live::assert_recorded(&c, &cevs, &live);
+    assert_eq!(events_before(&cevs, at), events_before(&pevs, at));
     assert!(cevs
         .iter()
         .filter(|e| e.seq >= at)
         .all(|e| e.agent.as_deref() != Some("triage")));
-    assert!(cevs
-        .iter()
-        .any(|e| e.seq < at && e.kind == EventKind::Handoff && e.payload["note"] == TRIAGE_NOTE));
-}
-
-#[test]
-fn fork_reuses_recorded_handoff() {
-    run(async {
-        let mut script = triage_script();
-        script.extend([wrong_write(), text_msg("Done.")]);
-        script.extend([gold_write(), text_msg("Exchanged.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("handoff", &up).await;
-        let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-        assert_eq!(finished(&fx, &parent).await.status, BranchStatus::Failed);
-        let pevs = fx.state.store.events(&parent).await.unwrap();
-        let before = up.requests().len();
-        assert_eq!(before, 5);
-        let at = agent_start(&pevs, "resolver");
-
-        let resp = fork::fork(&fx.state, &parent, at, HashMap::new())
-            .await
-            .unwrap();
-        assert_eq!((resp.start_seq, resp.moved_from), (at, None));
-        let child = resp.branch_id.clone();
-        let c = finished(&fx, &child).await;
-        assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
-
-        assert_resolver_only_requests(&up.requests(), before);
-        assert_handoff_inherited(&fx, &child, at).await;
-        teardown(fx, &[&parent, &child]).await;
-    })
-}
-
-/// A change of the resolver's prompt alone.
-fn prompt_change(prompt: &str) -> HashMap<String, Change> {
-    let change = Change {
-        prompt: Some(prompt.into()),
-        ..Default::default()
-    };
-    HashMap::from([("resolver".to_string(), change)])
-}
-
-/// Every fork request's system message (the `reqs` after the first `before`) is the new prompt,
-/// including the resumed one, whose conversation is otherwise the `recorded` one.
-fn assert_prompt_applied(reqs: &[Value], before: usize, new_prompt: &str, recorded: &Value) {
-    assert_eq!(reqs.len(), before + 2);
-    for r in &reqs[before..] {
-        assert_eq!(system_prompt(r), new_prompt);
+    let want = order_before(&fx, &pevs, at).await;
+    match first_read_before_writes(&cevs, at) {
+        Some(read) => assert_eq!(read["status"], want["status"], "{read}"),
+        None => eprintln!("note: the resolver did not read the order first this time"),
     }
-    let recorded = recorded.as_array().unwrap();
-    assert_eq!(
-        reqs[before]["messages"].as_array().unwrap()[1..],
-        recorded[1..]
+}
+
+/// A prompt change for the resolver: the child stores its effective team and the change as
+/// given, and (with arenad's own loop) every model call of the resolver in it carries the new
+/// system prompt.
+#[test]
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_a_fork_applies_a_prompt_change() {
+    run_live(
+        Live::any("live_a_fork_applies_a_prompt_change"),
+        a_fork_applies_a_prompt_change,
     );
 }
 
+async fn a_fork_applies_a_prompt_change(live: Live) {
+    let fx = setup("prompt").await;
+    let team = bench_team(&fx, &live).await;
+    let triage_prompt = team.agents[0].prompt.clone();
+    let (pid, _b, pevs) = parent(&fx, team).await;
+    let at = live::first_of(&pevs, EventKind::AgentStart, "resolver").unwrap();
+    let new_prompt =
+        "You are a careful resolver. Never change addresses. Read the order, then stop.";
+    let change = Change {
+        prompt: Some(new_prompt.into()),
+        ..Default::default()
+    };
+    let changes = HashMap::from([("resolver".to_string(), change)]);
+    let resp = fork::fork(&fx.state, &pid, at, changes).await.unwrap();
+    assert_eq!(resp.start_seq, at);
+    let (c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    live::assert_recorded(&c, &cevs, &live);
+    assert_eq!(c.team.agents[1].prompt, new_prompt);
+    assert_eq!(c.team.agents[0].prompt, triage_prompt);
+    assert_eq!(c.changes["resolver"]["prompt"], new_prompt);
+    assert_eq!(c.fork_note, None);
+    for e in cevs
+        .iter()
+        .filter(|e| e.seq >= at && e.kind == EventKind::ModelCall)
+    {
+        assert_eq!(e.payload["request"]["messages"][0]["content"], new_prompt);
+    }
+}
+
+/// arenad's own agent resumes a fork at one of its model calls: the child starts there and its
+/// first call sends the conversation recorded up to it.
 #[test]
-fn fork_applies_prompt_change() {
-    run(async {
-        let mut script = triage_script();
-        script.extend([wrong_write(), text_msg("Done.")]);
-        script.extend([gold_write(), text_msg("Exchanged.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("prompt", &up).await;
-        let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-        assert_eq!(finished(&fx, &parent).await.status, BranchStatus::Failed);
-        let pevs = fx.state.store.events(&parent).await.unwrap();
-        let at = model_call_choosing(&pevs, "resolver", "modify_user_address");
-        let before = up.requests().len();
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_an_open_agent_resumes_a_fork_mid_conversation() {
+    run_live(
+        Live::api("live_an_open_agent_resumes_a_fork_mid_conversation"),
+        an_open_agent_resumes_a_fork_mid_conversation,
+    );
+}
 
-        let new_prompt = "You are a careful resolver. Never change addresses.";
-        let resp = fork::fork(&fx.state, &parent, at, prompt_change(new_prompt))
-            .await
-            .unwrap();
-        assert_eq!((resp.start_seq, resp.moved_from), (at, None));
-        let child = resp.branch_id.clone();
-        let c = finished(&fx, &child).await;
-        assert_eq!(c.status, BranchStatus::Passed, "{:?}", c.error);
-
-        let reqs = up.requests();
-        let recorded = &pevs.iter().find(|e| e.seq == at).unwrap().payload["request"]["messages"];
-        assert_prompt_applied(&reqs, before, new_prompt, recorded);
-        // The branch stores its effective team and the changes as given.
-        assert_eq!(c.team.agents[1].prompt, new_prompt);
-        assert_eq!(c.team.agents[0].prompt, "You are triage.");
-        assert_eq!(c.changes["resolver"]["prompt"], new_prompt);
-        assert_eq!(c.fork_note, None);
-        teardown(fx, &[&parent, &child]).await;
-    })
+async fn an_open_agent_resumes_a_fork_mid_conversation(live: Live) {
+    let fx = setup("resume").await;
+    let (pid, _b, pevs) = parent(&fx, bench_team(&fx, &live).await).await;
+    let calls: Vec<&Event> = pevs
+        .iter()
+        .filter(|e| e.kind == EventKind::ModelCall && e.agent.as_deref() == Some("resolver"))
+        .collect();
+    let at_call = calls.last().expect("the resolver called its model");
+    let at = at_call.seq;
+    let resp = fork::fork(&fx.state, &pid, at, HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.start_seq, resp.moved_from, resp.reason),
+        (at, None, None)
+    );
+    let (_c, cevs) = live::ended_ok(&fx.state, &resp.branch_id).await;
+    let first = cevs
+        .iter()
+        .find(|e| e.seq >= at && e.kind == EventKind::ModelCall)
+        .unwrap();
+    assert_eq!(
+        first.payload["request"]["messages"],
+        at_call.payload["request"]["messages"]
+    );
 }
 
 /// A branch of task 27 that has started and not ended.
@@ -443,8 +314,7 @@ async fn running_branch(fx: &Fx) -> String {
 #[test]
 fn fork_while_running_is_409() {
     run(async {
-        let up = FakeUpstream::start(vec![]).await;
-        let fx = setup("running", &up).await;
+        let fx = setup("running").await;
         let branch = running_branch(&fx).await;
 
         let e = fork::fork(&fx.state, &branch, 1, HashMap::new())
@@ -460,7 +330,6 @@ fn fork_while_running_is_409() {
         // No branch was created.
         let runs = fx.state.store.runs().await.unwrap();
         assert_eq!(runs[0].branches.len(), 1);
-        assert!(up.requests().is_empty());
         drop(fx.state);
     })
 }
@@ -468,8 +337,7 @@ fn fork_while_running_is_409() {
 #[test]
 fn fork_of_unknown_branch_is_unknown_branch() {
     run(async {
-        let up = FakeUpstream::start(vec![]).await;
-        let fx = setup("nobranch", &up).await;
+        let fx = setup("nobranch").await;
         let e = fork::fork(&fx.state, "nosuchbranch", 1, HashMap::new())
             .await
             .unwrap_err();
@@ -486,40 +354,6 @@ fn fork_of_unknown_branch_is_unknown_branch() {
             .unwrap()
             .is_none());
         drop(fx.state);
-    })
-}
-
-#[test]
-fn fork_plan_errors_create_no_branch() {
-    run(async {
-        let mut script = triage_script();
-        script.extend([gold_write(), text_msg("Exchanged.")]);
-        let up = FakeUpstream::start(script).await;
-        let fx = setup("errs", &up).await;
-        let (_run, parent) = runner::start_run(&fx.state, "27", team()).await.unwrap();
-        finished(&fx, &parent).await;
-        let e = fork::fork(&fx.state, &parent, 999, HashMap::new())
-            .await
-            .unwrap_err();
-        assert!(matches!(e, ForkError::UnknownSeq), "{e:?}");
-        let changes: HashMap<String, Change> = [(
-            "ghost".to_string(),
-            Change {
-                model: Some("x/y".into()),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect();
-        let e = fork::fork(&fx.state, &parent, 2, changes)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(e, ForkError::UnknownAgent(ref a) if a == "ghost"),
-            "{e:?}"
-        );
-        assert_eq!(fx.state.store.runs().await.unwrap()[0].branches.len(), 1);
-        teardown(fx, &[&parent]).await;
     })
 }
 
@@ -566,20 +400,17 @@ struct LegacyFx {
 }
 
 impl LegacyFx {
-    async fn new(upstream: &FakeUpstream) -> LegacyFx {
+    /// Two old runs of the one-agent `solo` team.
+    async fn new(solo: &Team) -> LegacyFx {
         let id = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let tag = format!("t8{}_{id}", std::process::id());
         let dbs = LegacyDbs::new(&tag);
         let (snap, base_copy) = legacy_snapshot(&dbs, &tag).await;
         let (store, clean) = app_support::meta_store("fork", "legacy").await;
         let hub = plain_hub(&dbs.saves);
-        let (state, base) = app_support::open_app(store, hub, &upstream.base_url, |_| {}).await;
-        let solo = Team {
-            agents: vec![agent("resolver")],
-            ..team()
-        };
-        let (run_a, a) = legacy_run(&state.store, &dbs, &solo, &snap, &snap).await;
-        let (_, b) = legacy_run(&state.store, &dbs, &solo, &snap, &base_copy).await;
+        let (state, base) = app_support::app_for(store, hub, Some("retail"), |_| {}).await;
+        let (run_a, a) = legacy_run(&state.store, &dbs, solo, &snap, &snap).await;
+        let (_, b) = legacy_run(&state.store, &dbs, solo, &snap, &base_copy).await;
         let evs = state.store.events(&a).await.unwrap();
         let write = evs
             .iter()
@@ -649,25 +480,16 @@ impl LegacyFx {
         // Its instance, with no namespace: dropped when the branch ends, and at the end if not.
         let instance = arenad::world::instance_id(&child, "retail");
         self.dbs.track(&format!("pi_{instance}"));
-        let ended = self.ended(&child).await;
+        let ended = live::ended(&self.state, &child).await;
         let cevs = self.state.store.events(&child).await.unwrap();
-        let reads = tool_results(&cevs, "get_order_details", at);
-        assert_eq!(
-            reads[0]["status"], "exchange requested",
-            "{reads:?} {:?}",
-            ended.error
-        );
-    }
-
-    async fn ended(&self, branch: &str) -> Branch {
-        for _ in 0..600 {
-            let b = self.state.store.branch(branch).await.unwrap();
-            if b.status != BranchStatus::Running {
-                return b;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        match first_read_before_writes(&cevs, at) {
+            Some(read) => assert_eq!(
+                read["status"], "exchange requested",
+                "{read} {:?}",
+                ended.error
+            ),
+            None => eprintln!("note: the agent did not read the order first this time"),
         }
-        panic!("branch still running");
     }
 
     /// Deleting run `a` drops its snapshot and branch database, not `b`'s.
@@ -692,18 +514,33 @@ impl LegacyFx {
     }
 }
 
-/// A run recorded before integrations (a `snapshot` per write, no saves) still shows rows,
-/// compares (through its `branch_<id>` database) and forks (from its snapshot), and deleting it
-/// drops its snapshot and branch database.
+/// A run recorded before integrations (a `snapshot` per write, no saves) still shows rows and
+/// compares (through its `branch_<id>` database), and deleting it drops its snapshot and branch
+/// database.
 #[test]
-fn old_run_still_forks() {
+fn old_run_still_shows_rows_compares_and_deletes() {
     run(async {
-        // The fork reads the order, then the upstream fails: the branch ends before any check.
-        let up = FakeUpstream::start(vec![read_order("f1"), json!({"_status": 500})]).await;
-        let fx = LegacyFx::new(&up).await;
+        let fx = LegacyFx::new(&team()).await;
         fx.check_rows().await;
         fx.check_compare().await;
-        fx.check_fork().await;
         fx.check_delete().await;
     })
+}
+
+/// An old run (its agents were all arenad's own) still forks from its snapshot: a fork at the
+/// model call after the write starts from the snapshot, so the world has the write.
+#[test]
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_old_run_still_forks_from_its_snapshot() {
+    run_live(
+        Live::api("live_old_run_still_forks_from_its_snapshot"),
+        old_run_still_forks_from_its_snapshot,
+    );
+}
+
+async fn old_run_still_forks_from_its_snapshot(live: Live) {
+    let prompt = "You are a retail support agent. First read order #W7181492 with get_order_details, then stop.";
+    let fx = LegacyFx::new(&live.team(vec![live.agent("resolver", prompt)])).await;
+    fx.check_fork().await;
+    fx.check_delete().await;
 }

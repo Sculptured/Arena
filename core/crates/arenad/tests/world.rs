@@ -1,9 +1,9 @@
 //! `/api/world`, `/api/usage`, `/api/gc` and `/api/team/default` over toy integrations and a toy
-//! benchmark.
+//! benchmark. `live_`: a run on a real model (see `support/live.rs`).
 #[path = "support/app.rs"]
 mod app_support;
-#[path = "support/fake_upstream.rs"]
-mod fake_upstream;
+#[path = "support/live.rs"]
+mod live;
 #[path = "support/packages.rs"]
 mod packages;
 #[path = "support/pg.rs"]
@@ -15,13 +15,8 @@ use std::{
     time::Duration,
 };
 
-use arenad::{
-    agents::{open::OpenDriver, Driver},
-    app::{AppState, Config},
-    model::*,
-    providers::ProviderConfig,
-};
-use fake_upstream::FakeUpstream;
+use arenad::{app::AppState, model::*};
+use live::Live;
 use packages::{Package, TestHub, ToyRoot};
 use pg::Cleanup;
 use serde_json::{json, Value};
@@ -31,6 +26,13 @@ static RT: LazyLock<tokio::runtime::Runtime> =
 
 fn run<F: Future>(f: F) -> F::Output {
     RT.block_on(f)
+}
+
+/// Runs `body` on the live model, when there is one (else the test was skipped, said why).
+fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) -> F) {
+    if let Some(live) = live {
+        run(body(live));
+    }
 }
 
 /// An app whose benchmark is the toy `toybench`; its hub, metadata database and packages are
@@ -50,18 +52,9 @@ fn integration(name: &str, args: &[&str]) -> Package {
     packages::toy(name, "integration", &argv)
 }
 
-/// An app over the toy `integrations` and a benchmark whose parts are `parts` (`part=integration`).
+/// An app over the toy `integrations` and a benchmark whose parts are `parts` (`part=integration`),
+/// with the real drivers on the configured providers.
 async fn setup(tag: &str, integrations: Vec<Package>, parts: &[&str]) -> Fx {
-    setup_with(tag, integrations, parts, None).await
-}
-
-/// `setup`, with open agents talking to the (fake) model upstream at `upstream`, if given.
-async fn setup_with(
-    tag: &str,
-    integrations: Vec<Package>,
-    parts: &[&str],
-    upstream: Option<&str>,
-) -> Fx {
     let mut bench = vec!["bench"];
     for p in parts {
         bench.extend(["--part", p]);
@@ -71,17 +64,8 @@ async fn setup_with(
     let root = packages::package_root(tag, &all);
     let hub = TestHub::new(std::slice::from_ref(&root.0));
     let (store, clean) = app_support::meta_store("world", tag).await;
-    let (listener, base) = app_support::bind().await;
-    let mut config = Config::new();
-    if let Some(url) = upstream {
-        config.providers = ProviderConfig::with_upstream(url);
-        config.self_base = base.clone();
-    }
-    let state = AppState::new(store, hub.hub.clone(), config).with_benchmark("toybench");
-    let state = Arc::new(state);
-    let driver: Arc<dyn Driver> = Arc::new(OpenDriver::new(state.clone()));
-    assert!(state.install_drivers([(AgentKind::Open, driver)].into_iter().collect()));
-    app_support::serve(listener, &state);
+    let (state, base) =
+        app_support::app_for(store, hub.hub.clone(), Some("toybench"), |_| {}).await;
     Fx {
         state,
         hub,
@@ -372,26 +356,25 @@ fn gc_reports_failing_integration() {
 /// A run that has just been created is live at once: a gc right after `POST /api/runs` returns
 /// is refused, with no gap for it to drop the run's instances.
 #[test]
-fn gc_refused_right_after_run_starts() {
-    run(async {
-        let slow = json!({"role": "assistant", "content": "Done.", "_delay_ms": 3000});
-        let up = FakeUpstream::start(vec![slow]).await;
-        let part = integration("toy-a", &["--gc"]);
-        let fx = setup_with("gcnow", vec![part], &["box=toy-a"], Some(&up.base_url)).await;
-        let agent = json!({"id": "a", "name": "A", "kind": "open", "model": "fake/model",
-                           "prompt": "You are A."});
-        let team = json!({"id": "t", "name": "T", "agents": [agent]});
-        let client = reqwest::Client::new();
-        let req = client.post(format!("{}/api/runs", fx.base));
-        let (st, v) = app_support::send(req.json(&json!({"task_id": "t1", "team": team}))).await;
-        assert_eq!(st, 200, "{v}");
-        let (st, v) = fx.post("/api/gc").await;
-        assert_eq!(st, 409, "{v}");
-        for _ in 0..100 {
-            if fx.state.live.read().unwrap().is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
+#[ignore = "live: runs a real model (support/live.rs)"]
+fn live_gc_refused_right_after_run_starts() {
+    run_live(
+        Live::any("live_gc_refused_right_after_run_starts"),
+        gc_refused_right_after_run_starts,
+    );
+}
+
+async fn gc_refused_right_after_run_starts(live: Live) {
+    let part = integration("toy-a", &["--gc"]);
+    let fx = setup("gcnow", vec![part], &["box=toy-a"]).await;
+    let team = live.team(vec![live.agent("a", "Call the peek tool once, then stop.")]);
+    let client = reqwest::Client::new();
+    let req = client.post(format!("{}/api/runs", fx.base));
+    let (st, v) = app_support::send(req.json(&json!({"task_id": "t1", "team": team}))).await;
+    assert_eq!(st, 200, "{v}");
+    let branch = v["branch_id"].as_str().unwrap().to_string();
+    let (st, v) = fx.post("/api/gc").await;
+    assert_eq!(st, 409, "{v}");
+    let (b, evs) = live::ended_ok(&fx.state, &branch).await;
+    live::assert_recorded(&b, &evs, &live);
 }
