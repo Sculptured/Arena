@@ -29,7 +29,7 @@ export function useScenario(open: boolean, tasks: string[]) {
 
 export type ScenarioState = ReturnType<typeof useScenario>;
 
-function ParamInput({ spec, value, onChange, disabled }: { spec: ParamSpec; value: ParamValue | undefined; onChange: (raw: string) => void; disabled: boolean }) {
+export function ParamInput({ spec, value, onChange, disabled }: { spec: ParamSpec; value: ParamValue | undefined; onChange: (raw: string) => void; disabled: boolean }) {
   const bad = paramProblem(spec, value);
   return (
     <Field label={spec.label} className={spec.kind === 'int' ? 'w-36' : 'w-52'}>
@@ -66,7 +66,7 @@ function Preview({ s }: { s: ScenarioState }) {
   const any = chosen(s.options, s.sel).length > 0;
   return (
     <div className="flex flex-col gap-1 rounded-md border border-line bg-sunken px-2.5 py-2">
-      <span className="text-2xs font-medium tracking-wide text-muted uppercase">What will happen</span>
+      <span className="text-2xs font-medium text-muted">What will happen</span>
       <p className={cn('text-sm', any ? 'font-medium' : 'text-muted')}>{any && <span className="mr-1 font-mono text-warn">▼</span>}{previewText(s.options, s.sel)}</p>
       {s.problem && <p className="text-xs font-medium text-alarm" role="status">⚠ {s.problem}</p>}
     </div>
@@ -79,7 +79,7 @@ export default function ScenarioBuilder({ s, busy }: { s: ScenarioState; busy: b
   if (!s.options?.disruptions.length) return null;
   return (
     <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1 text-2xs font-medium tracking-wide text-muted uppercase">Disruptions · scheduled inside the simulated parts</legend>
+      <legend className="mb-1 text-2xs font-medium text-muted">Disruptions · scheduled inside the simulated parts</legend>
       <div className="rounded-md border border-line bg-surface">
         {s.options.disruptions.map((d) => <DisruptionRow key={d.id} d={d} s={s} busy={busy} />)}
       </div>

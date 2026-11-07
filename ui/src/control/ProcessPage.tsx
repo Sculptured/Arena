@@ -7,7 +7,7 @@ import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel, PanelHeader } from '../components/ui/panel';
 import { Split } from '../components/ui/split';
 import { ErrorState, LoadingState } from '../components/ui/state';
-import { taskOf } from '../pages/Run';
+import { taskOf } from '../run/runStats';
 import ActionTimeline from '../run/ActionTimeline';
 import Inspector from '../run/Inspector';
 import { stepOrder } from '../run/timelineLayout';

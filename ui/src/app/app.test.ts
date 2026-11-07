@@ -13,8 +13,8 @@ const suites = [suite('s1', 'v1'), suite('s2', 'v2')];
 describe('command palette', () => {
   it('lists pages, actions, every branch and every suite at the root', () => {
     const items = itemsFor({ kind: 'root' }, runs, suites);
-    expect(items.filter((i) => i.group === 'Go to').map((i) => i.label)).toEqual(['Runs', 'Suites', 'Team']);
-    expect(items.find((i) => i.id === 'new-run')!.action).toEqual({ go: '/?new=run' });
+    expect(items.filter((i) => i.group === 'Go to').map((i) => i.label)).toEqual(['Run', 'History', 'Suites', 'Team editor']);
+    expect(items.find((i) => i.id === 'new-run')!.action).toEqual({ go: '/' });
     expect(items.find((i) => i.id === 'new-suite')!.action).toEqual({ go: '/suites?new=suite' });
     expect(items.filter((i) => i.group === 'Runs').map((i) => [i.label, i.action])).toEqual([
       ['Demo run', { go: '/runs/r1/b1' }], ['Demo run · fork b2', { go: '/runs/r1/b2' }],
@@ -38,7 +38,9 @@ describe('command palette', () => {
     const here = hereOf('/runs/r1/b2');
     expect(here).toEqual({ page: 'runs', runId: 'r1', branchId: 'b2' });
     expect(itemsFor({ kind: 'root' }, runs, suites, here)[0]).toMatchObject({ id: 'world-here', action: { go: '/world/r1/b2' } });
-    expect(itemsFor({ kind: 'root' }, runs, suites, hereOf('/world/r1/b2'))[0].id).toBe('go-runs');
+    expect(itemsFor({ kind: 'root' }, runs, suites, hereOf('/world/r1/b2')).map((i) => i.id).slice(0, 2)).toEqual(['runs-here', 'control-here']);
+    expect(hereOf('/', '?run=r1&branch=b2')).toEqual({ page: 'home', runId: 'r1', branchId: 'b2' });
+    expect(hereOf('/', '')).toBeNull();
     expect(hereOf('/suites/s1')).toBeNull();
     expect(placeholderOf({ kind: 'world' })).toBe('Pick the run whose world to open…');
   });

@@ -34,7 +34,7 @@ function checkWhy(p: Partial<CheckPayload>, passed: boolean): string {
 }
 
 /** The banner of a branch that ended; `null` while it runs. */
-export function resultOf(d: Pick<BranchDetail, 'status' | 'events' | 'error' | 'paused'>): Result | null {
+export function resultOf(d: Pick<BranchDetail, 'status' | 'events' | 'error'>): Result | null {
   const flow = flowOf(d);
   const check = [...d.events].reverse().find((e) => e.kind === 'check')?.payload as Partial<CheckPayload> | undefined;
   switch (flow) {

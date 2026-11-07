@@ -61,15 +61,22 @@ function Footer({ nested }: { nested: boolean }) {
   );
 }
 
+/** The mode (opened for one thing, such as the Advanced menu's "Compare two runs…", it starts there) and what it lists. */
+function useItems(open: boolean, start?: Mode) {
+  const [mode, setMode] = useState<Mode>({ kind: 'root' });
+  const lists = useLists(open);
+  const { pathname, search } = useLocation();
+  useEffect(() => { if (open && start) setMode(start); }, [open, start]);
+  const items = useMemo(() => itemsFor(mode, lists.runs, lists.suites, hereOf(pathname, search)), [mode, lists.runs, lists.suites, pathname, search]);
+  return { mode, setMode, items, lists };
+}
+
 /** The palette: go to a run, suite or page; start a run or suite; compare two runs or suites. */
-export default function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export default function CommandPalette({ open, onOpenChange, start }: { open: boolean; onOpenChange: (o: boolean) => void; start?: Mode }) {
   const nav = useNavigate();
   const theme = useTheme();
-  const [mode, setMode] = useState<Mode>({ kind: 'root' });
   const [query, setQuery] = useState('');
-  const lists = useLists(open);
-  const { pathname } = useLocation();
-  const items = useMemo(() => itemsFor(mode, lists.runs, lists.suites, hereOf(pathname)), [mode, lists.runs, lists.suites, pathname]);
+  const { mode, setMode, items, lists } = useItems(open, start);
   const close = (o: boolean) => { onOpenChange(o); if (!o) { setMode({ kind: 'root' }); setQuery(''); } };
   const run = (a: Action) => {
     if ('mode' in a) { setMode(a.mode); setQuery(''); return; }

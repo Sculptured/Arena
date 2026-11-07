@@ -8,7 +8,7 @@ export type Flow = 'starting' | 'running' | 'paused' | 'passed' | 'failed' | 'st
 const MARK: Record<Flow, Mark> = {
   starting: { glyph: '◔', word: 'Starting', abnormal: false },
   running: { glyph: '◐', word: 'Running', abnormal: false },
-  paused: { glyph: '❚❚', word: 'Paused', abnormal: false },
+  paused: { glyph: '‖', word: 'Paused', abnormal: false },
   passed: { glyph: '✓', word: 'Passed', abnormal: false },
   failed: { glyph: '✕', word: 'Failed', abnormal: true },
   stopped: { glyph: '■', word: 'Stopped', abnormal: false },
@@ -24,11 +24,11 @@ export function pausedIn(events: Event[]): boolean {
   return last?.kind === 'pause';
 }
 
-/** The run's flow; `null` detail while it starts (its world is being restored). */
-export function flowOf(d: Pick<BranchDetail, 'status' | 'events' | 'paused'> | null): Flow {
+/** The run's flow (paused as its record says); `null` detail while it starts (its world is being restored). */
+export function flowOf(d: Pick<BranchDetail, 'status' | 'events'> | null): Flow {
   if (!d) return 'starting';
   switch (d.status) {
-    case 'running': return d.paused ?? pausedIn(d.events) ? 'paused' : 'running';
+    case 'running': return pausedIn(d.events) ? 'paused' : 'running';
     case 'infra_error': return 'error';
     default: return d.status;
   }

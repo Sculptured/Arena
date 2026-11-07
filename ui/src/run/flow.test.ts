@@ -7,12 +7,12 @@ const ev = (seq: number, kind: Event['kind'], at: string, payload: unknown = {})
 const t = (s: number) => new Date(Date.UTC(2026, 10, 7, 12, 0, s)).toISOString();
 
 describe('run flow', () => {
-  it('derives paused from the last pause or resume, unless the server says', () => {
+  it('derives paused from the last pause or resume', () => {
     const events = [ev(1, 'run_start', t(0)), ev(2, 'pause', t(5)), ev(3, 'resume', t(9)), ev(4, 'pause', t(12))];
     expect(pausedIn(events)).toBe(true);
     expect(pausedIn(events.slice(0, 3))).toBe(false);
     expect(flowOf({ status: 'running', events })).toBe('paused');
-    expect(flowOf({ status: 'running', events, paused: false })).toBe('running');
+    expect(flowOf({ status: 'running', events: events.slice(0, 3) })).toBe('running');
     expect(flowOf(null)).toBe('starting');
     expect(flowOf({ status: 'infra_error', events: [] })).toBe('error');
     expect(flowOf({ status: 'stopped', events })).toBe('stopped');

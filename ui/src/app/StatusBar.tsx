@@ -20,7 +20,7 @@ function ApiMode({ statuses }: { statuses: ProviderStatus[] }) {
         <ChevronUp aria-hidden="true" className="size-3 shrink-0" />
       </PopoverTrigger>
       <PopoverContent side="top" className="w-[min(420px,calc(100vw-24px))]">
-        <p className="mb-2 text-2xs font-medium tracking-wide text-muted uppercase">API-mode providers</p>
+        <p className="mb-2 text-2xs font-medium text-muted">API-mode providers</p>
         <ProviderStatusLine statuses={statuses} loading={checked.loading} error={checked.error} onCheck={() => { checkProviders().catch(() => {}); }} />
       </PopoverContent>
     </Popover>
@@ -42,17 +42,26 @@ function Disk({ h }: { h: Health }) {
   );
 }
 
-/** The arena's own state along the bottom: agent CLIs found, API-mode providers, and saves on disk. */
+/** Saves this full or fuller are worth a look before the limit refuses new runs. */
+const NEARLY_FULL = 0.9;
+
+/** Only what needs attention, along the bottom: no model to run agents with, or saves nearly full. Nothing otherwise. */
 export default function StatusBar() {
   const h = useHealth();
   const checked = useCheckedProviders();
-  if (!h) return <footer className="h-7 border-t border-line bg-surface" />;
+  if (!h) return null;
+  const statuses = bestProviders(checked.list, h.providers);
+  const noCli = !h.claude && !h.codex;
+  const noModel = noCli && !statuses.some((s) => s.available);
+  const fill = diskFill(h);
+  const disk = !!fill && fill.fraction >= NEARLY_FULL;
+  if (!noModel && !disk) return null;
   return (
     // `status-line`: the hook the capture scripts (examples/*/capture) hide the bar by.
     <footer className="status-line bottom-0 z-40 flex min-h-7 flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-line bg-surface px-3 py-0.5 text-xs text-muted sm:sticky">
-      <span className="truncate" title="Agent CLIs found on this machine"><span className="text-faint">CLI</span> {modesLine(h)}</span>
-      <ApiMode statuses={bestProviders(checked.list, h.providers)} />
-      <span className="ml-auto"><Disk h={h} /></span>
+      {noModel && <span className="font-medium text-alarm">⚠ No model to run agents with: {modesLine(h)}, and no API key is set.</span>}
+      {noModel && <ApiMode statuses={statuses} />}
+      {disk && <span className="ml-auto"><Disk h={h} /></span>}
     </footer>
   );
 }

@@ -1,24 +1,22 @@
 import type { ColumnDef } from '@tanstack/react-table';
 import { MoreHorizontal, Play } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { deleteRun, runs as fetchRuns } from '../api';
 import { ApproximateMark, DISK_CHANGED, StatusChip, ago, formatTime } from '../components';
+import { taskName } from '../home/summary';
+import { useTasks } from '../home/useHome';
 import { Button } from '../components/ui/button';
 import { DataTable } from '../components/ui/data-table';
 import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
-import { FilterChips } from '../components/ui/filter-chips';
 import { Input } from '../components/ui/input';
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel } from '../components/ui/panel';
 import { EmptyState, ErrorState } from '../components/ui/state';
-import NewRunDialog from '../runs/NewRunDialog';
-import { type BranchRow, type RowFilter, STATUS_FILTERS, branchRows, rowMatches, runIsRunning, runTitle, statusCounts } from '../runs/runsTable';
+import { type BranchRow, branchRows, rowMatches, runIsRunning, runTitle } from '../runs/runsTable';
 import type { RunSummary } from '../types';
-
-export { branchTree } from '../runs/tree';
 
 /** The runs, polled every 3 s while any of them runs. */
 function useRuns() {
@@ -46,37 +44,38 @@ function RowMenu({ row, onDelete }: { row: BranchRow; onDelete: (r: RunSummary) 
         <Button variant="ghost" size="icon" aria-label="Run actions" onClick={(e) => e.stopPropagation()}><MoreHorizontal /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem onSelect={() => nav(`/runs/${row.run.id}/${row.branch.id}`)}>Open timeline</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => nav(`/control/${row.run.id}/${row.branch.id}`)}>Open process view</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => nav(openOf(row))}>Open</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => nav(`/runs/${row.run.id}/${row.branch.id}`)}>All details</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => nav(`/control/${row.run.id}/${row.branch.id}`)}>Process view</DropdownMenuItem>
         <DropdownMenuItem disabled={running} className="text-alarm" onSelect={() => onDelete(row.run)}>
-          {running ? 'Delete run (a branch is still running)' : 'Delete run…'}
+          {running ? 'Delete run (it is still running)' : 'Delete run…'}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function RunCell({ row }: { row: BranchRow }) {
-  if (row.depth === 0) return <span className="block truncate font-medium" title={runTitle(row.run)}>{runTitle(row.run)}</span>;
+/** A row opens on the Run screen: its result and timeline, with everything else one click away. */
+const openOf = (r: BranchRow) => `/?run=${encodeURIComponent(r.run.id)}&branch=${encodeURIComponent(r.branch.id)}`;
+
+function NameCell({ row, name }: { row: BranchRow; name: string }) {
+  if (row.depth === 0) return <span className="block truncate font-medium" title={name}>{name}</span>;
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-muted" style={{ paddingLeft: (row.depth - 1) * 14 }}>
-      <span aria-hidden="true" className="font-mono">↳</span><span>fork</span>
+      <span aria-hidden="true" className="font-mono">↳</span><span>Rerun</span>
       {row.branch.fork_note && <span className="max-w-[40ch] truncate" title={row.branch.fork_note}>{row.branch.fork_note}</span>}
+      <ApproximateMark of={row.branch} />
     </span>
   );
 }
 
-function columns(onDelete: (r: RunSummary) => void): ColumnDef<BranchRow, unknown>[] {
+function columns(nameOf: (r: BranchRow) => string, onDelete: (r: RunSummary) => void): ColumnDef<BranchRow, unknown>[] {
   return [
-    { id: 'status', header: 'Status', accessorFn: (r) => r.branch.status, cell: ({ row }) => <StatusChip status={row.original.branch.status} />, meta: { className: 'w-28' } },
-    { id: 'run', header: 'Run', enableSorting: false, cell: ({ row }) => <RunCell row={row.original} />, meta: { className: 'w-full max-w-0' } },
-    { id: 'task', header: 'Task', accessorFn: (r) => r.run.task_id, cell: ({ getValue }) => <span className="font-mono text-xs">{String(getValue())}</span> },
+    { id: 'name', header: 'Name', enableSorting: false, cell: ({ row }) => <NameCell row={row.original} name={nameOf(row.original)} />, meta: { className: 'w-full max-w-0' } },
+    { id: 'team', header: 'Team', accessorFn: (r) => r.branch.team.name, cell: ({ getValue }) => <span className="block max-w-56 truncate text-muted">{String(getValue())}</span>, meta: { className: 'hidden md:table-cell' } },
+    { id: 'result', header: 'Result', accessorFn: (r) => r.branch.status, cell: ({ row }) => <StatusChip status={row.original.branch.status} />, meta: { className: 'w-32' } },
     {
-      id: 'branch', header: 'Branch', enableSorting: false, meta: { className: 'hidden md:table-cell' },
-      cell: ({ row }) => <span className="flex items-center gap-1.5"><span className="font-mono text-xs text-muted">{row.original.branch.id.slice(0, 8)}</span><ApproximateMark of={row.original.branch} /></span>,
-    },
-    {
-      id: 'started', header: 'Started', accessorFn: (r) => r.branch.created_at, meta: { className: 'w-28 text-right' },
+      id: 'when', header: 'When', accessorFn: (r) => r.branch.created_at, meta: { className: 'w-28 text-right' },
       cell: ({ row }) => <span className="text-xs text-muted" title={formatTime(row.original.branch.created_at)}>{ago(row.original.branch.created_at)}</span>,
     },
     { id: 'menu', header: '', enableSorting: false, cell: ({ row }) => <RowMenu row={row.original} onDelete={onDelete} />, meta: { className: 'w-10 px-1' } },
@@ -108,42 +107,31 @@ function DeleteRunDialog({ run, onClose, onDone }: { run: RunSummary | null; onC
   );
 }
 
-function Toolbar({ filter, setFilter, counts }: { filter: RowFilter; setFilter: (f: RowFilter) => void; counts: ReturnType<typeof statusCounts> }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-      <FilterChips label="Status" options={STATUS_FILTERS} value={filter.status} counts={counts} onChange={(status) => setFilter({ ...filter, status })} />
-      <Input className="ml-auto w-full sm:w-64" placeholder="Filter by name, task or id" value={filter.text}
-        onChange={(e) => setFilter({ ...filter, text: e.target.value })} aria-label="Filter runs" />
-    </div>
-  );
-}
-
 export default function Runs() {
   const nav = useNavigate();
-  const [sp, setSp] = useSearchParams();
   const { runs, error, refresh } = useRuns();
-  const [filter, setFilter] = useState<RowFilter>({ status: 'all', text: '' });
+  const { tasks } = useTasks();
+  const [text, setText] = useState('');
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const rows = useMemo(() => (runs ? branchRows(runs) : null), [runs]);
-  const cols = useMemo(() => columns(setDeleting), []);
-  const newRun = sp.get('new') === 'run';
-  const setNewRun = (o: boolean) => setSp(o ? { new: 'run' } : {}, { replace: true });
+  const nameOf = useCallback((r: BranchRow) => runTitle(r.run, (id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : ''; }), [tasks]);
+  const cols = useMemo(() => columns(nameOf, setDeleting), [nameOf]);
+  const newRun = <Button variant="primary" asChild><Link to="/"><Play />New run</Link></Button>;
   return (
     <>
-      <PageHeader title="Runs" meta={runs ? `${runs.length} run${runs.length === 1 ? '' : 's'} · every step recorded and saved` : null}
-        actions={<Button variant="primary" onClick={() => setNewRun(true)}><Play />New run</Button>} />
+      <PageHeader title="History" meta={runs ? `${runs.length} run${runs.length === 1 ? '' : 's'}` : null} actions={newRun} />
       <PageBody>
         {error && runs && <ErrorState error={error} onRetry={refresh} />}
         <Panel>
-          <Toolbar filter={filter} setFilter={setFilter} counts={statusCounts(rows ?? [])} />
+          <div className="flex border-b border-line px-3 py-2">
+            <Input className="w-full sm:w-72" placeholder="Filter by name, team or result" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter runs" />
+          </div>
           <DataTable label="Runs" columns={cols} data={rows} getRowId={(r) => r.branch.id} loadingLabel="Loading runs…"
-            error={error} onRetry={refresh} filter={filter} filterFn={(r, f) => rowMatches(r, f as RowFilter)}
-            onOpen={(r) => nav(`/runs/${r.run.id}/${r.branch.id}`)} noMatch="No run matches the filter."
-            empty={<EmptyState title="No runs yet" hint="Start a run of a task with your team. Every step is recorded, and you can change and rerun from any of them."
-              action={<Button variant="primary" onClick={() => setNewRun(true)}><Play />New run</Button>} />} />
+            error={error} onRetry={refresh} filter={text} filterFn={(r, f) => rowMatches(r, f as string, nameOf(r))}
+            onOpen={(r) => nav(openOf(r))} noMatch="No run matches the filter."
+            empty={<EmptyState title="No runs yet" hint="Pick a task on the Run screen and press Run. Every step is recorded, and you can rewind to any of them." action={newRun} />} />
         </Panel>
       </PageBody>
-      <NewRunDialog open={newRun} onOpenChange={setNewRun} />
       <DeleteRunDialog run={deleting} onClose={() => setDeleting(null)} onDone={refresh} />
     </>
   );

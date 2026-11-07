@@ -41,3 +41,6 @@ export function checkMark(c: NonNullable<RunStats['check']>): Mark {
 export function safetyLine(s: NonNullable<RunStats['safety']>): string {
   return `${s.violated ? '◆ ' : ''}${s.violated} of ${s.total} violated`;
 }
+
+/** The task a branch's run is of, from its `run_start`. */
+export const taskOf = (events: Event[]) => (events.find((e) => e.kind === 'run_start')?.payload as { task_id?: string } | undefined)?.task_id ?? '';
