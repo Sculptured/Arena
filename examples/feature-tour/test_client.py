@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from behaviour import TASKS, behaviour
 from client import Calls, deployment_team
 from drive import audit_branch, suite_id
+from scenario import next_work_order
 
 
 class RecordingAPI:
@@ -17,6 +18,23 @@ class RecordingAPI:
 
 
 class ClientTest(unittest.TestCase):
+    @patch("scenario.time.sleep")
+    def test_missing_work_order_is_retried_through_recorded_calls(self, sleep):
+        calls = Mock()
+        calls.call.side_effect = [[], [{"name": "work"}]]
+        self.assertEqual(next_work_order(calls), "work")
+        self.assertEqual(calls.call.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    @patch("scenario.time.sleep")
+    def test_missing_work_order_fails_after_bounded_reads(self, sleep):
+        calls = Mock()
+        calls.call.return_value = []
+        with self.assertRaisesRegex(RuntimeError, "three recorded reads"):
+            next_work_order(calls)
+        self.assertEqual(calls.call.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
     def test_resume_reuses_suite_and_leaves_completed_runs_alone(self):
         api = Mock()
         api.request.return_value = {"runs": [{"status": s} for s in ("passed", "failed", "pending")]}

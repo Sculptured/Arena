@@ -1,22 +1,34 @@
 """A scripted pharma incident, using each role's own tools and recorded messages."""
+import time
+
 from behaviour import BASE_PLAN
 
 HELD = "CVX-2611"
+
+
+def next_work_order(c):
+    for attempt in range(3):
+        work = c.call("records", "list_docs", {
+            "doctype": "Work Order", "filters": [["planned_batch", "=", "CVX-2615"]],
+            "fields": ["name"]})
+        if work:
+            return work[0]["name"]
+        if attempt < 2:
+            time.sleep(1)
+    raise RuntimeError("ERP returned no CVX-2615 work order after three recorded reads")
 
 
 def coordinate(c):
     orders = c.call("coordinator", "affected_orders", {"batch": HELD})["orders"]
     c.message("coordinator", "records", {"orders": orders})
     c.call("records", "stock_report")
-    work = c.call("records", "list_docs", {
-        "doctype": "Work Order", "filters": [["planned_batch", "=", "CVX-2615"]],
-        "fields": ["name"]})
-    c.message("records", "production", {"work_order": work[0]["name"]})
+    work = next_work_order(c)
+    c.message("records", "production", {"work_order": work})
     c.message("coordinator", "quality", {"hold": HELD, "sample": "EM-26-11873"})
     for _ in range(c.behaviour.extra_reads):
         c.call("records", "stock_report")
         c.call("records", "affected_orders", {"batch": HELD})
-    return {o["po_no"]: o for o in orders}, work[0]["name"]
+    return {o["po_no"]: o for o in orders}, work
 
 
 def quality(c, task):
