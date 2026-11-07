@@ -28,6 +28,10 @@ pub struct Config {
     /// The wait before an open agent retries a model call its provider turned down as
     /// overloaded or rate-limited, doubling for each further retry (unless it says how long).
     pub retry_base: Duration,
+    /// Web origins (`scheme://host[:port]`) other than arenad's own that may call `/api` from a
+    /// browser, such as a UI served from elsewhere: env `ARENA_CORS_ORIGIN`, comma-separated.
+    /// Empty: same origin only.
+    pub cors_origins: Vec<String>,
 }
 
 pub const DEFAULT_MAX_DB_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -52,6 +56,9 @@ impl Config {
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(DEFAULT_MAX_DB_BYTES),
             retry_base: DEFAULT_RETRY_BASE,
+            cors_origins: cors_origins_from(
+                &std::env::var("ARENA_CORS_ORIGIN").unwrap_or_default(),
+            ),
         }
     }
 
@@ -215,8 +222,83 @@ async fn loopback_host_only(
     next.run(req).await
 }
 
+/// The origins of `ARENA_CORS_ORIGIN` (comma-separated, each `http(s)://host[:port]` without a
+/// path); anything else, `*` included, is skipped with a warning, since a wildcard would let any
+/// web page drive this machine's arena.
+pub fn cors_origins_from(value: &str) -> Vec<String> {
+    let mut out = vec![];
+    for o in value.split(',').map(|o| o.trim().trim_end_matches('/')) {
+        if o.is_empty() {
+            continue;
+        }
+        let rest = o
+            .strip_prefix("http://")
+            .or_else(|| o.strip_prefix("https://"));
+        match rest {
+            Some(host) if !host.is_empty() && !host.contains(['/', '*', ' ']) => {
+                out.push(o.to_string())
+            }
+            _ => eprintln!(
+                "arenad: ARENA_CORS_ORIGIN: skipped {o:?} (expected http(s)://host[:port])"
+            ),
+        }
+    }
+    out
+}
+
+/// CORS for the origins in `ARENA_CORS_ORIGIN`: a request from one of them gets
+/// `Access-Control-Allow-Origin`, and its preflight (`OPTIONS`) is answered here. Requests from
+/// any other origin are left as they are (the browser then refuses the answer).
+async fn cors(
+    axum::extract::State(origins): axum::extract::State<Arc<Vec<String>>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{header, HeaderValue, Method, StatusCode};
+    use axum::response::IntoResponse;
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+        .filter(|o| origins.iter().any(|a| a == o))
+        .and_then(|o| HeaderValue::from_str(o).ok());
+    let Some(origin) = origin else {
+        return next.run(req).await;
+    };
+    let preflight = req.method() == Method::OPTIONS
+        && req
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
+    let mut res = if preflight {
+        let mut r = StatusCode::NO_CONTENT.into_response();
+        let h = r.headers_mut();
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("content-type"),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("600"),
+        );
+        r
+    } else {
+        next.run(req).await
+    };
+    let h = res.headers_mut();
+    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    h.append(header::VARY, HeaderValue::from_static("origin"));
+    res
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
-    let api = crate::api::router().layer(axum::middleware::from_fn(loopback_host_only));
+    let origins = Arc::new(state.config.cors_origins.clone());
+    let api = crate::api::router()
+        .layer(axum::middleware::from_fn(loopback_host_only))
+        .layer(axum::middleware::from_fn_with_state(origins, cors));
     crate::mcp::router()
         .merge(crate::gateway::router())
         .merge(api)
@@ -225,6 +307,50 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cors_origins() {
+        let got = super::cors_origins_from(
+            " http://127.0.0.1:5173, https://ui.example/ ,*,ftp://x,http://a/b,,http://",
+        );
+        assert_eq!(got, ["http://127.0.0.1:5173", "https://ui.example"]);
+    }
+
+    #[tokio::test]
+    async fn cors_answers_allowed_origins_only() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+        let origins = std::sync::Arc::new(vec!["http://ui.test:5173".to_string()]);
+        let app = Router::new()
+            .route("/api/x", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(origins, super::cors));
+        let send = |method: &str, origin: &str| {
+            let req = Request::builder()
+                .method(method)
+                .uri("/api/x")
+                .header("origin", origin)
+                .header("access-control-request-method", "GET")
+                .body(Body::empty())
+                .unwrap();
+            app.clone().oneshot(req)
+        };
+        let allow = |r: &axum::response::Response| {
+            r.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap().to_string())
+        };
+        let r = send("GET", "http://ui.test:5173").await.unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(allow(&r).as_deref(), Some("http://ui.test:5173"));
+        let r = send("OPTIONS", "http://ui.test:5173").await.unwrap();
+        assert_eq!(r.status(), 204);
+        assert!(r.headers().contains_key("access-control-allow-methods"));
+        let r = send("GET", "http://evil.test").await.unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(allow(&r), None);
+        let r = send("OPTIONS", "http://evil.test").await.unwrap();
+        assert_ne!(r.status(), 204);
+    }
+
     #[test]
     fn loopback_hosts() {
         use super::is_loopback_host as ok;

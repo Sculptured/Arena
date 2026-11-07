@@ -386,13 +386,20 @@ struct NewRun {
     /// The disruptions to add to the task (`{disruptions: [{id, params}]}`).
     #[serde(default)]
     scenario: Option<parts::proto::ScenarioRequest>,
+    /// The world's seed (at most 2^53 - 1); random when absent.
+    #[serde(default)]
+    seed: Option<u64>,
 }
 
 async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResult<Value> {
     let cleanup = not_cleaning(&state)?;
     let mut req: NewRun = parse_body(&body)?;
     settle_providers(&mut req.team);
-    let scenario = twin::scenario_of(&state, req.scenario.as_ref()).await?;
+    let mut scenario = twin::scenario_of(&state, req.scenario.as_ref()).await?;
+    if req.seed.is_some_and(|s| s > runner::MAX_SEED) {
+        return Err(ApiError::bad("seed must be at most 2^53 - 1"));
+    }
+    scenario.seed = req.seed;
     if req.runner == Runner::External {
         return external::create_run(state, cleanup, req.task_id, req.team, scenario).await;
     }

@@ -27,9 +27,14 @@ pub struct Expanded {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Scenario {
     pub disruptions: Vec<Expanded>,
+    /// The seed the run's world starts with, when the run asked for one (`POST /api/runs`
+    /// `seed`); otherwise arenad picks one at random. `RunStart` records the seed either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 impl Scenario {
+    /// True when no disruption is chosen (a seed alone is recorded in `RunStart.seed`).
     pub fn is_empty(&self) -> bool {
         self.disruptions.is_empty()
     }
