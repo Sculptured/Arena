@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="#use-arena-from-code">From code</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/concepts.md">Concepts</a> ·
   <a href="docs/protocol.md">Protocol</a> ·
@@ -30,6 +31,26 @@ nothing: the agents run in whatever shape the design has (one after another, all
 design's own code), talk only if they choose to, and arena times its own work so a run's numbers estimate
 production. Go back to any step, change an agent's prompt, model or harness, fork with an exact or approximate
 restore of the world, rerun from there, and compare the runs.
+
+## Use Arena from code
+
+The core runs headless; no UI is needed. With the Python SDK ([docs/sdk.md](docs/sdk.md), `sdk/python`):
+
+```python
+from arena import Arena, Agent
+
+with Arena.local(benchmark="retail", bin_dir="core/target/release") as arena:   # or Arena("http://127.0.0.1:4510")
+    branch = arena.run("72", team=[Agent.claude_code("support", model="haiku")], seed=7)
+    for event in branch.stream():                 # every step, live
+        print(event.summary())
+    print(branch.check())                         # passed?, named checks, safety violations
+    fork = branch.fork(5, changes={"support": {"prompt": "Confirm every id first."}})
+    branch.export("data/run-72")                  # JSONL dataset with a schema
+```
+
+Bring your own agents instead (`arena.external_run(...)`: each agent gets an MCP endpoint with the world's tools
+and an OpenAI-compatible gateway), run suites, or drive a world step by step as a multi-agent RL environment
+(`arena.env.ArenaParallelEnv`). Any other language uses the [HTTP API](docs/reference.md#http-api).
 
 ## Why Arena
 
@@ -124,8 +145,8 @@ speak the `arena-part/1` protocol with arenad ([docs/protocol.md](docs/protocol.
 instances, runs tool calls, saves an instance's state, starts from a save, shows the state and compares two
 states. A **benchmark** names the world it runs in (its **parts**) and brings the tasks, the tools, the data and
 the gold actions. When a branch ends, arenad diffs its world with the task's gold world; it passes when no key
-differs and at least one part could be checked. The web UI is one client of arenad's HTTP API; Sculptured's
-Arena control workspace is another.
+differs and at least one part could be checked. The core (arenad, the protocol, the kits) depends on no UI: the
+web UI is one client of arenad's HTTP API, and the Python SDK and Sculptured's Arena control workspace are others.
 
 Read [docs/concepts.md](docs/concepts.md) for the full model: runs, branches, steps, saves, the restore table,
 teams and handoffs, forking rules and cost labels.
@@ -152,7 +173,8 @@ can't be described (package missing or not built). It listens on 127.0.0.1 only.
 benchmark, which CLIs were found, each model provider and whether API mode is available, and the disk use;
 `GET /api/providers` also asks the local servers and lists the models each provider offers.
 
-Or build the UI and let arenad serve it:
+The UI is optional: everything works from code ([docs/sdk.md](docs/sdk.md)). A UI served from another origin
+can call arenad when that origin is in `ARENA_CORS_ORIGIN`. Or build the UI and let arenad serve it:
 
 ```bash
 (cd ui && npm install && npm run build)
@@ -211,6 +233,7 @@ factory example. Without those, their tests are skipped.
 
 | Document | What it covers |
 |---|---|
+| [docs/sdk.md](docs/sdk.md) | Using Arena from code: the Python SDK, external agents, the step-loop env, export, reproducibility, Rust, citing |
 | [docs/concepts.md](docs/concepts.md) | Glossary, restore modes, teams and runners, external designs, overhead and estimates, CLI isolation, forking, cost labels |
 | [docs/protocol.md](docs/protocol.md) | `arena-part/1`: transport, manifest, every call, errors, clock and determinism contracts |
 | [integrations/README.md](integrations/README.md) | The integrations, a step-by-step counter integration, `arena-part-check` |

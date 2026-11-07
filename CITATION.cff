@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use Arena in your research, please cite it as below."
+title: "Arena: a rewindable staging environment for multi-agent systems"
+type: software
+authors:
+  - name: "Sculptured"
+repository-code: "https://github.com/Sculptured/Arena"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-11-07
+keywords:
+  - multi-agent systems
+  - LLM agents
+  - evaluation
+  - benchmarks
+  - reinforcement learning

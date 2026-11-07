@@ -175,7 +175,12 @@ cargo test -- --ignored live_                  # live integration tests: they st
 (cd integrations/ridgeline-hub && uv run --with pytest pytest -q)    # likewise integrations/isaac-sim and kits/python
 (cd core && cargo test -- --ignored live_)     # live CLI tests: they call real Claude Code and Codex and cost money
 (cd ui && npx vitest run && npm run build)
+(cd sdk/python && uv run pytest -q)            # SDK: unit tests, and integration tests against a real arenad
 ```
+
+The SDK's integration tests start an arenad on the retail example (`ARENA_SDK_BIN_DIR`, default
+`core/target/release`, then `core/target/debug`; Postgres at `ARENA_SDK_PG_URL`, default the compose one) or use
+the running one at `ARENA_SDK_URL`, and are skipped without either. They drive the API directly and call no model.
 
 The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from
 `Sculptured-Examples/factory` next to the arena checkout (their READMEs say which folders). **That example is not
