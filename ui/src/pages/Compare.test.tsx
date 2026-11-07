@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Rows, Side } from './Compare';
 import type { CompareResponse, CompareSide } from '../types';
 
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
 const side: CompareSide = { status: 'passed', seconds: 1, tokens: 1, cost_usd: null, cost_source: null };
 const cmp = (over: Partial<CompareResponse>): CompareResponse =>
   ({ a: side, b: side, first_divergent_seq: null, differing_rows: [], ...over });
@@ -25,11 +27,11 @@ describe('compare sides', () => {
       { id: 'triage', name: 'Triage', kind: 'claude_code' as const, model: 'sonnet', prompt: '' },
       { id: 'resolver', name: 'Resolver', kind: 'open' as const, provider: 'openai', model: 'gpt-x', prompt: '' },
     ] };
-    const html = renderToStaticMarkup(<Side id="abcdef0123" s={side} team={team} />);
-    expect(html).toContain('<dd>unknown</dd>');
+    const html = text(renderToStaticMarkup(<Side id="abcdef0123" s={side} team={team} />));
+    expect(html).toContain('Cost unknown');
     expect(html).toContain('Triage: sonnet · Claude Code');
     expect(html).toContain('Resolver: gpt-x · OpenAI');
     const local = { ...side, cost_usd: 0, cost_source: 'local (no API charge)' };
-    expect(renderToStaticMarkup(<Side id="b" s={local} />)).toContain('<dd>no API charge</dd>');
+    expect(text(renderToStaticMarkup(<Side id="b" s={local} />))).toContain('Cost no API charge');
   });
 });

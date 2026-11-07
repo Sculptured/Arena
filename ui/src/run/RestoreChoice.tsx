@@ -46,14 +46,14 @@ export function blockedReason(plan: Plan, running: boolean): string | null {
 }
 
 function PlanLines({ plan }: { plan: Plan }) {
-  if (plan.state === 'loading') return <span className="muted small">Checking how each part is restored…</span>;
+  if (plan.state === 'loading') return <span className="text-xs text-muted">Checking how each part is restored…</span>;
   // A refusal is said next to the start button it disables.
   if (plan.state === 'refused') return null;
-  if (plan.state === 'failed') return <span className="muted small">Couldn't get the restore plan: {plan.error}</span>;
+  if (plan.state === 'failed') return <span className="text-xs text-muted">Couldn't get the restore plan: {plan.error}</span>;
   return (
     <>
-      <ul className="restore-plan">{plan.parts.map((p) => <li key={p.part} className="mono small">{planLine(p)}</li>)}</ul>
-      {plan.parts.some((p) => p.how === 'replay') && <span className="muted small">{REPLAY_NOTE}</span>}
+      <ul className="flex flex-col gap-0.5">{plan.parts.map((p) => <li key={p.part} className="font-mono text-2xs">{planLine(p)}</li>)}</ul>
+      {plan.parts.some((p) => p.how === 'replay') && <span className="text-xs text-muted">{REPLAY_NOTE}</span>}
     </>
   );
 }
@@ -61,12 +61,12 @@ function PlanLines({ plan }: { plan: Plan }) {
 /** The "Restore" choice (Exact or Approximate) and, per part, how it would be restored. */
 export function RestoreChoice({ mode, onMode, plan }: { mode: RestoreMode; onMode: (m: RestoreMode) => void; plan: Plan }) {
   return (
-    <div className="restore-choice">
-      <div className="restore-modes" role="radiogroup" aria-label="Restore">
-        <span className="label">Restore</span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-3 text-sm" role="radiogroup" aria-label="Restore">
+        <span className="text-2xs font-medium tracking-wide text-muted uppercase">Restore</span>
         {MODES.map((m) => (
-          <label key={m.id} className="restore-mode" title={m.hint}>
-            <input type="radio" name="restore" value={m.id} checked={mode === m.id} onChange={() => onMode(m.id)} />
+          <label key={m.id} className="flex items-center gap-1.5" title={m.hint}>
+            <input type="radio" name="restore" value={m.id} checked={mode === m.id} onChange={() => onMode(m.id)} className="accent-[var(--accent)]" />
             {m.label}
           </label>
         ))}

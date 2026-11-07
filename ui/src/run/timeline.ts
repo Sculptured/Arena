@@ -1,63 +1,5 @@
-import { savedParts } from '../restore';
 import { LOCAL_COST_SOURCE, providerId } from '../providers';
-import type { AgentKind, AgentSpec, Branch, Change, Event, Team } from '../types';
-
-export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check';
-
-export interface Step {
-  seq: number;
-  kind: StepKind;
-  label: string;
-  wrote: boolean;
-  snapshot: boolean;
-  inherited: boolean;
-}
-
-export interface Lane {
-  agent: string;
-  steps: Step[];
-}
-
-export const CHECK_LANE = 'check';
-
-const nonEmpty = (v: unknown) => Array.isArray(v) && v.length > 0;
-
-/** One lane per agent in chain order, then a lane for the check. Steps below `startSeq` are inherited. */
-export function lanes(events: Event[], team: Team, startSeq: number | null = null): Lane[] {
-  const byAgent = new Map<string, Step[]>(team.agents.map((a) => [a.id, []]));
-  const checks: Step[] = [];
-  for (const e of [...events].sort((a, b) => a.seq - b.seq)) {
-    if (e.kind === 'run_start') continue;
-    const p = (e.payload ?? {}) as Record<string, unknown>;
-    const step: Step = {
-      seq: e.seq, kind: 'start', label: '', wrote: false, snapshot: false,
-      inherited: startSeq != null && e.seq < startSeq,
-    };
-    switch (e.kind) {
-      case 'agent_start': step.kind = 'start'; step.label = 'start'; break;
-      case 'agent_end': step.kind = 'end'; step.label = p.ok === false ? 'end (failed)' : 'end'; break;
-      case 'model_call': step.kind = 'model'; step.label = 'model'; break;
-      case 'handoff': step.kind = 'handoff'; step.label = typeof p.to === 'string' ? `handoff → ${p.to}` : 'handoff'; break;
-      case 'message': step.kind = 'handoff'; step.label = `message → ${String(p.to ?? '?')}`; break;
-      case 'tool_call':
-        step.kind = 'tool';
-        step.label = typeof p.name === 'string' ? p.name : 'tool';
-        step.wrote = nonEmpty(p.writes);
-        step.snapshot = savedParts(p).length > 0;
-        break;
-      case 'check': step.kind = 'check'; step.label = p.passed ? 'check passed' : 'check failed'; break;
-    }
-    if (e.kind === 'check' || e.agent == null) {
-      checks.push(step);
-      continue;
-    }
-    if (!byAgent.has(e.agent)) byAgent.set(e.agent, []);
-    byAgent.get(e.agent)!.push(step);
-  }
-  const out: Lane[] = [...byAgent].map(([agent, steps]) => ({ agent, steps }));
-  if (checks.length) out.push({ agent: CHECK_LANE, steps: checks });
-  return out;
-}
+import type { AgentKind, AgentSpec, Branch, Change, Event } from '../types';
 
 export function costLabel(source: string | null | undefined): string {
   if (source === 'api_equivalent_estimate') return 'API-equivalent estimate';
@@ -100,6 +42,11 @@ export function jsonDiff(a: unknown, b: unknown): DiffLine[] {
   return out;
 }
 
+/** Lines added and removed in a diff. */
+export function diffCounts(d: DiffLine[]): { added: number; removed: number } {
+  return { added: d.filter((l) => l.op === '+').length, removed: d.filter((l) => l.op === '-').length };
+}
+
 export interface Summary {
   seconds: number | null;
   live: boolean;
@@ -116,7 +63,17 @@ export function summarize(
   events: Event[],
   now: number = Date.now(),
 ): Summary {
-  const from = branch.start_seq ?? 0;
+  const spend = ownSpend(events, branch.start_seq ?? 0);
+  const time = elapsed(branch, now);
+  return {
+    ...time, tokens: spend.tokens, cost_usd: spend.cost,
+    cost_source: spend.sources.length === 0 ? null : spend.sources.length === 1 ? spend.sources[0] : 'mixed',
+    scope: branch.start_seq != null ? `since fork at step ${branch.start_seq}` : null,
+  };
+}
+
+/** Tokens and cost from the branch's own `agent_end`s; the cost is unknown once any part is. */
+function ownSpend(events: Event[], from: number): { tokens: number; cost: number | null; sources: string[] } {
   let tokens = 0;
   let cost: number | null = 0;
   const sources: string[] = [];
@@ -127,15 +84,15 @@ export function summarize(
     cost = cost != null && p.cost_usd != null ? cost + p.cost_usd : null;
     if (p.cost_source && !sources.includes(p.cost_source)) sources.push(p.cost_source);
   }
+  return { tokens, cost, sources };
+}
+
+/** Seconds from the branch's start to its end, or to now while it runs. */
+function elapsed(branch: Pick<Branch, 'created_at' | 'ended_at' | 'status'>, now: number): { seconds: number | null; live: boolean } {
   const start = Date.parse(branch.created_at);
   const live = !branch.ended_at && branch.status === 'running';
   const end = branch.ended_at ? Date.parse(branch.ended_at) : live ? now : NaN;
-  const seconds = Number.isNaN(start) || Number.isNaN(end) ? null : (end - start) / 1000;
-  return {
-    seconds, live, tokens, cost_usd: cost,
-    cost_source: sources.length === 0 ? null : sources.length === 1 ? sources[0] : 'mixed',
-    scope: branch.start_seq != null ? `since fork at step ${branch.start_seq}` : null,
-  };
+  return { seconds: Number.isNaN(start) || Number.isNaN(end) ? null : (end - start) / 1000, live };
 }
 
 /**
@@ -148,22 +105,30 @@ export function summarize(
 export function changedFields(agents: AgentSpec[], edits: Record<string, Change>): Record<string, Change> {
   const out: Record<string, Change> = {};
   for (const a of agents) {
-    const e = edits[a.id];
-    if (!e) continue;
-    const c: Change = {};
-    if (e.prompt != null && e.prompt.trim() !== a.prompt.trim()) c.prompt = e.prompt.trim();
-    const kindChanged = e.kind != null && e.kind !== (a.kind as AgentKind);
-    const open = (e.kind ?? a.kind) === 'open';
-    const providerChanged = open && e.provider != null && providerId(e.provider) !== providerId(a.provider);
-    const m = e.model?.trim();
-    if (providerChanged) {
-      c.provider = providerId(e.provider);
-      c.model = m ?? '';
-    } else if (m != null && m !== (a.model ?? '') && (m !== '' || !kindChanged)) c.model = m;
-    if (kindChanged) c.kind = e.kind;
+    const c = edits[a.id] ? agentChange(a, edits[a.id]) : {};
     if (Object.keys(c).length) out[a.id] = c;
   }
   return out;
+}
+
+/** One agent's real changes (see `changedFields`). */
+function agentChange(a: AgentSpec, e: Change): Change {
+  const c: Change = {};
+  if (e.prompt != null && e.prompt.trim() !== a.prompt.trim()) c.prompt = e.prompt.trim();
+  const kindChanged = e.kind != null && e.kind !== (a.kind as AgentKind);
+  const open = (e.kind ?? a.kind) === 'open';
+  const providerChanged = open && e.provider != null && providerId(e.provider) !== providerId(a.provider);
+  if (providerChanged) Object.assign(c, { provider: providerId(e.provider), model: e.model?.trim() ?? '' });
+  else Object.assign(c, modelChange(a, e.model, kindChanged));
+  if (kindChanged) c.kind = e.kind;
+  return c;
+}
+
+/** A model edit with the provider unchanged: sent when it differs, a blank next to a mode change dropped. */
+function modelChange(a: AgentSpec, model: string | null | undefined, kindChanged: boolean): Change {
+  const m = model?.trim();
+  if (m == null || m === (a.model ?? '') || (m === '' && kindChanged)) return {};
+  return { model: m };
 }
 
 export const MAX_ROW_KEYS = 50;

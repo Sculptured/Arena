@@ -1,58 +1,121 @@
 import { useEffect, useState } from 'react';
 import { rows } from '../api';
-import { formatCost, rowKeys } from './timeline';
+import { Button } from '../components/ui/button';
+import { StatusMark, Tag } from '../components/ui/status';
+import { EmptyState, ErrorState } from '../components/ui/state';
+import { Kbd } from '../components/ui/kbd';
+import { actionWord, classify, systemLine, worldInfo } from '../control/actions';
+import { missingPermit, permitOf } from '../control/permit';
 import { notComparedLine, savedLine } from '../restore';
 import { costIsUnknown, providerId, providerName, providerOf } from '../providers';
 import type { Event, Team } from '../types';
+import { formatCost, rowKeys } from './timeline';
 
 export const pretty = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? null, null, 2));
 
-function Block({ title, value }: { title: string; value: unknown }) {
+type Payload = Record<string, unknown>;
+const obj = (v: unknown): Payload => (v && typeof v === 'object' ? (v as Payload) : {});
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="block">
-      <div className="label">{title}</div>
-      <pre className="json">{pretty(value)}</pre>
-    </div>
+    <section className="flex flex-col gap-1 border-t border-line px-3 py-2">
+      <h3 className="text-2xs font-medium tracking-wide text-muted uppercase">{title}</h3>
+      {children}
+    </section>
   );
+}
+
+function Json({ value, error = false }: { value: unknown; error?: boolean }) {
+  return <pre className={`max-h-72 overflow-auto rounded-md border border-line bg-sunken p-2 font-mono text-2xs leading-4 whitespace-pre-wrap break-all ${error ? 'text-alarm' : ''}`}>{pretty(value)}</pre>;
+}
+
+function Block({ title, value }: { title: string; value: unknown }) {
+  return <Section title={title}><Json value={value} /></Section>;
 }
 
 function keysOf(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : [];
 }
 
-function RowsAtStep({ branchId, seq, keys, more, auto }: { branchId: string; seq: number; keys: string[]; more: number; auto?: boolean }) {
+function useRows(branchId: string, seq: number, keys: string[], auto?: boolean) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setData(null); setErr(null); }, [branchId, seq]);
   const load = async () => {
     setBusy(true); setErr(null);
     try { setData((await rows(branchId, seq, keys)).rows); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
-  useEffect(() => { if (auto && keys.length) void load(); }, [auto, branchId, seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setData(null); setErr(null); }, [branchId, seq]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (auto && keys.length) void load(); }, [auto, branchId, seq]);
+  return { data, err, busy, load };
+}
+
+function RowsAtStep({ branchId, seq, keys, more, auto }: { branchId: string; seq: number; keys: string[]; more: number; auto?: boolean }) {
+  const r = useRows(branchId, seq, keys, auto);
   return (
-    <div className="block">
-      <button className="btn btn-sm" onClick={load} disabled={busy || keys.length === 0}>
-        {busy ? 'Loading…' : 'Rows at this step'}
-      </button>
-      {keys.length === 0 && <span className="muted small"> nothing read or written</span>}
-      {more > 0 && <span className="muted small"> (+{more} more not shown)</span>}
-      {err && <div className="notice error">{err}</div>}
-      {data && Object.entries(data).map(([k, doc]) => (
-        <div key={k} className="row-doc">
-          <div className="mono small">{k}{doc === null && <span className="muted"> (absent)</span>}</div>
-          {doc !== null && <pre className="json">{pretty(doc)}</pre>}
+    <Section title="World rows at this step">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+        <Button size="sm" onClick={r.load} disabled={r.busy || keys.length === 0}>{r.busy ? 'Loading…' : 'Rows at this step'}</Button>
+        {keys.length === 0 && <span>nothing read or written</span>}
+        {more > 0 && <span>(+{more} more not shown)</span>}
+      </div>
+      {r.err && <ErrorState error={r.err} hint="The saved world for this step could not be read." />}
+      {r.data && Object.entries(r.data).map(([k, doc]) => (
+        <div key={k} className="flex flex-col gap-0.5">
+          <span className="font-mono text-2xs">{k}{doc === null && <span className="text-muted"> (absent)</span>}</span>
+          {doc !== null && <Json value={doc} />}
         </div>
       ))}
+    </Section>
+  );
+}
+
+function KeyList({ label, keys }: { label: string; keys: string[] }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-1 text-xs">
+      <span className="w-12 text-muted">{label}</span>
+      {keys.length ? keys.map((k) => <Tag key={k} className="max-w-full truncate font-mono">{k}</Tag>) : <span className="text-faint">none</span>}
     </div>
   );
 }
 
-/** True when the agent is on a provider that reports no price (OpenAI, Anthropic). */
-function agentCostUnknown(team: Team | undefined, agent: string | null): boolean {
-  const a = team?.agents.find((x) => x.id === agent);
-  return !!a && a.kind === 'open' && costIsUnknown(providerOf(a));
+/** The permit a write ran under (an interlock), or the change it named that approvals never recorded. */
+function PermitLine({ events, event }: { events: Event[]; event: Event }) {
+  const permit = permitOf(events, event);
+  const missing = missingPermit(events, event);
+  if (!permit && !missing) return null;
+  return (
+    <Section title="Permit">
+      {permit
+        ? <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <StatusMark mark={permit.approved === false ? { glyph: '✕', word: 'rejected', abnormal: true } : permit.approved ? { glyph: '◆', word: 'granted', abnormal: false } : { glyph: '◇', word: 'pending', abnormal: false }} />
+          <span className="font-mono text-2xs">{permit.id}</span><span className="text-muted">{permit.decision || permit.action}</span>
+        </div>
+        : <StatusMark mark={{ glyph: '◇', word: `no permit: ${missing} is not in approvals`, abnormal: true }} />}
+    </Section>
+  );
+}
+
+function ToolCall({ branchId, event, events, auto }: { branchId: string; event: Event; events: Event[]; auto?: boolean }) {
+  const p = obj(event.payload);
+  const reads = keysOf(p.reads), writes = keysOf(p.writes);
+  const { keys, more } = rowKeys(writes, reads);
+  return (
+    <>
+      <PermitLine events={events} event={event} />
+      {p.error ? <Section title="Error"><Json value={p.error} error /></Section> : null}
+      <Block title="Arguments" value={p.args} />
+      <Section title="Reads / writes">
+        <KeyList label="reads" keys={reads} /><KeyList label="writes" keys={writes} />
+        {typeof p.snapshot_error === 'string' && <ErrorState error={`Saving after this step failed: ${p.snapshot_error}`} hint="Reruns from this step can't use a save." />}
+        {savedLine(p) && <span className="text-xs text-muted">{savedLine(p)}</span>}
+      </Section>
+      <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} more={more} auto={auto} />
+      {!p.error && <Block title="Result" value={p.result} />}
+    </>
+  );
 }
 
 function messageText(m: unknown): string {
@@ -66,84 +129,126 @@ export function modelCallLine(p: { provider?: string; request?: unknown }): stri
   return `${providerName(providerId(p.provider))}${typeof model === 'string' && model ? ` · ${model}` : ''}`;
 }
 
-export default function Inspector({ branchId, event, team, autoRows }: { branchId: string; event: Event | null; team?: Team; autoRows?: boolean }) {
-  const auto = autoRows;
-  if (!event) return <div className="inspector empty-pane muted">Select a step. Use ↑/↓ or j/k to move.</div>;
-  const p = (event.payload ?? {}) as Record<string, any>;
-  let body: React.ReactNode;
+function ModelCall({ p }: { p: Payload }) {
+  const msgs: unknown[] = Array.isArray(obj(p.request).messages) ? (obj(p.request).messages as unknown[]) : [];
+  return (
+    <>
+      <Section title="Provider"><span className="font-mono text-xs">{modelCallLine(p as { provider?: string; request?: unknown })}</span></Section>
+      <Section title={`Messages (${msgs.length})`}>
+        {msgs.length === 0 && <span className="text-xs text-faint">The request was not recorded.</span>}
+        {msgs.map((m, i) => (
+          <details key={i} open={i === msgs.length - 1} className="text-xs">
+            <summary className="cursor-pointer font-mono text-muted">{(m as { role?: string })?.role ?? '?'}</summary>
+            <Json value={messageText(m)} />
+          </details>
+        ))}
+      </Section>
+      <Block title="Response" value={p.response} />
+      <Block title="Usage" value={p.usage} />
+      <Section title="Cost"><span className="text-xs">{formatCost(p.cost_usd as number | null, p.cost_source as string | null, costIsUnknown(providerId(p.provider as string | undefined)))}</span></Section>
+      {p.provider_response !== undefined && <Block title="Provider's own response" value={p.provider_response} />}
+    </>
+  );
+}
+
+function Check({ p }: { p: Payload }) {
+  const checks = Array.isArray(p.checks) ? (p.checks as { name: string; passed: boolean; safety?: boolean; detail?: string }[]) : [];
+  const diff = keysOf(p.differing_rows);
+  return (
+    <>
+      <Section title="Outcome"><StatusMark mark={p.passed ? { glyph: '✓', word: 'passed', abnormal: false } : { glyph: '✕', word: 'failed', abnormal: true }} /></Section>
+      {checks.length > 0 && (
+        <Section title={`Checks (${checks.filter((c) => c.passed).length}/${checks.length})`}>
+          <ul className="flex flex-col gap-0.5">{checks.map((c) => (
+            <li key={c.name} className="flex items-center gap-2 text-xs" title={c.detail}>
+              <StatusMark mark={c.passed ? { glyph: '✓', word: 'pass', abnormal: false } : { glyph: '✕', word: 'fail', abnormal: true }} />
+              <span className="font-mono text-2xs">{c.name}</span>{c.safety && <Tag tone={c.passed ? undefined : 'alarm'}>◆ safety</Tag>}
+            </li>
+          ))}</ul>
+        </Section>
+      )}
+      {diff.length > 0 && <Block title="Differing rows" value={diff} />}
+      {notComparedLine(keysOf(p.unchecked), 'check') && <Section title="Not compared"><span className="text-xs">{notComparedLine(keysOf(p.unchecked), 'check')}</span></Section>}
+      {typeof p.gold_db === 'string' && <Section title="Gold"><span className="font-mono text-2xs text-muted">gold db {p.gold_db}</span></Section>}
+    </>
+  );
+}
+
+/** True when the agent is on a provider that reports no price (OpenAI, Anthropic). */
+function agentCostUnknown(team: Team | undefined, agent: string | null): boolean {
+  const a = team?.agents.find((x) => x.id === agent);
+  return !!a && a.kind === 'open' && costIsUnknown(providerOf(a));
+}
+
+function AgentEnd({ p, team, agent }: { p: Payload; team?: Team; agent: string | null }) {
+  const ok = p.ok !== false;
+  const bits = [p.seconds != null ? `${Number(p.seconds).toFixed(1)} s` : '', p.tokens != null ? `${p.tokens} tokens` : '',
+    formatCost(p.cost_usd as number | null, p.cost_source as string | null, agentCostUnknown(team, agent))].filter(Boolean);
+  return (
+    <Section title="Outcome">
+      <span className="flex flex-wrap items-center gap-2 text-xs">
+        <StatusMark mark={ok ? { glyph: '■', word: 'finished', abnormal: false } : { glyph: '✕', word: 'failed', abnormal: true }} />
+        {typeof p.error === 'string' && p.error && <span className="text-alarm">{p.error}</span>}
+      </span>
+      <span className="text-xs text-muted">{bits.join(' · ')}</span>
+    </Section>
+  );
+}
+
+export interface InspectorProps {
+  branchId: string;
+  event: Event | null;
+  team?: Team;
+  autoRows?: boolean;
+  /** The branch's events, for the system an action touched and the permit it ran under. */
+  events?: Event[];
+}
+
+function Body({ branchId, event, team, autoRows, events = [] }: InspectorProps & { event: Event }) {
+  const p = obj(event.payload);
   switch (event.kind) {
-    case 'tool_call': {
-      const reads = keysOf(p.reads), writes = keysOf(p.writes);
-      const { keys, more } = rowKeys(writes, reads);
-      body = (
-        <>
-          <Block title="Arguments" value={p.args} />
-          <div className="block">
-            <div className="label">Reads / writes</div>
-            <div className="small">reads: {reads.length ? reads.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
-            <div className="small">writes: {writes.length ? writes.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
-            {p.snapshot_error && <div className="notice error">Saving after this step failed: {p.snapshot_error}</div>}
-            {savedLine(p) && <div className="muted small">{savedLine(p)}</div>}
-          </div>
-          <RowsAtStep branchId={branchId} seq={event.seq} keys={keys} more={more} auto={auto} />
-          {p.error ? <div className="block"><div className="label">Error</div><pre className="json err">{p.error}</pre></div> : <Block title="Result" value={p.result} />}
-        </>
-      );
-      break;
-    }
-    case 'model_call': {
-      const msgs: unknown[] = Array.isArray(p.request?.messages) ? p.request.messages : [];
-      body = (
-        <>
-          <div className="small"><span className="label">Provider</span> <span className="mono">{modelCallLine(p)}</span></div>
-          <div className="block">
-            <div className="label">Messages ({msgs.length})</div>
-            {msgs.map((m, i) => (
-              <details key={i} open={i === msgs.length - 1}>
-                <summary className="small"><span className="mono">{(m as { role?: string })?.role ?? '?'}</span></summary>
-                <pre className="json">{messageText(m)}</pre>
-              </details>
-            ))}
-          </div>
-          <Block title="Response" value={p.response} />
-          <Block title="Usage" value={p.usage} />
-          <div className="muted small">cost: {formatCost(p.cost_usd, p.cost_source, costIsUnknown(providerId(p.provider)))}</div>
-          {p.provider_response !== undefined && <Block title="Provider's own response" value={p.provider_response} />}
-        </>
-      );
-      break;
-    }
-    case 'handoff': body = <Block title={p.to ? `Handoff note for ${p.to}` : 'Handoff note'} value={p.note} />; break;
-    case 'message': body = <Block title={`Message to ${p.to === '*' ? 'everyone' : p.to}`} value={p.text} />; break;
-    case 'check':
-      body = (
-        <>
-          <div>{p.passed ? 'Passed' : 'Failed'}</div>
-          {p.differing_rows?.length ? <Block title="Differing rows" value={p.differing_rows} /> : null}
-          {notComparedLine(p.unchecked, 'check') && <div className="small">{notComparedLine(p.unchecked, 'check')}</div>}
-          {p.gold_db && <div className="muted small">gold db {String(p.gold_db)}</div>}
-        </>
-      );
-      break;
-    case 'agent_end':
-      body = (
-        <>
-          <div>{p.ok ? 'Finished' : 'Failed'}{p.error ? `: ${p.error}` : ''}</div>
-          <div className="muted small">{p.seconds != null ? `${Number(p.seconds).toFixed(1)} s · ` : ''}{p.tokens != null ? `${p.tokens} tokens · ` : ''}{formatCost(p.cost_usd, p.cost_source, agentCostUnknown(team, event.agent))}</div>
-        </>
-      );
-      break;
-    default: body = <Block title="Payload" value={p} />;
+    case 'tool_call': return <ToolCall branchId={branchId} event={event} events={events} auto={autoRows} />;
+    case 'model_call': return <ModelCall p={p} />;
+    case 'handoff': return <Block title={p.to ? `Handoff note for ${String(p.to)}` : 'Handoff note'} value={p.note} />;
+    case 'message': return <Block title={`Message to ${p.to === '*' ? 'everyone' : String(p.to)}`} value={p.text} />;
+    case 'check': return <Check p={p} />;
+    case 'agent_end': return <AgentEnd p={p} team={team} agent={event.agent} />;
+    default: return <Block title="Payload" value={p} />;
+  }
+}
+
+/** The step's header: its number, kind, agent and, for an action, the system it touched and how. */
+function Head({ event, events = [] }: { event: Event; events?: Event[] }) {
+  const a = classify(event, worldInfo(events));
+  return (
+    <div className="flex flex-col gap-1 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono text-sm font-semibold">step {event.seq}</span>
+        <Tag>{event.kind.replace('_', ' ')}</Tag>
+        {event.agent && <span className="text-xs text-muted">{event.agent}</span>}
+        {a && <span className="font-mono text-xs">{a.tool}</span>}
+        {a && a.outcome !== 'ok' && <StatusMark mark={{ glyph: '⚠', word: a.outcome, abnormal: true }} />}
+      </div>
+      {a && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+          <Tag className={a.effect === 'write' ? 'border-line-strong font-semibold text-fg' : ''}>{actionWord(a)}</Tag>
+          {a.part && <span className="font-mono text-2xs">{a.part}</span>}<span className="truncate">{systemLine(a.system)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One step in full: what it did, on which system, under which permit, and what it returned. */
+export default function Inspector(props: InspectorProps) {
+  const { event } = props;
+  if (!event) {
+    return <EmptyState title="No step selected" hint={<>Click a mark on the timeline or a row of the log. Move with <Kbd>←</Kbd> <Kbd>→</Kbd> or <Kbd>j</Kbd> <Kbd>k</Kbd>.</>} />;
   }
   return (
-    <div className="inspector">
-      <div className="insp-head">
-        <span className="mono">step {event.seq}</span>
-        <span className="chip">{event.kind.replace('_', ' ')}</span>
-        {event.agent && <span className="muted small">{event.agent}</span>}
-        {event.kind === 'tool_call' && <span className="mono">{p.name}</span>}
-      </div>
-      {body}
+    <div className="min-w-0">
+      <Head event={event} events={props.events} />
+      <Body {...props} event={event} />
     </div>
   );
 }

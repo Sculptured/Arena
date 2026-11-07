@@ -1,16 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { branch as fetchBranch, runs as fetchRuns, stream } from '../api';
+import { ChevronDown, GitBranch, GitCompare, Workflow } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApproximateMark, StatusChip } from '../components';
+import { Button } from '../components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
+import { PageBody, PageHeader, Stat } from '../components/ui/page';
+import { Panel, PanelHeader } from '../components/ui/panel';
+import { Split } from '../components/ui/split';
+import { ErrorState, LoadingState, Notice } from '../components/ui/state';
+import { StatusMark } from '../components/ui/status';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { buildLanes, spanOf } from '../control/lanes';
+import { costIsUnknown, teamProviders } from '../providers';
+import { worldLine } from '../restore';
+import ActionTimeline from '../run/ActionTimeline';
+import EventLog from '../run/EventLog';
 import ForkPanel from '../run/ForkPanel';
 import Inspector from '../run/Inspector';
 import MetricsPanel from '../run/Metrics';
-import Timeline from '../run/Timeline';
-import { formatCost, lanes, summarize } from '../run/timeline';
+import { runStats } from '../run/runStats';
+import { formatCost, summarize } from '../run/timeline';
+import { stepOrder } from '../run/timelineLayout';
+import { useBranch } from '../run/useBranch';
+import { useStepKeys } from '../run/useStepKeys';
+import Waterfall from '../run/Waterfall';
+import { branchTree } from '../runs/tree';
 import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
-import { worldLine } from '../restore';
-import { costIsUnknown, teamProviders } from '../providers';
-import { branchTree } from './Runs';
 
 /** How the run's agents ran, from its `run_start` (old runs: a chain with a handoff required). */
 export function runnerLine(events: Event[]): string {
@@ -24,152 +39,161 @@ export function runnerLine(events: Event[]): string {
   }[rs.runner];
 }
 
+export const taskOf = (events: Event[]) => (events.find((e) => e.kind === 'run_start')?.payload as { task_id?: string } | undefined)?.task_id ?? '';
+
+function BranchMenu({ runId, detail, siblings }: { runId: string; detail: BranchDetail; siblings: Branch[] }) {
+  const nav = useNavigate();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button size="sm"><GitBranch />Branches <span className="font-mono text-faint">{siblings.length || 1}</span><ChevronDown /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent className="w-80">
+        <DropdownMenuLabel>Branches of this run</DropdownMenuLabel>
+        {branchTree(siblings).map(({ branch: b, depth }) => (
+          <DropdownMenuItem key={b.id} onSelect={() => nav(`/runs/${runId}/${b.id}`)} className={b.id === detail.id ? 'bg-accent-soft' : ''}>
+            <span style={{ paddingLeft: depth * 12 }} className="font-mono text-2xs text-muted">{depth ? '↳' : '●'}</span>
+            <StatusChip status={b.status} /><span className="font-mono text-xs">{b.id.slice(0, 8)}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">{b.fork_note ?? ''}</span><ApproximateMark of={b} />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function CompareMenu({ detail, siblings }: { detail: BranchDetail; siblings: Branch[] }) {
+  const nav = useNavigate();
+  const others = siblings.filter((b) => b.id !== detail.id && (b.status === 'passed' || b.status === 'failed'));
+  const why = detail.status === 'running' ? 'Wait for this run to finish.' : others.length === 0 ? 'No other finished branch of this run yet. Press ⌘K to compare with another run.' : '';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button size="sm" disabled={!!why} title={why}><GitCompare />Compare with…</Button></DropdownMenuTrigger>
+      <DropdownMenuContent>
+        {others.map((b) => (
+          <DropdownMenuItem key={b.id} onSelect={() => nav(`/compare/${detail.id}/${b.id}`)}>
+            <span className="font-mono text-xs">{b.id.slice(0, 8)}</span><StatusChip status={b.status} />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function Stats({ detail }: { detail: BranchDetail }) {
+  const sm = summarize(detail, detail.events);
+  const st = runStats(detail.events, detail.start_seq);
+  const cost = formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown));
+  return (
+    <div className="grid grid-cols-3 gap-x-5 gap-y-2 sm:flex sm:flex-wrap sm:items-end">
+      <Stat label={`Seconds${sm.live ? ' so far' : ''}`} value={sm.seconds != null ? sm.seconds.toFixed(1) : '–'} />
+      <Stat label="Tokens" value={(detail.metrics?.tokens ?? sm.tokens).toLocaleString()} />
+      <Stat label="Cost" value={cost} title={cost} />
+      <Stat label="Steps" value={st.steps} />
+      <Stat label="Reads · writes" value={`${st.reads} · ${st.writes}`} />
+      <Stat label="Refused / errors" value={st.abnormal ? `⚠ ${st.abnormal}` : '0'} abnormal={st.abnormal > 0} />
+      {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={st.check.passed ? { glyph: '✓', word: `passed${st.check.total ? ` ${st.check.ok}/${st.check.total}` : ''}`, abnormal: false } : { glyph: '✕', word: `failed${st.check.total ? ` ${st.check.ok}/${st.check.total}` : ''}`, abnormal: true }} />} />}
+      {sm.scope && <span className="col-span-3 text-xs text-muted sm:ml-auto">{sm.scope}</span>}
+    </div>
+  );
+}
+
+function Header({ runId, detail, siblings }: { runId: string; detail: BranchDetail; siblings: Branch[] }) {
+  const task = taskOf(detail.events);
+  const world = worldLine(detail.events);
+  const runner = runnerLine(detail.events);
+  return (
+    <PageHeader mono title={task ? `task ${task}` : 'Run'}
+      status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} /><span className="font-mono text-xs text-faint">{detail.id.slice(0, 8)}</span></>}
+      actions={<>
+        <Button size="sm" asChild><Link to={`/control/${runId}/${detail.id}`}><Workflow />Process view</Link></Button>
+        <BranchMenu runId={runId} detail={detail} siblings={siblings} /><CompareMenu detail={detail} siblings={siblings} />
+      </>}
+      meta={<>{detail.fork_note && <span>{detail.fork_note}</span>}{world && <span className="truncate" title={world}>{world}</span>}{runner && <span>{runner}</span>}</>}>
+      <Stats detail={detail} />
+    </PageHeader>
+  );
+}
+
+function Side({ runId, detail, event, forking, setForking, autoRows }: {
+  runId: string; detail: BranchDetail; event: Event | null; forking: boolean; setForking: (f: boolean) => void; autoRows: boolean;
+}) {
+  const nav = useNavigate();
+  const canFork = !!event && event.kind !== 'check' && event.kind !== 'run_start';
+  return (
+    <Panel className="lg:sticky lg:top-[52px] lg:max-h-[calc(100vh-92px)] lg:overflow-auto">
+      <PanelHeader title="Step">
+        {event && <Button size="sm" variant={forking ? 'default' : 'primary'} onClick={() => setForking(!forking)} disabled={!canFork}
+          title={canFork ? 'Change the team and rerun from this step' : 'Pick an agent step to rerun from'}>Change and rerun from here</Button>}
+      </PanelHeader>
+      {forking && event && (
+        <div className="border-b border-line bg-raised">
+          <ForkPanel key={`${detail.id}:${event.seq}`} branch={detail} seq={event.seq} onClose={() => setForking(false)}
+            onForked={(r) => nav(`/runs/${runId}/${r.branch_id}`, { state: { notice: r.moved_from != null ? `Restarted from step ${r.start_seq} instead of ${r.moved_from}: ${r.reason ?? ''}` : null } })} />
+        </div>
+      )}
+      <Inspector branchId={detail.id} event={event} team={detail.team} autoRows={autoRows} events={detail.events} />
+    </Panel>
+  );
+}
+
+function Main({ detail, selected, onSelect, models, setModels }: {
+  detail: BranchDetail; selected: number | null; onSelect: (s: number) => void; models: boolean; setModels: (m: boolean) => void;
+}) {
+  const lanes = useMemo(() => buildLanes(detail.events, detail.team, detail.start_seq), [detail]);
+  const span = spanOf(lanes, detail.status === 'running' ? Date.now() : undefined);
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <Panel>
+        <Tabs defaultValue="timeline">
+          <div className="flex items-center gap-3 border-b border-line pl-3">
+            <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">Actions{detail.status === 'running' ? ' · live' : ''}</h2>
+            <TabsList className="border-b-0"><TabsTrigger value="timeline">Timeline</TabsTrigger><TabsTrigger value="log">Event log</TabsTrigger></TabsList>
+          </div>
+          <TabsContent value="timeline"><ActionTimeline lanes={lanes} team={detail.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} /></TabsContent>
+          <TabsContent value="log"><EventLog lanes={lanes} span={span} selected={selected} onSelect={onSelect} models={models} /></TabsContent>
+        </Tabs>
+      </Panel>
+      <Panel><PanelHeader title="Trace" meta="the selected step's turn" /><Waterfall events={detail.events} selected={selected} onSelect={onSelect} /></Panel>
+      {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
+    </div>
+  );
+}
+
+/** Selection, fork panel and notice, reset whenever the branch changes. */
+function useRunView(branchId: string, order: number[]) {
+  const [sp] = useSearchParams();
+  const loc = useLocation();
+  const stepParam = sp.get('step');
+  const [selected, setSelected] = useState<number | null>(stepParam ? Number(stepParam) : null);
+  const [forking, setForking] = useState(sp.get('fork') === '1');
+  const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
+  useEffect(() => {
+    setSelected(stepParam ? Number(stepParam) : null); setForking(sp.get('fork') === '1');
+    setNotice((loc.state as { notice?: string } | null)?.notice ?? null);
+  }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useStepKeys(order, setSelected);
+  return { selected, setSelected, forking, setForking, notice, setNotice, autoRows: sp.get('rows') === '1' };
+}
+
 export default function Run() {
   const { runId = '', branchId = '' } = useParams();
-  const nav = useNavigate();
-  const loc = useLocation();
-  const [sp] = useSearchParams();
-  const [detail, setDetail] = useState<BranchDetail | null>(null);
-  const [siblings, setSiblings] = useState<Branch[]>([]);
-  const [selected, setSelected] = useState<number | null>(sp.get('step') ? Number(sp.get('step')) : null);
-  const [forking, setForking] = useState(sp.get('fork') === '1');
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
-  const [picking, setPicking] = useState(false);
-
-  const current = useRef(branchId);
-  current.current = branchId;
-  // A response only lands if it is still for the branch on screen.
-  const load = useCallback(() => {
-    const id = branchId;
-    fetchBranch(id).then((d) => { if (current.current === id) { setDetail(d); setError(null); } })
-      .catch((e) => { if (current.current === id) setError(String(e.message ?? e)); });
-    fetchRuns().then((r) => { if (current.current === id) setSiblings(r.find((x) => x.id === runId)?.branches ?? []); }).catch(() => {});
-  }, [branchId, runId]);
-
-  useEffect(() => {
-    setDetail(null); setSelected(sp.get('step') ? Number(sp.get('step')) : null); setForking(sp.get('fork') === '1'); setPicking(false);
-    setNotice((loc.state as { notice?: string } | null)?.notice ?? null);
-    load();
-  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const running = detail?.status === 'running';
-  useEffect(() => {
-    if (!running) return;
-    const off = stream(
-      branchId,
-      (e: Event) => setDetail((d) => (d && d.id === branchId && !d.events.some((x) => x.seq === e.seq) ? { ...d, events: [...d.events, e] } : d)),
-      () => load(),
-    );
-    return off;
-  }, [running, branchId, load]);
-
-  const ls = useMemo(() => (detail ? lanes(detail.events, detail.team, detail.start_seq) : []), [detail]);
-  const order = useMemo(() => ls.flatMap((l) => l.steps).map((s) => s.seq).sort((a, b) => a - b), [ls]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
-      const dir = e.key === 'ArrowDown' || e.key === 'j' ? 1 : e.key === 'ArrowUp' || e.key === 'k' ? -1 : 0;
-      if (!dir || !order.length) return;
-      e.preventDefault();
-      setSelected((s) => {
-        const i = s == null ? (dir > 0 ? -1 : order.length) : order.indexOf(s);
-        return order[Math.min(order.length - 1, Math.max(0, i + dir))];
-      });
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [order]);
-
+  const { detail, siblings, error, reload } = useBranch(branchId, runId);
+  const [models, setModels] = useState(true);
+  const order = useMemo(() => (detail ? stepOrder(buildLanes(detail.events, detail.team, detail.start_seq), models) : []), [detail, models]);
+  const v = useRunView(branchId, order);
   if (!detail) {
-    return (
-      <>
-        <header className="page-head"><h1>Run</h1></header>
-        <main className="content">{error ? <div className="notice error">{error}</div> : <p className="muted">Loading…</p>}</main>
-      </>
-    );
+    return <><PageHeader title="Run" /><PageBody>{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the run's steps…" rows={5} /></Panel>}</PageBody></>;
   }
-
-  const sm = summarize(detail, detail.events);
-  const taskId = (detail.events.find((e) => e.kind === 'run_start')?.payload as any)?.task_id ?? '';
-  const event = detail.events.find((e) => e.seq === selected) ?? null;
-  const world = worldLine(detail.events);
-  const others = siblings.filter((b) => b.id !== detail.id && (b.status === 'passed' || b.status === 'failed'));
-
+  const event = detail.events.find((e) => e.seq === v.selected) ?? null;
   return (
     <>
-      <header className="page-head run-header">
-        <h1 className="mono">{taskId ? `task ${taskId}` : 'Run'}</h1>
-        <StatusChip status={detail.status} />
-        <ApproximateMark of={detail} />
-        <span className="muted mono small">{detail.id.slice(0, 8)}</span>
-        <span className="spacer" />
-        {sm.scope && <span className="muted small">{sm.scope}</span>}
-        <span className="stat"><span className="label">Seconds{sm.live ? ' so far' : ''}</span>{sm.seconds != null ? sm.seconds.toFixed(1) : '–'}</span>
-        <span className="stat"><span className="label">Tokens</span>{detail.metrics?.tokens ?? sm.tokens}</span>
-        <span className="stat"><span className="label">Cost</span>{formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown))}</span>
-      </header>
-      <div className="run-body">
-        <section className="run-main">
-          {notice && <div className="notice info" role="status">{notice} <button className="btn btn-sm" onClick={() => setNotice(null)}>Dismiss</button></div>}
-          {error && <div className="notice error" role="alert">{error}</div>}
-          {detail.error && <div className="notice error">{detail.error}</div>}
-          {detail.fork_note && <div className="muted small">{detail.fork_note}</div>}
-          {world && <div className="muted small world-line" title={world}>{world}</div>}
-          {runnerLine(detail.events) && <div className="muted small">{runnerLine(detail.events)}</div>}
-          {detail.metrics && <MetricsPanel m={detail.metrics} />}
-          <div className="panel pane">
-            <Timeline lanes={ls} team={detail.team} selected={selected} onSelect={(s) => { setSelected(s); }} />
-          </div>
-          <div className="panel pane">
-            <Inspector branchId={detail.id} event={event} team={detail.team} autoRows={sp.get('rows') === '1'} />
-            {event && (
-              <div className="insp-actions">
-                <button className="btn" onClick={() => setForking((f) => !f)} disabled={event.kind === 'check' || event.kind === 'run_start'}>
-                  Change and rerun from here
-                </button>
-              </div>
-            )}
-          </div>
-          {forking && selected != null && (
-            <ForkPanel
-              key={`${detail.id}:${selected}`}
-              branch={detail}
-              seq={selected}
-              onForked={(r) => nav(`/runs/${runId}/${r.branch_id}`, {
-                state: { notice: r.moved_from != null ? `Restarted from step ${r.start_seq} instead of ${r.moved_from}: ${r.reason ?? ''}` : null },
-              })}
-            />
-          )}
-        </section>
-        <aside className="run-side panel">
-          <div className="label side-title">Branches</div>
-          <ul className="tree">
-            {branchTree(siblings).map(({ branch: b, depth }) => (
-              <li key={b.id}>
-                <button className={`branch-row${b.id === detail.id ? ' current' : ''}`} style={{ paddingLeft: 8 + depth * 16 }}
-                  onClick={() => nav(`/runs/${runId}/${b.id}`)}>
-                  <span className="tree-mark" aria-hidden="true">{depth ? '└' : '●'}</span>
-                  <StatusChip status={b.status} />
-                  <span className="mono branch-id">{b.id.slice(0, 6)}</span>
-                  <ApproximateMark of={b} />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="side-actions">
-            <button className="btn btn-sm" onClick={() => setPicking((p) => !p)} disabled={detail.status === 'running' || others.length === 0}>Compare with…</button>
-            {picking && others.map((b) => (
-              <button key={b.id} className="btn btn-sm" onClick={() => nav(`/compare/${detail.id}/${b.id}`)}>
-                <span className="mono">{b.id.slice(0, 6)}</span> {b.status}
-              </button>
-            ))}
-            {others.length === 0 && <span className="muted small">No other finished branches yet.</span>}
-          </div>
-        </aside>
-      </div>
+      <Header runId={runId} detail={detail} siblings={siblings} />
+      <PageBody>
+        {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
+        {error && <ErrorState error={error} onRetry={reload} />}
+        {detail.error && <ErrorState error={detail.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
+        <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
+          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} />} />
+      </PageBody>
     </>
   );
 }

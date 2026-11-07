@@ -1,3 +1,4 @@
+import { Table, Td, Th, Tr } from '../components/ui/table';
 import type { Cost, Metrics, Overhead } from '../types';
 
 /** What each kind of arena overhead is, in the order they are shown. */
@@ -36,31 +37,44 @@ export function estimateText(m: Metrics): string {
   return `${secs(m.estimated_s)} s (${secs(m.measured_s)} s measured − ${secs(m.overhead_s)} s arena overhead)`;
 }
 
+function OverheadTable({ lines }: { lines: [string, string][] }) {
+  if (!lines.length) return null;
+  return (
+    <Table className="text-xs">
+      <thead><tr><Th>Arena overhead</Th><Th className="text-right">Time</Th></tr></thead>
+      <tbody>{lines.map(([label, v]) => <Tr key={label}><Td>{label}</Td><Td className="text-right font-mono">{v}</Td></Tr>)}</tbody>
+    </Table>
+  );
+}
+
+function AgentsTable({ m }: { m: Metrics }) {
+  return (
+    <Table className="text-xs">
+      <thead><tr><Th>Agent</Th><Th>Model</Th><Th className="text-right">Tokens (in / out)</Th><Th>Cost</Th></tr></thead>
+      <tbody>
+        {m.agents.map((a, i) => (
+          <Tr key={`${a.agent}-${i}`}>
+            <Td className="font-mono">{a.agent}</Td>
+            <Td className="font-mono">{a.model ?? '–'}{a.provider ? ` · ${a.provider}` : ''}</Td>
+            <Td className="text-right font-mono">{a.tokens}{a.prompt_tokens != null ? ` (${a.prompt_tokens} / ${a.completion_tokens ?? 0})` : ''}</Td>
+            <Td title={a.cost.source ?? ''}>{costText(a.cost)}</Td>
+          </Tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
 /** The branch's deployment numbers: time in production, arena's overhead, tokens and cost per agent. */
 export default function MetricsPanel({ m }: { m: Metrics }) {
-  const lines = overheadLines(m.overhead_ms);
   return (
-    <details className="panel pane metrics">
-      <summary><span className="label">Estimated in production</span> {estimateText(m)}</summary>
-      {lines.length > 0 && (
-        <table className="small"><tbody>
-          {lines.map(([label, v]) => <tr key={label}><td>{label}</td><td className="mono">{v}</td></tr>)}
-        </tbody></table>
-      )}
-      <table className="small">
-        <thead><tr><th>Agent</th><th>Model</th><th>Tokens (in / out)</th><th>Cost</th></tr></thead>
-        <tbody>
-          {m.agents.map((a, i) => (
-            <tr key={`${a.agent}-${i}`}>
-              <td className="mono">{a.agent}</td>
-              <td className="mono">{a.model ?? '–'}{a.provider ? ` · ${a.provider}` : ''}</td>
-              <td className="mono">{a.tokens}{a.prompt_tokens != null ? ` (${a.prompt_tokens} / ${a.completion_tokens ?? 0})` : ''}</td>
-              <td title={a.cost.source ?? ''}>{costText(a.cost)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="muted small">Total: {m.tokens} tokens · {costText(m.cost)}. Only this branch's own steps count.</div>
-    </details>
+    <div className="flex flex-col gap-3 p-3">
+      <p className="text-sm"><span className="text-2xs font-medium tracking-wide text-muted uppercase">Estimated in production</span> <span className="font-mono">{estimateText(m)}</span></p>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="rounded-md border border-line"><OverheadTable lines={overheadLines(m.overhead_ms)} /></div>
+        <div className="rounded-md border border-line"><AgentsTable m={m} /></div>
+      </div>
+      <p className="text-xs text-muted">Total: {m.tokens} tokens · {costText(m.cost)}. Only this branch's own steps count.</p>
+    </div>
   );
 }
