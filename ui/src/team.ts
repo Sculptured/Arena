@@ -49,7 +49,7 @@ export function teamForRun(team: Team, runner: Runner = 'chain'): Team {
   return {
     ...team,
     agents: team.agents.map(({ provider, ...a }) => {
-      if (runner === 'external') return { ...a, kind: 'external' as const };
+      if (runner === 'external') return { ...a, kind: 'external' as const, model: null };
       const p = provider?.trim();
       return a.kind === 'open' && p ? { ...a, provider: p } : a;
     }),

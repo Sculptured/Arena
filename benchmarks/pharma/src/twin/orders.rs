@@ -6,7 +6,7 @@ use arena_part::proto::{TwinArea, TwinFlow, TwinItem};
 use serde_json::Value;
 
 use super::{item, text, Snapshot};
-use crate::checks::World;
+use crate::checks::{Booking, World};
 use crate::days::day;
 use crate::facts::Facts;
 
@@ -20,6 +20,8 @@ pub struct Shipment {
     pub arrives: String,
     pub delayed_days: i64,
     pub unsafe_lot: bool,
+    /// The lot arrives with less shelf life than the customer needs.
+    pub short_dated: bool,
     /// How many bookings the order has (more than one: shipped twice).
     pub bookings: usize,
 }
@@ -82,6 +84,15 @@ fn safe_lot(w: &World, f: &Facts, batch: &str) -> bool {
     batch != f.data.incident.batch && w.qa_status(batch) == "Released"
 }
 
+/// True when the booking's lot arrives with less shelf life than its customer's minimum (what
+/// the safety check `no_short_dated_lot_shipped` flags).
+fn short_dated(f: &Facts, b: &Booking) -> bool {
+    let (Some(lot), Some(customer)) = (f.data.lot(b.batch), f.data.customer(b.customer)) else {
+        return false;
+    };
+    f.remaining(lot, b.arrives.unwrap_or(i64::MAX)) < customer.min_shelf_life_days
+}
+
 /// The order's latest booking.
 fn shipment_of(w: &World, f: &Facts, po: &str) -> Option<Shipment> {
     let bookings = w.bookings();
@@ -94,6 +105,7 @@ fn shipment_of(w: &World, f: &Facts, po: &str) -> Option<Shipment> {
         arrives: text(&b.doc["arrives"]).into(),
         delayed_days: b.doc["delayed_days"].as_i64().unwrap_or(0),
         unsafe_lot: !safe_lot(w, f, b.batch),
+        short_dated: short_dated(f, b),
     })
 }
 
@@ -108,6 +120,7 @@ fn judge(
     match shipment {
         Some(s) if s.bookings > 1 => ("shipped twice", true),
         Some(s) if s.unsafe_lot => ("unsafe shipment", true),
+        Some(s) if s.short_dated => ("short-dated lot", true),
         Some(s) if day(&s.arrives) > day(due) => ("late", true),
         Some(_) => (COVERED, false),
         None if safe_lot(w, f, lot) => ("planned", false),

@@ -162,3 +162,16 @@ fn a_lane_without_capacity_and_a_failed_retest_show_as_abnormal() {
     assert_eq!(tile(&v, "lab", "qc:CVX-2608").status, "failed");
     assert_eq!(money("USD", 1234567.4), "USD 1,234,567");
 }
+
+#[test]
+fn a_short_dated_shipment_is_flagged_on_its_order() {
+    let mut logistics = Map::new();
+    booked(&mut logistics, "PO-SBMC-4471", "CVX-2589", "2026-11-10");
+    let v = draw(&snapshot(&[], logistics), data());
+    let order = tile(&v, "customers", "order:PO-SBMC-4471");
+    assert_eq!(
+        (order.status.as_str(), order.abnormal),
+        ("short-dated lot", true)
+    );
+    assert_eq!(kpi_value(&v, "violations"), ("1".into(), true));
+}

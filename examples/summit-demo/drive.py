@@ -52,7 +52,8 @@ def claim(branch):
 
 
 def run_start(detail):
-    return next(e["payload"] for e in detail["events"] if e["kind"] == "run_start")
+    """The branch's RunStart payload; empty while its world is still starting."""
+    return next((e["payload"] for e in detail["events"] if e["kind"] == "run_start"), {})
 
 
 def finish(c, error=None):
@@ -104,11 +105,21 @@ def live(api, args):
     return started
 
 
-def register_team(api, branch, agents):
-    """Starts each of the branch's agents again (its AgentStart on the new branch)."""
+def register_team(api, branch, agents, wait_s=180):
+    """Starts each of the branch's agents again (its AgentStart on the new branch), once the
+    branch is live: a fork exists while its world is still restoring."""
     for a in agents:
-        api.request(f"/api/branches/{branch}/agents", {k: a.get(k) for k in
-                    ("id", "name", "kind", "model", "prompt", "read_only")})
+        body = {k: a.get(k) for k in ("id", "name", "kind", "model", "prompt", "read_only")}
+        for _ in range(wait_s):
+            try:
+                api.request(f"/api/branches/{branch}/agents", body)
+                break
+            except RuntimeError as error:
+                if "no live branch" not in str(error):
+                    raise
+                time.sleep(1)
+        else:
+            raise RuntimeError(f"{branch} did not go live in {wait_s} s")
 
 
 def resume(api, branch, paced=True):
@@ -164,15 +175,22 @@ def drive_waiting(api, detail, paced):
 def watch(api, args):
     print("watching for runs and forks to drive (Ctrl-C stops)", flush=True)
     while True:
-        for run in api.request("/api/runs"):
-            for b in (x for x in run["branches"] if x["status"] == "running"):
-                detail = api.request(f"/api/branches/{b['id']}")
-                if waiting(detail) and claim(b["id"]):
-                    try:
-                        print(json.dumps(drive_waiting(api, detail, not args.fast)), flush=True)
-                    except Exception as error:  # keep watching: the branch ended with the reason
-                        print(f"{b['id']}: {error}", file=sys.stderr, flush=True)
+        try:
+            watch_once(api, not args.fast)
+        except Exception as error:  # keep watching: a run that ended or vanished mid-look
+            print(f"watch: {error}", file=sys.stderr, flush=True)
         time.sleep(1)
+
+
+def watch_once(api, paced):
+    for run in api.request("/api/runs"):
+        for b in (x for x in run["branches"] if x["status"] == "running"):
+            detail = api.request(f"/api/branches/{b['id']}")
+            if waiting(detail) and claim(b["id"]):
+                try:
+                    print(json.dumps(drive_waiting(api, detail, paced)), flush=True)
+                except Exception as error:  # the branch ended with the reason; keep watching
+                    print(f"{b['id']}: {error}", file=sys.stderr, flush=True)
 
 
 def duplicate(api, args):

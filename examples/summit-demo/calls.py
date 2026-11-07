@@ -18,7 +18,7 @@ WRITES = frozenset({"insert_doc", "update_doc", "crm_log_note", "crm_update_oppo
 TALK = frozenset({"message", "inbox", "handoff"})
 # Seconds between calls per phase, for a paced run: `start` until the shipments, `focus` over the
 # first shipment (where the disruption and the refusal show), `rest` after it.
-PACES = {"start": 0.1, "focus": 1.4, "rest": 0.08}
+PACES = {"start": 0.1, "focus": 1.0, "rest": 0.05}
 
 
 class DemoCalls(Calls):

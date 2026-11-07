@@ -1,11 +1,12 @@
 // The runbook's click path through the UI, with a screenshot of each beat at 1440x900.
-//   NODE_PATH=<a node_modules with playwright> node capture.mjs OUT WORLD_URL V1_SUITE V2_SUITE
+//   NODE_PATH=<a node_modules with playwright> node capture.mjs OUT WORLD_URL V1_SUITE V2_SUITE [V1_RUN V1_BRANCH]
+// With V1_RUN and V1_BRANCH (a finished live run of Team v1) it starts at the Fail beat.
 // Needs the demo arenad (reset.sh) and the driver watching (python3 drive.py watch): it drives the
 // run this script starts from the New run dialog and the fork it makes with Rewind here.
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 const { chromium } = createRequire(import.meta.url)('playwright');
-const [out, worldUrl, v1Suite, v2Suite] = process.argv.slice(2);
+const [out, worldUrl, v1Suite, v2Suite, v1Run, v1Branch] = process.argv.slice(2);
 const base = new URL(worldUrl).origin;
 mkdirSync(out, { recursive: true });
 
@@ -26,6 +27,10 @@ const page = await (await browser.newContext({ viewport: { width: 1440, height: 
 page.setDefaultTimeout(240000);
 const shot = async (name, wait = 2000) => { await page.waitForTimeout(wait); await page.screenshot({ path: `${out}/${name}.png` }); console.log('shot', name); };
 
+let v1 = v1Run ? { run: v1Run, branch: v1Branch } : null;
+if (!v1) v1 = await liveRun();
+
+async function liveRun() {
 // 1. World: Larchmont as every run starts.
 await page.goto(worldUrl, { waitUntil: 'networkidle' });
 await shot('01-world');
@@ -39,13 +44,15 @@ await dialog.getByText('Usual courier loses capacity').click();
 await shot('02-builder', 800);
 await dialog.getByRole('button', { name: 'Start run' }).click();
 await page.waitForURL(/\/runs\/[0-9a-f]+\/[0-9a-f]+/);
-const v1 = ids(page.url());
-console.log('v1', v1);
+const started = ids(page.url());
+console.log('v1', started);
 
 // 3. Run: the twin changes step by step while the driver plays Team v1.
 await page.getByRole('link', { name: 'World' }).first().click();
 await page.waitForURL(/\/world\//);
 await shot('03-run-live', 25000);
+  return started;
+}
 const d1 = await finished(v1.branch);
 
 // 4. Fail: the booking Arena refused, and the violation it led to.
@@ -62,7 +69,7 @@ await shot('05-before-the-refusal');
 await page.getByRole('link', { name: 'Rewind here' }).click();
 await page.waitForURL(/fork=1/);
 await shot('06-rewind-swap');
-await page.getByRole('button', { name: /Change and rerun from here/ }).click();
+await page.getByRole('button', { name: /Change and rerun from here \(/ }).click();
 await page.waitForURL((u) => !u.href.includes(v1.branch) && /\/runs\//.test(u.href), { timeout: 240000 });
 const v2 = ids(page.url());
 console.log('v2', v2);

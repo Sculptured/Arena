@@ -9,7 +9,7 @@ use arena_part::proto::NamedCheck;
 use serde_json::Value;
 
 use crate::facts::Facts;
-pub use world::World;
+pub use world::{Booking, World};
 
 fn named(name: &str, passed: bool, fails_with: String, safety: bool) -> NamedCheck {
     NamedCheck {

@@ -127,7 +127,7 @@ describe('team editor', () => {
     expect(sent.agents.map((a: AgentSpec) => a.provider)).toEqual(['openai', undefined, undefined]);
     expect('provider' in sent.agents[1]).toBe(false);
     const external = teamForRun(team, 'external');
-    expect(external.agents.map((a) => [a.id, a.kind, 'provider' in a])).toEqual([['a', 'external', false], ['b', 'external', false], ['c', 'external', false]]);
+    expect(external.agents.map((a) => [a.id, a.kind, a.model, 'provider' in a])).toEqual([['a', 'external', null, false], ['b', 'external', null, false], ['c', 'external', null, false]]);
   });
 });
 
