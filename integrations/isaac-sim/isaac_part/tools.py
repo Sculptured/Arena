@@ -141,6 +141,11 @@ TOOLS = {t.name: t for t in [
     Tool("start_cell", "Start a safe-stopped robot cell. Needs its station staffed by a certified operator on shift "
          "and its zone not isolated.", "write", (Param("cell", "string"),),
          lambda p, a: p.equipment.start(p.factory, a["cell"]), _writes(_key("cell", "cell")), on_plant=True),
+    Tool("show_status", "What the plant's boards show of another system from now on: key (dr, ot, truck), a value "
+         "and an optional number (a benchmark's link calls it; agents don't get it).", "write",
+         (Param("key", "string"), Param("value", "string"), Param("number", "number", None)),
+         lambda p, a: p.equipment.show_status(a["key"], a["value"], a["number"]), _writes(_key("_signage", "key")),
+         on_plant=True),
     Tool("plant_scenario", "Sets the plant's scenario: press-wear (PR-A1's bearing wears from now) or calm (a task's "
          "setup calls it; agents don't get it).", "write", (Param("name", "string"),),
          lambda p, a: p.set_scenario(a["name"]), lambda _a, _r: ([], ["plant/clock"]), on_plant=True),

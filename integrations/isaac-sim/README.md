@@ -224,6 +224,7 @@ plant as before (no extra keys, events or load).
 |---|---|---|
 | `safe_stop_cell(cell, reason?)` | write | `cell/<id>`: the robot parks, its safety PLC holds; refused when it is safe-stopped already |
 | `start_cell(cell)` | write | `cell/<id>`: refused when it runs already |
+| `show_status(key, value, number?)` | write | `_signage/<key>` (internal): what the showcase's boards show of another system (`dr`, `ot`, `truck`); for a benchmark's links, so agents don't get it. It is in no document or tool answer |
 | `plant_scenario(name)` | write | `plant/clock`: `press-wear` starts PR-A1's wear now (what `scenario: true` does at the start); `calm` resets the plant with the run's seed, so no press wears. For a task's setup, so agents don't get it |
 
 - A cell counts the parts it makes from the physics steps it ran (`rate_per_hour`). It gives a `cell` event when it

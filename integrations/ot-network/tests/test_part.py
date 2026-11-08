@@ -73,6 +73,8 @@ def test_the_playbook_order_is_recorded_isolate_then_revoke_then_restore():
     z = doc(part, "zone/CELL-R1")
     assert (z["isolated"], z["isolated_n"], z["restored_n"]) == (False, 1, 4)
     assert "restored_with_live_session" not in z
+    assert [e["kind"] for e in (iso["events"] + rev["events"] + back["events"])] == [
+        "zone_isolated", "session_revoked", "zone_restored"]
     assert [e["action"] for e in doc(part, "log/actions")["entries"]] == [
         "isolate_zone", "revoke_session", "report_security_incident", "restore_zone"]
 

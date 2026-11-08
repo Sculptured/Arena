@@ -115,3 +115,17 @@ def test_advances_split_differently_give_the_same_load_events():
             out += [(e["data"]["t"], e["data"]["detail"]["kw"]) for e in power_events(part.advance("i1", t)["events"])]
         return out
     assert run([4_000]) == run([700, 1_300, 2_050, 4_000])
+
+
+def test_signage_is_kept_saved_and_shown_nowhere_agents_look(saves_root):
+    part = started(scenario=False)
+    out = call(part, "show_status", {"key": "dr", "value": "active", "number": 1200}, 1_000)
+    assert out["writes"] == ["_signage/dr"] and out["result"] == {"key": "dr", "value": "active", "number": 1200}
+    assert part.instances["i1"].equipment.signage == {"dr": {"value": "active", "number": 1200}}
+    docs = part.inspect({"instance": "i1"}, [])["docs"]
+    assert "active" not in json.dumps(docs) and "signage" not in json.dumps(call(part, "plant_state", {}, 1_000))
+    part.save("i1", "s1", str(saves_root / "isaac-sim" / "s1"))
+    again = IsaacSim(BACKENDS["standin"])
+    again.start("i2", {**PLANT, "scenario": False}, 7, 1_000, {"save": "s1", "mode": "approximate"})
+    assert again.instances["i2"].equipment.signage["dr"]["number"] == 1200
+    assert "must not be empty" in call(part, "show_status", {"key": "", "value": "x"}, 1_000)["error"]

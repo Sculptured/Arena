@@ -85,15 +85,37 @@ pub fn links() -> Vec<Link> {
         ("transit_hours", "/transit_hours"),
         ("ref", "/ref"),
     ];
-    vec![
+    let meter = [("kw", "/detail/kw")];
+    let mut links = vec![
         link("hub", "shipment_booked", "plant", "add_shipment", &shipment),
-        link(
-            "plant",
-            "power",
-            "utility",
-            "meter_load",
-            &[("kw", "/detail/kw")],
-        ),
+        link("plant", "power", "utility", "meter_load", &meter),
+    ];
+    links.extend(boards());
+    links
+}
+
+/// What the plant's boards show of the other systems (`show_status`, seen only in the plant's
+/// visuals): the utility's event, the OT network's state and a late truck.
+fn boards() -> Vec<Link> {
+    let board = |from: &str, event: &str, pairs: &[(&str, &str)]| {
+        link(from, event, "plant", "show_status", pairs)
+    };
+    let dr = |value| [("key", "dr"), ("value", value), ("number", "/target_kw")];
+    let ot = |value| [("key", "ot"), ("value", value)];
+    let truck = [
+        ("key", "truck"),
+        ("value", "/delivery"),
+        ("number", "/extra_hours"),
+    ];
+    vec![
+        board("utility", "disruption", &dr("notified")),
+        board("utility", "demand_response_active", &dr("active")),
+        board("utility", "demand_response_ended", &dr("ended")),
+        board("network", "disruption", &ot("intrusion")),
+        board("network", "zone_isolated", &ot("isolated")),
+        board("network", "session_revoked", &ot("revoked")),
+        board("network", "zone_restored", &ot("normal")),
+        board("hub", "disruption", &truck),
     ]
 }
 
@@ -208,6 +230,10 @@ mod tests {
         assert_eq!(p[2].config["cells"][0]["id"], "CELL-R1");
         assert_eq!(p[1].config["inbound"][0]["id"], "INB-0310-1");
         assert_eq!(p[6].integration, "ot-network");
+        let l = links();
+        let boards = l.iter().filter(|x| x.tool == "show_status").count();
+        assert_eq!((l.len(), boards), (10, 8));
+        assert_eq!(l[2].args["number"], "/target_kw");
         let power = &links()[1];
         assert_eq!(
             (power.from.as_str(), power.tool.as_str()),

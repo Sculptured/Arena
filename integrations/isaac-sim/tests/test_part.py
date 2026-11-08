@@ -283,7 +283,7 @@ def test_tools_keys_and_refusals():
     names = {t["name"] for t in part.describe()["tools"]}
     assert names == {"plant_state", "machine_telemetry", "vibration_spectrum", "recent_events", "wait_for_event",
                      "predict_move", "dispatch_technician", "set_line_status", "add_shipment", "safe_stop_cell",
-                     "start_cell", "plant_scenario"}
+                     "start_cell", "plant_scenario", "show_status"}
     sent = part.call_tool("i1", "dispatch_technician",
                           {"proposal_id": "P", "technician": "T-1", "machine": "PR-A1", "task": "inspect"}, 1_000)
     assert sent["result"]["status"] == "walking" and sent["writes"] == ["technician/T-1", "machine/PR-A1"]
