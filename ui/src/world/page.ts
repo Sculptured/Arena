@@ -7,9 +7,12 @@ import type { BranchView, TwinView } from './types';
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 
-/** "No model calls" for a run that recorded none (nothing billed, nothing to inspect); else empty. */
+/** An agent's end that reports tokens: a CLI agent's model calls aren't recorded one by one, but they happened. */
+const reportsTokens = (e: Event) => e.kind === 'agent_end' && Number(obj(e.payload).tokens ?? 0) > 0;
+
+/** "No model calls" for a run that recorded none and whose agents report no tokens (nothing billed); else empty. */
 export function drivenLine(events: Event[]): string {
-  return events.some((e) => e.kind === 'model_call') ? '' : 'No model calls';
+  return events.some((e) => e.kind === 'model_call' || reportsTokens(e)) ? '' : 'No model calls';
 }
 
 /** "Step 21 · Logistics · book_shipment": the step a view shows. */
