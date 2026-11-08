@@ -291,3 +291,8 @@ Arena is licensed under the [Apache License 2.0](LICENSE).
 The retail data in `data/retail/` (`db.json`, `tasks.json`, `policy.md`) comes from
 [tau2-bench](https://github.com/sierra-research/tau2-bench), MIT License, Copyright (c) 2025 Sierra Research;
 see [data/retail/LICENSE](data/retail/LICENSE) and [NOTICE](NOTICE).
+
+## Examples and demos
+
+Worlds, demos and showcases built on Arena (the factory showcase, the local pharma stack) live in the separate
+**Arena-Examples** repo, next to this one, so this repo stays the core.
