@@ -465,6 +465,18 @@ pub struct NamedCheck {
     pub safety: bool,
 }
 
+impl NamedCheck {
+    /// A check whose `detail` is `fails_with` when it failed and empty when it passed.
+    pub fn new(name: &str, passed: bool, fails_with: String, safety: bool) -> NamedCheck {
+        NamedCheck {
+            name: name.into(),
+            passed,
+            detail: if passed { String::new() } else { fails_with },
+            safety,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Score {
     pub checks: Vec<NamedCheck>,

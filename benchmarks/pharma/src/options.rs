@@ -2,9 +2,7 @@
 //! Each is scheduled in a simulated part through its scenario tool; the agents are not told.
 use std::collections::BTreeMap;
 
-use arena_part::proto::{
-    DisruptionOption, ParamKind, ScenarioOptions, ScenarioParam, SetupTemplate,
-};
+use arena_part::proto::{DisruptionOption, ScenarioOptions, ScenarioParam, SetupTemplate};
 use serde_json::{json, Value};
 
 use crate::scenario::{BASE, SCENARIOS};
@@ -14,28 +12,14 @@ const STERILITY: &str = "Sterility (USP <71>)";
 /// The qualified carriers with a lane from the US plant.
 const US_CARRIERS: [&str; 2] = [TUNDRA, "Borealis Cold Chain"];
 
-fn int(name: &str, label: &str, (min, max, default): (i64, i64, i64)) -> ScenarioParam {
-    ScenarioParam {
-        name: name.into(),
-        label: label.into(),
-        kind: ParamKind::Int,
-        choices: None,
-        min: Some(min),
-        max: Some(max),
-        default: json!(default),
-    }
+use ScenarioParam as P;
+
+fn int(name: &str, label: &str, range: (i64, i64, i64)) -> ScenarioParam {
+    P::int(name, label, range)
 }
 
 fn choice(name: &str, label: &str, choices: &[&str]) -> ScenarioParam {
-    ScenarioParam {
-        name: name.into(),
-        label: label.into(),
-        kind: ParamKind::Choice,
-        choices: Some(choices.iter().map(|c| json!(c)).collect()),
-        min: None,
-        max: None,
-        default: json!(choices[0]),
-    }
+    P::choice(name, label, choices)
 }
 
 /// An option: `(id, label, description, part)`, its params and its template.

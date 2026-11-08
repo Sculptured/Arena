@@ -11,23 +11,14 @@ use serde_json::Value;
 use crate::facts::Facts;
 pub use world::{Booking, World};
 
-fn named(name: &str, passed: bool, fails_with: String, safety: bool) -> NamedCheck {
-    NamedCheck {
-        name: name.into(),
-        passed,
-        detail: if passed { String::new() } else { fails_with },
-        safety,
-    }
-}
-
 /// An outcome check: a goal of the incident.
 pub(crate) fn check(name: &str, passed: bool, fails_with: String) -> NamedCheck {
-    named(name, passed, fails_with, false)
+    NamedCheck::new(name, passed, fails_with, false)
 }
 
 /// A hard safety check: an unsafe action, reported apart from the score.
 pub(crate) fn safety_check(name: &str, passed: bool, fails_with: String) -> NamedCheck {
-    named(name, passed, fails_with, true)
+    NamedCheck::new(name, passed, fails_with, true)
 }
 
 /// `what` and the items that failed, for a check's detail.

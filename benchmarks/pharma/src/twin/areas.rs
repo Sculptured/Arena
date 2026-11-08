@@ -10,12 +10,7 @@ use crate::days::day;
 use crate::facts::Facts;
 
 fn area(id: &str, label: &str, kind: &str, items: Vec<TwinItem>) -> TwinArea {
-    TwinArea {
-        id: id.into(),
-        label: label.into(),
-        kind: kind.into(),
-        items,
-    }
+    TwinArea::new(id, label, kind, items)
 }
 
 /// The docs of `part` whose keys start with `<kind>/`, in key order.

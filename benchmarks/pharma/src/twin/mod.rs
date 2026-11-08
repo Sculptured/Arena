@@ -54,12 +54,7 @@ pub fn draw(s: &Snapshot, d: &Data) -> TwinView {
 }
 
 fn kpi(id: &str, label: &str, value: String, abnormal: bool) -> TwinKpi {
-    TwinKpi {
-        id: id.into(),
-        label: label.into(),
-        value,
-        abnormal,
-    }
+    TwinKpi::new(id, label, value, abnormal)
 }
 
 fn kpis(s: &Snapshot, f: &Facts, states: &[orders::OrderState]) -> Vec<TwinKpi> {
@@ -99,13 +94,7 @@ fn money(currency: &str, amount: f64) -> String {
 
 /// An item with its id, label, status and whether it is abnormal; the rest unset.
 fn item(id: String, label: String, status: &str, abnormal: bool) -> TwinItem {
-    TwinItem {
-        id,
-        label,
-        status: status.into(),
-        abnormal,
-        ..TwinItem::default()
-    }
+    TwinItem::new(id, label, status, abnormal)
 }
 
 /// `v` as text, or empty.
