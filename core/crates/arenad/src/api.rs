@@ -42,6 +42,7 @@ use crate::{
 mod external;
 mod flow;
 mod names;
+mod review;
 mod suites;
 mod twin;
 mod world;
@@ -67,6 +68,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(external::router())
         .merge(flow::router())
         .merge(suites::router())
+        .merge(review::router())
         .merge(twin::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
