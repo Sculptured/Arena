@@ -48,10 +48,10 @@ def dress(d) -> ShiftDressed:
     showcase_scene.ASSETS.update(ASSETS)
     d.b.xform(ROOT)
     arm = _cell(d)
-    lamps, beacon = d.lamps(f"{ROOT}/Cell/Lamps", (plan.CELL[0] - 2.4, plan.CELL[1] - 2.0, 1.6), "CELL_R1")
+    lamps, beacon = d.lamps(f"{ROOT}/Cell/Lamps", (plan.CELL[0] + 2.5, plan.CELL[1] + 2.1, 2.0), "CELL_R1")
     cx, cy = plan.CELL
     widths = plan.screen_widths()
-    cell_screen = d.screen(f"{ROOT}/Cell/Hmi", (cx - 1.6, cy - plan.CELL_SIZE[1] / 2 - 0.1, 1.5), widths["cell"],
+    cell_screen = d.screen(f"{ROOT}/Cell/Hmi", (cx + 1.3, cy - plan.CELL_SIZE[1] / 2 - 0.1, 1.5), widths["cell"],
                            plan.SCREEN_SOUTH, "cell_r1")
     out = ShiftDressed(arm, lamps, beacon, cell_screen)
     out.amrs = _amrs(d)
@@ -117,10 +117,11 @@ def _wxyz(q) -> tuple:
 
 
 def _fence(d, root) -> None:
-    """Yellow posts and dark mesh panels round the cell, open on the west side where the AMR docks."""
+    """Yellow posts with steel rails and a low kick plate round the cell, open on the west side where the AMR docks,
+    so the arm can be seen working through it."""
     cx, cy = plan.CELL
     w, h = plan.CELL_SIZE
-    posts, panels, plate = mesh.Merged(), mesh.Merged(), mesh.Merged()
+    posts, rails, plate = mesh.Merged(), mesh.Merged(), mesh.Merged()
     plate.box((cx, cy, 0.005), (w, h, 0.01), 0.0)
     corners = [(cx - w / 2, cy - h / 2), (cx + w / 2, cy - h / 2), (cx + w / 2, cy + h / 2), (cx - w / 2, cy + h / 2)]
     for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
@@ -130,10 +131,13 @@ def _fence(d, root) -> None:
         for i in range(n + 1):
             f = i / n
             posts.box((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f, 1.0), (0.06, 0.06, 2.0), 0.005)
-        size = (abs(x1 - x0) or 0.02, abs(y1 - y0) or 0.02, 1.7)
-        panels.box(((x0 + x1) / 2, (y0 + y1) / 2, 1.05), size, 0.0)
+        span = (abs(x1 - x0) or 0.03, abs(y1 - y0) or 0.03)
+        mid = ((x0 + x1) / 2, (y0 + y1) / 2)
+        for z in (0.95, 1.45, 1.95):
+            rails.box((mid[0], mid[1], z), (span[0], span[1], 0.03), 0.004)
+        rails.box((mid[0], mid[1], 0.13), (span[0], span[1], 0.25), 0.0)  # the kick plate
     d.mesh(f"{root}/Posts", posts.arrays(), d.paint("trim"))
-    d.mesh(f"{root}/Panels", panels.arrays(), d.paint("mesh"))
+    d.mesh(f"{root}/Rails", rails.arrays(), d.paint("steel"))
     d.mesh(f"{root}/Plate", plate.arrays(), d.paint("floorplate"))
 
 

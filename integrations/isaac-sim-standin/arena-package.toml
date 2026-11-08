@@ -4,7 +4,7 @@ version = "0.1.0"
 protocol = 1
 run = { command = ["uv", "run", "--directory", "../isaac-sim", "python", "-m", "isaac_part", "--backend", "standin"] }
 needs = { gpu_vram_gb = 0, services = [] }
-config_schema = { type = "object", properties = { isaac_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, physics_hz = { type = "integer" }, scenario = { type = "boolean" }, record = { type = "string" }, camera = { type = "string" }, record_fps = { type = "integer" }, record_height = { type = "integer" }, scene = { type = "string" }, cells = { type = "array" }, power = { type = "object" } } }
+config_schema = { type = "object", properties = { isaac_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, physics_hz = { type = "integer" }, scenario = { type = "boolean" }, record = { type = "string" }, camera = { type = "string" }, record_fps = { type = "integer" }, record_height = { type = "integer" }, scene = { type = "string" }, cells = { type = "array" }, power = { type = "object" }, render = { type = "object" } } }
 
 [[example]]
 tool = "plant_state"

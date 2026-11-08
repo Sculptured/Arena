@@ -31,6 +31,14 @@ def _app():
     return _APP["app"]
 
 
+def _render_settings(settings: dict) -> None:
+    """The renderer's carb settings a config asks for (`render`), e.g. the path tracer and its samples."""
+    import carb
+    s = carb.settings.get_settings()
+    for key, value in settings.items():
+        s.set(key, value)
+
+
 def _stop_timeline():
     import omni.timeline
     omni.timeline.get_timeline_interface().stop()  # unverified on 6.2
@@ -73,6 +81,7 @@ def make(cfg, data, physics_hz):
     load(cfg)
     _APP["step"] = _idle
     app = _app()
+    _render_settings(cfg.render)
     import isaacsim.core.experimental.utils.app as app_utils
     sim_io = sources.import_read_only(cfg.isaac_path, "sim_io", "isaac_path")
     layout = importlib.import_module("layout")

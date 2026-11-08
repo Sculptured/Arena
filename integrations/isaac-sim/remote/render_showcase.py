@@ -44,6 +44,7 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--at", action="append", default=[], help="<seconds>:<tool>:<json args>")
     ap.add_argument("--path-traced", action="store_true")
     ap.add_argument("--spp", type=int, default=64)
+    ap.add_argument("--setting", action="append", default=[], help="/carb/path=json value, for the renderer")
     return ap.parse_args()
 
 
@@ -87,6 +88,8 @@ def main() -> None:
               "record_height": args.height}
     if args.shift:
         config.update(json.loads(SHIFT.read_text())["plant"])
+    if args.setting:
+        config["render"] = {k: json.loads(v) for k, v in (x.split("=", 1) for x in args.setting)}
     t0 = time.monotonic()
     part.start("render", config, args.seed, 0)
     print(f"[render] started in {time.monotonic() - t0:.1f} s", flush=True)

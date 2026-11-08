@@ -93,12 +93,12 @@ def shots() -> dict:
         "cell_r1_close": Shot((cx - 2.6, cy - 2.6, 1.7), (TABLE[0], TABLE[1], TABLE[2] + 0.2), 24.0,
                               eye_end=(cx - 2.2, cy - 2.8, 1.6)),
         "energy_board": Shot((ex - 5.5, ey - 1.6, 2.0), (ex, ey, ez), 26.0, eye_end=(ex - 5.0, ey - 1.2, 2.0)),
-        "gateway": Shot((gx - 4.2, gy - 2.2, 1.7), (gx, gy, 1.2), 24.0, eye_end=(gx - 3.8, gy - 1.8, 1.7)),
+        "gateway": Shot((gx - 3.0, gy - 1.6, 1.6), (gx, gy, 1.35), 26.0, eye_end=(gx - 2.7, gy - 1.2, 1.6)),
         "dock_board": Shot((dx + 2.0, dy + 5.5, 2.0), (dx, dy, dz), 24.0, eye_end=(dx + 1.4, dy + 5.2, 2.0)),
-        "amr": Shot((4.0, -11.0, 2.4), (0, 0, 0.5), 22.0, follow="amr"),
+        "amr": Shot((5.5, -10.2, 1.5), (0, 0, 0.4), 30.0, follow="amr"),
         "wide_shift": Shot((19.0, -11.0, 7.5), (3.0, 4.0, 1.2), 16.0, eye_end=(18.0, -12.0, 7.2)),
     }
 
 
 def screen_widths() -> dict:
-    return {"energy": 2.4, "gateway": 0.5, "dock": 1.8, "cell": 0.5}
+    return {"energy": 2.4, "gateway": 0.9, "dock": 1.8, "cell": 0.6}
