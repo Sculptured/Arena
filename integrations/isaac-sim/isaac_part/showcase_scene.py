@@ -92,6 +92,7 @@ class Dressed:
     forklift_round: motion.Round | None = None
     shots: dict = field(default_factory=dict)
     press_hz: dict = field(default_factory=dict)
+    shift: object = None  # showcase_shift.ShiftDressed, with the plant's robot cells
 
 
 class Dresser:
@@ -385,8 +386,9 @@ def _formed_arrays() -> dict:
             "uvs": points[:, :2]}
 
 
-def dress(b, assets_root, data, log) -> Dressed:
-    """The whole dressing on the stage `b` holds, as built by the factory's scene. Call before physics starts."""
+def dress(b, assets_root, data, log, shift=False) -> Dressed:
+    """The whole dressing on the stage `b` holds, as built by the factory's scene, and with `shift` the shift's pieces
+    (robot cell R1, AMRs, boards). Call before physics starts."""
     d = Dresser(b, assets_root, data, log)
     d.retire_old_visuals()
     b.xform(ROOT)
@@ -398,6 +400,10 @@ def dress(b, assets_root, data, log) -> Dressed:
         out.lines.append(_dress_line(d, line, data))
     _dress_surroundings(d, out, lines)
     _dress_lights(d, lines)
+    if shift:
+        from . import showcase_shift, showcase_shift_layout
+        out.shift = showcase_shift.dress(d)
+        out.shots.update(showcase_shift_layout.shots())
     _check_no_new_physics(d)
     return out
 

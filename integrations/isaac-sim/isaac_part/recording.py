@@ -7,7 +7,7 @@ from pathlib import Path
 from arena_part import errors
 
 CAMERA_MODES = ("auto", "free")
-STILL_SETTLE_FRAMES = 8  # frames a still waits after a cut, for the renderer's history to catch up
+STILL_SETTLE_FRAMES = 32  # frames a still waits after a cut, for the renderer's history to catch up
 
 
 def path_for(record: str, root: Path, instance: str) -> Path:

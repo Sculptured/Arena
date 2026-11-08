@@ -65,7 +65,7 @@ fn demand_response() -> DisruptionOption {
         ScenarioParam::int(
             "minutes",
             "Window (min)",
-            (5, 240, f["minutes"].as_i64().unwrap_or(90)),
+            (1, 240, f["minutes"].as_i64().unwrap_or(90)),
         ),
     ];
     let extra = json!({"event": f["event"], "target_kw": "{target_kw}", "lead_min": "{lead_min}",

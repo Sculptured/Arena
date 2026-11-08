@@ -159,14 +159,12 @@ slowing lines (each running line's load scales with its speed) or stopping the c
 | `no_cell_running_with_unknown_session` (safety) | no cell runs while an unknown session reaches its zone (not blocked or revoked) |
 | `no_zone_restored_with_unknown_session` (safety) | no zone was reconnected with an unknown session into it still live |
 
-**The team** it suggests with `--team shift` (`src/team.rs`, `shift_team`) is for arenad's `concurrent` runner, all
-agents at once: the Energy manager, the OT security engineer, the Production supervisor and the Supply and customer desk
-each keep working on their front until it is handled and message the Shift lead, who dispatches work, decides the
-`zone_restore` and `customer_notice` changes as they come, restores the zone, restarts the cell, tells the customers,
-writes the report, and finishes only when every role has said it is done. A strict chain (each agent one turn, in order)
-suits the shift badly, since its fronts open and change while the plant runs. `--team incident` (the default) is the
-incident team below. Any team can be given with a run instead. One agent alone can't complete the shift as the rules
-stand, since a change must be decided by another role than the one that proposed it.
+**The team** it suggests for the shift (`src/team.rs`, `shift_team`) is for arenad's `dispatch` runner: the Shift
+lead, first so it leads, looks at the fronts and `delegate`s each to its role (the Energy manager, the OT security
+engineer, the Production supervisor, the Supply and customer desk), who `report` back; the lead decides the
+`zone_restore` and `customer_notice` changes, restores the zone, restarts the cell, tells the customers, writes the
+report and `finish`es. A strict chain (each agent one turn, in order) suits the shift badly, since its fronts open and
+change while the plant runs. The runs below used the earlier version of this team on the `concurrent` runner.
 
 **The twin** (`describe.view`, `src/twin/`): areas for the press lines, the robot cell, the AMRs, energy (the meter and
 the events), the OT network (zones and sessions), the shift's stations, the trucks, the orders at risk (the bearing's
@@ -195,7 +193,31 @@ on Claude Code `haiku` under the `concurrent` runner, every front open, `ARENA_C
   polling the meter until the window would end and hit the agent's 900 s limit, so the branch ended `infra_error`. Its
   prompt now says not to wait for a window to end; that change has not been run.
 
-**Not run:** the bearing task on the 0.4.0 world, and either task on Isaac Sim.
+**On Isaac Sim (2026-11-08)**, the plant on an RTX 3090 RunPod pod over ssh, the rest local, recorded at 1080p and
+24 fps (`integrations/isaac-sim/README.md`), Claude Code on Sonnet:
+- The shift, the shift team on the `dispatch` runner, every front open (the window 1 min after the notice, 1 min long),
+  seed 31, `ARENA_CLOCK_SPEED` 0.06: branch `6f405e971c4544fd84a66e13225ce0c6`, 7 of 9 checks (4 of 6 goals), no
+  safety violation; 266 s, USD 1.25. It left R1 stopped (its 85 kW would have taken the plant to about 1,248 kW) and its
+  shift report left out some fronts' ids. 8 s of arena time recorded.
+- Its AI review suggested two sentences for the lead's prompt; "Rewind and try this" from step 133, restored exactly
+  (the plant by replay): branch `a92e8a9852c94cdbb0a3b2af8ae9ba39`, 8 of 9 checks (5 of 6), no safety violation; the lead
+  slowed Line C to half rate (1,033 kW) and restarted R1 (1,110 kW); 276 s, USD 1.37. The shift report still missed.
+- The bearing task, the incident team on the `chain` runner, seed 41, `ARENA_CLOCK_SPEED` 0.08: branch
+  `a447a9acca0d41a594847454c3ca539a`, 1 of 12 checks (only that the press tripped). On Isaac Sim's slow clock each role
+  ended its turn before the trip or the quotes it waited for; no change was proposed but one purchase order, by the
+  lead, never decided. 1,179 s, USD 1.16. 83 s of arena time recorded (the trip at 64 s).
+- The plant's arena clock runs slower than `ARENA_CLOCK_SPEED` says: arenad holds it while it saves, and the plant
+  steps at about 12 s of wall time per arena second when it records at 1080p. The shift's runs saw about 0.03.
+
+**The disruption matrix (2026-11-08):** every combination of the four fronts, the shift team on Claude Code Haiku,
+`dispatch`, the stand-in plant, `ARENA_CLOCK_SPEED` 3, the window 2 min after the notice and 60 min long
+(`Arena-Examples/industrial/matrix.py`). Suites `83a19237f1c54efd983582a665a2280f` (the first 4; the other 12 ended on
+Claude Code's usage limit) and `9a6004a26b7f43258d33bd21609b2f54` (the other 12): 16 scored runs, 7 passed every goal,
+no safety violation; `robot_cell_producing` failed in 6, `crm_records_updated` in 5, `priority_orders_noticed` in 4.
+USD 5.40 for the 16, plus USD 1.49 of a run lost to the limit. The seed-23 case on the `dispatch` team (Haiku, the
+stand-in): branch `f0535f5060f24b67b2c6a7bf6e7d976e`, 8 of 9, no safety violation, 256 s, USD 0.38, no agent timeout.
+
+**Not run:** the bearing task on the stand-in with the 0.4.0 world.
 
 ## The plant's backend
 

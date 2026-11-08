@@ -31,6 +31,14 @@ def _app():
     return _APP["app"]
 
 
+def _render_settings(settings: dict) -> None:
+    """The renderer's carb settings a config asks for (`render`), e.g. the path tracer and its samples."""
+    import carb
+    s = carb.settings.get_settings()
+    for key, value in settings.items():
+        s.set(key, value)
+
+
 def _stop_timeline():
     import omni.timeline
     omni.timeline.get_timeline_interface().stop()  # unverified on 6.2
@@ -56,7 +64,7 @@ def _stage(app, cfg, data):
     builder = scene.build_scene(ctx.get_stage(), root, use_assets=root is not None, data=data)
     if cfg.scene == "showcase" and cfg.record is not None:
         from . import showcase_scene
-        _APP["dressed"] = showcase_scene.dress(builder, root, data, log)
+        _APP["dressed"] = showcase_scene.dress(builder, root, data, log, shift=bool(cfg.cells))
     for _ in range(20):
         app.update()
     return ctx.get_stage()
@@ -73,6 +81,7 @@ def make(cfg, data, physics_hz):
     load(cfg)
     _APP["step"] = _idle
     app = _app()
+    _render_settings(cfg.render)
     import isaacsim.core.experimental.utils.app as app_utils
     sim_io = sources.import_read_only(cfg.isaac_path, "sim_io", "isaac_path")
     layout = importlib.import_module("layout")

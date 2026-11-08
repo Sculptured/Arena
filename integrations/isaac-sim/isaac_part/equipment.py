@@ -7,6 +7,9 @@ doesn't depend on how the advances were split.
   from the physics steps it ran.
 - The load is the base load plus each metered line's running or idle load (running scaled by the line's speed) plus
   each cell's. When it changes, the plant reports a `power` event, which a benchmark can link to a utility's meter.
+- Signage: what the plant's boards show of other systems (a utility's target, the OT network's state, a late truck),
+  set by a benchmark's links (`show_status`). Only the showcase's visuals read it: it is in no document and no tool's
+  answer, so agents learn nothing from the plant they wouldn't from those systems.
 """
 from arena_part.params import Refusal
 
@@ -20,14 +23,15 @@ class Equipment:
         self.every = max(1, hz // 10)  # the power is checked every 0.1 s of physics
         self.cells = {cid: {"status": RUNNING, "steps": 0} for cid in self.meta}
         self.kw = None  # the last load reported
+        self.signage = {}  # key -> {"value", "number"}
 
     # ---- saved state -----------------------------------------------------------------------------------
 
     def snapshot(self) -> dict:
-        return {"cells": self.cells, "kw": self.kw}
+        return {"cells": self.cells, "kw": self.kw, "signage": self.signage}
 
     def restore(self, snap: dict) -> None:
-        self.cells, self.kw = snap["cells"], snap["kw"]
+        self.cells, self.kw, self.signage = snap["cells"], snap["kw"], snap.get("signage", {})
 
     # ---- the physics step ------------------------------------------------------------------------------
 
@@ -82,6 +86,13 @@ class Equipment:
         factory.emit("cell", cid, f"{cid} running", {"cell": cid, "status": RUNNING})
         return self.cell_view(cid)
 
+    def show_status(self, key: str, value: str, number) -> dict:
+        """What a board shows for `key` from now on (a link sets it)."""
+        if not key:
+            raise Refusal("key must not be empty")
+        self.signage[key] = {"value": value, "number": number}
+        return {"key": key, **self.signage[key]}
+
     # ---- views -----------------------------------------------------------------------------------------
 
     def cell_view(self, cid: str) -> dict:
@@ -91,6 +102,11 @@ class Equipment:
         return {"id": cid, "name": meta["name"], "line": meta.get("line"), "zone": meta.get("zone"),
                 "robot": meta.get("robot"), "status": c["status"], "safe_stopped": c["status"] != RUNNING,
                 "parts": parts, "rate_per_hour": meta["rate_per_hour"], "kw": kw}
+
+    def visual_state(self, factory) -> dict:
+        """What the showcase's visuals read each frame: the cells, the load and the signage."""
+        power = None if self.power is None else {"kw": self.load(factory)}
+        return {"cells": {cid: self.cell_view(cid) for cid in self.cells}, "power": power, "signage": self.signage}
 
     def state(self, factory) -> dict:
         """What Plant.state adds to the factory's state: `cells`, and `power` when it is configured."""

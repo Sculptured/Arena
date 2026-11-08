@@ -167,37 +167,39 @@ time) and their customers, and propose a `customer_notice` for each with its new
 decides them and tells the customers.";
 
 const SHIFT_LEAD: &str = "You are the Shift lead at Ridgeline Components' Plant 2, with the plant \
-manager's authority in this exercise. You work at the same time as the other roles: the Energy \
-manager, the OT security engineer, the Production supervisor and the Supply and customer desk. \
-Dispatch work to them with `message` when you see something on their front, and keep checking \
-`list_changes` and your `inbox`: decide each `zone_restore` and `customer_notice` change as it comes \
-(never one you proposed). Restore a zone only once its change is approved and the session is \
+manager's authority in this exercise. Your team waits for your work: the Energy manager (`energy`), \
+the OT security engineer (`security`), the Production supervisor (`production`) and the Supply and \
+customer desk (`supply`). Look at the utility, the OT network, the roster and the trucks, then \
+`delegate` each front that needs work to its role with the facts it needs, and pass on what one \
+reports that another needs. Decide the team's `zone_restore` and `customer_notice` changes as they are \
+reported (never one you proposed). Restore a zone only once its change is approved and the session is \
 revoked, then restart its cell (`start_cell`) if its station is staffed and the utility's target still \
 holds with it running. Notify each customer on their approved notice, log a note on their CRM account \
-and move each noticed order's opportunity to its new date. Finish only when every role has told you it \
-is done and no change waits for you. Don't wait for a demand-response window to end: once the load \
-holds under its target, it is handled. Check the meter, the network, the roster and the trucks once \
-more, record the shift report as a Note in the ERP whose title starts with \"Shift report\", and end \
-with a short summary.";
+and move each noticed order's opportunity to its new date. Don't wait for a demand-response window to \
+end: once the load holds under its target, it is handled. When every front is handled, check the \
+meter, the network, the roster and the trucks once more, record the shift report as a Note in the ERP \
+whose title starts with \"Shift report\", and `finish` with a short summary.";
 
-/// How a shift role works beside the others (arenad's `concurrent` runner starts them all at once).
-const ALONGSIDE: &str = " You work at the same time as the rest of the team. Tell the Shift lead \
-(`message` to `lead`) the ids of the changes you propose and what you did, and read your `inbox` for \
-what the lead or others ask of you. Keep checking your systems until your front is handled and stays \
-handled, then tell the lead you are done and finish with a short summary.";
+/// How a shift role works for the lead (arenad's `dispatch` runner wakes it when work arrives).
+const FOR_THE_LEAD: &str =
+    " The Shift lead gives you work. Do it, then `report` what you did with the \
+ids of the changes you proposed and anything the lead must decide or pass on.";
 
 fn shift_role(id: &str, name: &str, work: &str) -> TeamRole {
     TeamRole {
         id: id.into(),
         name: name.into(),
-        prompt: format!("You are the {name} at Ridgeline Components' Plant 2. {work}{ALONGSIDE}"),
+        prompt: format!(
+            "You are the {name} at Ridgeline Components' Plant 2. {work}{FOR_THE_LEAD}"
+        ),
         read_only: false,
     }
 }
 
-/// The shift team, for arenad's `concurrent` runner: one role per front, each working on until its
-/// front is handled, and the Shift lead, who dispatches, decides and reports. A strict chain (each
-/// agent one turn, in order) suits the shift badly: its fronts open and change while the plant runs.
+/// The shift team, for arenad's `dispatch` runner: the Shift lead (first, so it leads) delegates each
+/// front to its role, decides the changes they report, and finishes once every front is handled. A
+/// strict chain (each agent one turn, in order) suits the shift badly: its fronts open and change
+/// while the plant runs.
 pub fn shift_team() -> BenchTeam {
     let lead = TeamRole {
         id: "lead".into(),
@@ -208,13 +210,13 @@ pub fn shift_team() -> BenchTeam {
     BenchTeam {
         id: "shift".into(),
         name: "Shift team".into(),
-        runner: Some("concurrent".into()),
+        runner: Some("dispatch".into()),
         agents: vec![
+            lead,
             shift_role("energy", "Energy manager", ENERGY),
             shift_role("security", "OT security engineer", SECURITY),
             shift_role("production", "Production supervisor", PRODUCTION),
             shift_role("supply", "Supply and customer desk", SUPPLY),
-            lead,
         ],
     }
 }
@@ -256,19 +258,18 @@ mod tests {
     }
 
     #[test]
-    fn the_shift_team_works_alongside_and_the_lead_decides_and_waits() {
+    fn the_shift_team_is_led_by_the_lead_who_delegates_decides_and_finishes() {
         let t = shift_team();
+        assert_eq!(t.runner.as_deref(), Some("dispatch"));
         let ids: Vec<&str> = t.agents.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, ["energy", "security", "production", "supply", "lead"]);
-        let (last, others) = t.agents.split_last().unwrap();
-        assert!(others
-            .iter()
-            .all(|a| a.prompt.contains("`message` to `lead`")));
+        assert_eq!(ids, ["lead", "energy", "security", "production", "supply"]);
+        let (lead, roles) = t.agents.split_first().unwrap();
+        assert!(roles.iter().all(|a| a.prompt.contains("`report`")));
         assert!(t.agents.iter().all(|a| !a.prompt.contains("handoff")));
-        assert!(last.prompt.contains("never one you proposed"));
-        assert!(last
-            .prompt
-            .contains("Finish only when every role has told you"));
+        assert!(
+            lead.prompt.contains("never one you proposed") && lead.prompt.contains("`delegate`")
+        );
+        assert!(lead.prompt.contains("`finish`"));
         assert_eq!(named("shift").unwrap().id, "shift");
         assert!(named("other").is_none());
         assert!(SHIFT_TICKET.contains("a Note whose title starts with \"Shift report\""));

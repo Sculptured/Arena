@@ -1,6 +1,6 @@
 """The part's config: where the factory's isaac folder and data are, the plant clock's start, the physics rate, and
 the recording."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +28,7 @@ class Config:
     record_height: int = 720  # the MP4's height in pixels; the width follows at 16:9
     cells: tuple = ()  # robot cells the arena adds beside the factory's presses (equipment.py)
     power: dict | None = None  # the plant's load model; None: no load is reported
+    render: dict = field(default_factory=dict)  # carb settings for the renderer (isaac only), e.g. the path tracer
 
 
 def parse_config(config) -> Config:
@@ -49,7 +50,10 @@ def _equipment(config) -> dict:
         equipment.check_config(cells, power)
     except ValueError as e:
         raise errors.invalid(str(e)) from None
-    return {"cells": tuple(cells), "power": power}
+    render = config.get("render", {})
+    if not isinstance(render, dict) or not all(isinstance(k, str) and k.startswith("/") for k in render):
+        raise errors.invalid("render must map carb setting paths (/rtx/...) to values")
+    return {"cells": tuple(cells), "power": power, "render": render}
 
 
 def _positive(n, name):

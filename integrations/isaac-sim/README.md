@@ -148,6 +148,32 @@ starts (`isaac_part/showcase_*.py`). It changes only what is seen:
 result is `{}`, so the Isaac Sim version that ran is in `inspect`, as `plant/sim.isaac_version`. It comes from
 `IsaacIO.info()`; the stand-in reports `"test double"`.
 
+## The shift's scene pieces (`showcase_shift*.py`)
+
+With `scene: showcase` and `cells` configured (the factory benchmark's shift), the showcase adds, from NVIDIA's stock
+assets with physics stripped: robot welding cell R1 (a UR10e on a pedestal at a welding fixture, fence, stack light,
+HMI; its weld cycle is solved on the UR10e's own joints, `tests/data/ur10e_joints.json`, and it parks over 2.5 s on a
+safe stop, the torch's spark lit while it welds), two Nova Carter AMRs carrying KLT bins on their rounds, an energy
+board (load against the utility's target), the IT/OT gateway's cabinet with a stack light and a screen, and the dock's
+arrivals board. They follow the plant's equipment (the cells, the load) and its signage (`show_status`, which the
+benchmark's links set from the utility, the OT network and the hub). The camera director cuts to each front: the
+event's notice and window (energy board), the session (gateway, then the cell), its isolation, revocation and the
+zone's restore (gateway), a late truck (dock board), the cell stopping or starting (cell), a load change of 100 kW
+or more (energy board). `render` in the config sets the renderer's carb settings (e.g. the path tracer).
+
+**Ran on Isaac Sim (RunPod, 2026-11-08).** An RTX 3090 (24 GB, driver 580.95.05), `nvcr.io/nvidia/isaac-sim:6.2.0`:
+- 1080p, 24 fps, RTX real-time: 12.1 s of wall time per arena second (208 ms to render a frame, 25 ms of visuals).
+- 2160p (4K), 24 fps: 22.8 s per arena second (523 ms a frame). Path-traced 4K stills (64 samples, OptiX denoiser) took
+  about 30 s each.
+- The first start on a fresh pod took 16 min (shader and asset caches); later ones about 1 min.
+- On an RTX A5000 host with driver 550.144.03 DLSS was unavailable ("NGX isn't enabled"): frames were grainy and took
+  1 s each at 1080p. Use a host with a recent driver.
+- The image has no ffmpeg; `imageio-ffmpeg` on `PYTHONPATH` gives the recorder one, else it writes PNG frames.
+- The image's entrypoint (`runheadless.sh`) ignores a start command: create the pod with an entrypoint override
+  (RunPod's REST API `dockerEntrypoint`) to start `remote/sshd.py`.
+- Two hero runs of the factory benchmark recorded here (`benchmarks/factory/README.md`); the recordings' sidecars
+  give their frames and duration in arena time.
+
 ## The arena clock
 
 - The factory is never edited. The part replaces two names on the imported `factory` module:
@@ -224,6 +250,7 @@ plant as before (no extra keys, events or load).
 |---|---|---|
 | `safe_stop_cell(cell, reason?)` | write | `cell/<id>`: the robot parks, its safety PLC holds; refused when it is safe-stopped already |
 | `start_cell(cell)` | write | `cell/<id>`: refused when it runs already |
+| `show_status(key, value, number?)` | write | `_signage/<key>` (internal): what the showcase's boards show of another system (`dr`, `ot`, `truck`); for a benchmark's links, so agents don't get it. It is in no document or tool answer |
 | `plant_scenario(name)` | write | `plant/clock`: `press-wear` starts PR-A1's wear now (what `scenario: true` does at the start); `calm` resets the plant with the run's seed, so no press wears. For a task's setup, so agents don't get it |
 
 - A cell counts the parts it makes from the physics steps it ran (`rate_per_hour`). It gives a `cell` event when it

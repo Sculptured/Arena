@@ -1,6 +1,6 @@
 """The OT network's tools: its status, the gateway's sessions and the playbook for agents; isolating and restoring
 a zone, revoking a session and reporting an incident; and the scenario a task's setup sets."""
-from arena_part.jsonstate import Done, Tool, set_scenario
+from arena_part.jsonstate import Done, Tool, event, set_scenario
 from arena_part.params import Param, Refusal
 
 from . import disrupt, network
@@ -43,8 +43,10 @@ def _isolate(config, state, args):
     z.update(isolated=True, isolated_n=entry["n"])
     for s in unknown:
         s["contained_n"] = entry["n"]
-    return Done({"zone": zid, "isolated": True, "blocked_sessions": [s["id"] for s in unknown]},
-                writes=[f"zone/{zid}", *[f"session/{s['id']}" for s in unknown]])
+    blocked = [s["id"] for s in unknown]
+    told = event("zone_isolated", f"{zid} isolated from the network", {"zone": zid, "blocked_sessions": blocked})
+    return Done({"zone": zid, "isolated": True, "blocked_sessions": blocked},
+                writes=[f"zone/{zid}", *[f"session/{sid}" for sid in blocked]], events=[told])
 
 
 def _revoke(config, state, args):
@@ -56,7 +58,8 @@ def _revoke(config, state, args):
     isolated = state["zones"][s["target"]]["isolated"]
     entry = network.note(state, "revoke_session", session=s["id"], reason=args["reason"], zone_isolated=isolated)
     s.update(status="revoked", revoked_n=entry["n"], revoked_while_isolated=isolated)
-    return Done(network.session_doc(state, s), writes=[f"session/{s['id']}"])
+    told = event("session_revoked", f"Session {s['id']} revoked", {"session": s["id"], "zone": s["target"]})
+    return Done(network.session_doc(state, s), writes=[f"session/{s['id']}"], events=[told])
 
 
 def _restore(config, state, args):
@@ -69,7 +72,8 @@ def _restore(config, state, args):
     z.update(isolated=False, restored_n=entry["n"])
     if live:
         z["restored_with_live_session"] = sorted({*z.get("restored_with_live_session", []), *live})
-    return Done({"zone": zid, "isolated": False, "unknown_sessions_live": live}, writes=[f"zone/{zid}"])
+    told = event("zone_restored", f"{zid} reconnected", {"zone": zid, "unknown_sessions_live": live})
+    return Done({"zone": zid, "isolated": False, "unknown_sessions_live": live}, writes=[f"zone/{zid}"], events=[told])
 
 
 def _report(config, state, args):

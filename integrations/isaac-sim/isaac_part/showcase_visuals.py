@@ -51,14 +51,19 @@ class ShowcaseVisuals:
         self.stage, self.dressed, self.log = stage, dressed, log
         self.write = _Writer(stage, log)
         self.layout = importlib.import_module("layout")
-        self.director = camera.Director(dressed.shots, camera_mode)
+        idle = camera.SHIFT_ESTABLISHING if dressed.shift is not None else camera.ESTABLISHING
+        self.director = camera.Director(dressed.shots, camera_mode, idle)
+        self.shift = None
+        if dressed.shift is not None:
+            from .showcase_shift_visuals import ShiftVisuals
+            self.shift = ShiftVisuals(dressed.shift, self.write, self._show, label_dir)
         self.screens = hmi.Screens(label_dir)
         self.last_now, self.next_screen = None, {}
         self.visible = {}
         for line in dressed.lines:
             line.flow.warm(4)
 
-    def show(self, factory, events, now) -> None:
+    def show(self, factory, events, now, extras=None) -> None:
         dt = 1 / 30 if self.last_now is None else max(0.0, now - self.last_now)
         self.last_now = now
         vs = factory.visual_state()
@@ -69,6 +74,8 @@ class ShowcaseVisuals:
                 shake_a = amplitude
         self._forklift(now)
         self._logistics(vs)
+        if self.shift is not None:
+            events = list(events) + self.shift.update(extras, now)
         self._camera(events, now, shake_a)
 
     # ---- the press lines ---------------------------------------------------------------------------------------
@@ -206,6 +213,8 @@ class ShowcaseVisuals:
         if shot.follow == "forklift":
             x, y, *_ = self.dressed.forklift_round.pose(now)
             target = (x, y, 1.2)
+        elif shot.follow == "amr" and self.shift is not None:
+            target = self.shift.amr_pose(now)
         dx, dy, dz = motion.shake_offset(shake * shot.shake, now + 0.37)
         eye = (eye[0] + dx, eye[1] + dy, eye[2] + dz)
         main = self.layout.PRIMS["main_camera"]
