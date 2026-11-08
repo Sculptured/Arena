@@ -99,6 +99,7 @@ pub fn team() -> BenchTeam {
         read_only: false,
     };
     BenchTeam {
+        runner: Some("chain".into()),
         id: "incident".into(),
         name: "Incident team".into(),
         agents: vec![

@@ -9,6 +9,7 @@ pub mod erp;
 pub mod facts;
 pub mod scale;
 pub mod seed;
+pub mod single;
 pub mod team;
 pub mod world;
 
@@ -76,7 +77,8 @@ impl Benchmark for Factory {
             tasks: vec![task()],
             instructions: team::INSTRUCTIONS.into(),
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
-            team: Some(team::team()),
+            team: Some(single::team()),
+            teams: vec![team::team()],
             tools: vec![],
             links: world::links(),
             gates: world::gates(),
