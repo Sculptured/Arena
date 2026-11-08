@@ -38,6 +38,8 @@ secondary metadata lines, few borders, plenty of whitespace.
   with…**; time, cost, check, safety and any refusal; the review line; the timeline and event log with
   the step inspector beside them; the trace once a step is picked; and **More about this run** (the
   world, how the agents ran, the disruption, tokens, steps, and the deployment estimate).
+- **Suites** (`/suites`): status, name (team, scenarios × repeats and runner as its tooltip),
+  passed and when; tick two to **Compare**. ⌘K finds a suite by name.
 - Suites, the team editor, the world view and the process view are under **⋯** and ⌘K. Nothing was
   removed; it just isn't on the first screen.
 
@@ -190,8 +192,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   (`dev/fixtureApi.ts`), for screenshots without arenad.
 - **Trends.** Actions per minute for each system kind, tokens, cost and tool latency as sparklines,
   and context per model call as a chart. A cost the record does not give per call draws no line.
-- **Data tables.** Lists use a text filter (suites also filter chips with counts), and rows open with a
-  click or Enter.
+- **Data tables.** Rows open with a click or Enter; ⌘K is the filter for runs and suites.
 - **Command palette.** Opens with ⌘K or Ctrl+K. It lists the pages (Run, History, Suites, Team
   editor); the deeper views of the run on screen; new run and new suite (`?new=suite`); compare two
   runs or two suites, picked in two steps (the ⋯ menu opens it at that step); the theme; and
