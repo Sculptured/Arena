@@ -222,6 +222,48 @@ mod tests {
         tests::{single_run, team_run, TICKET},
     };
 
+    fn assert_check_outcomes(d: &PairDigest) {
+        let differs: Vec<&str> = d
+            .comparison
+            .outcome_differs
+            .iter()
+            .map(|r| r.check.as_str())
+            .collect();
+        // The single agent passed four checks the team failed; both missed the next batch.
+        assert_eq!(
+            differs,
+            [
+                "deviation_opened",
+                "allocated_earliest_due_first",
+                "customers_notified",
+                "crm_updated"
+            ]
+        );
+        assert_eq!(d.comparison.outcome_same, 10);
+        assert_eq!(
+            (d.comparison.checks_passed, d.comparison.checks_total),
+            ([9, 13], [14, 14])
+        );
+    }
+
+    fn assert_world_differences(d: &PairDigest) {
+        let w = &d.comparison.world;
+        assert_eq!(w.differing_rows, 137);
+        let total: usize = w
+            .by_kind
+            .iter()
+            .map(|k| k.only_a + k.only_b + k.changed)
+            .sum();
+        assert_eq!(total, 137);
+        assert!(w.by_kind.iter().any(|k| k.kind == "crm:note"));
+        assert!(w.changed.items.len() <= ROW_SAMPLE);
+        assert!(w
+            .changed
+            .items
+            .iter()
+            .all(|r| !r.fields.is_empty() && r.fields.len() <= FIELDS));
+    }
+
     #[test]
     fn the_recorded_comparison_is_summarised_by_kind_and_outcome() {
         let cmp: Value =
@@ -246,41 +288,7 @@ mod tests {
         let d = pair_digest(&ra, &rb, &facts);
         assert!(size_of(&d) <= 2 * SIDE_BYTES + 12_000, "{}", size_of(&d));
         assert_eq!(d.comparison.first_divergent_seq, Some(3));
-        let differs: Vec<&str> = d
-            .comparison
-            .outcome_differs
-            .iter()
-            .map(|r| r.check.as_str())
-            .collect();
-        // The single agent passed four checks the team failed; both missed the next batch.
-        assert_eq!(
-            differs,
-            [
-                "deviation_opened",
-                "allocated_earliest_due_first",
-                "customers_notified",
-                "crm_updated"
-            ]
-        );
-        assert_eq!(d.comparison.outcome_same, 10);
-        assert_eq!(
-            (d.comparison.checks_passed, d.comparison.checks_total),
-            ([9, 13], [14, 14])
-        );
-        let w = &d.comparison.world;
-        assert_eq!(w.differing_rows, 137);
-        let total: usize = w
-            .by_kind
-            .iter()
-            .map(|k| k.only_a + k.only_b + k.changed)
-            .sum();
-        assert_eq!(total, 137);
-        assert!(w.by_kind.iter().any(|k| k.kind == "crm:note"));
-        assert!(w.changed.items.len() <= ROW_SAMPLE);
-        assert!(w
-            .changed
-            .items
-            .iter()
-            .all(|r| !r.fields.is_empty() && r.fields.len() <= FIELDS));
+        assert_check_outcomes(&d);
+        assert_world_differences(&d);
     }
 }

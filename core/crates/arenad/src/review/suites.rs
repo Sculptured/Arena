@@ -153,8 +153,7 @@ mod tests {
     use super::*;
     use crate::suite::{compare, fixtures::*, report};
 
-    #[test]
-    fn moved_checks_come_with_example_runs_of_each_side() {
+    fn poked_reports() -> (SuiteReport, SuiteReport) {
         let sa = suite("a", &["t1"], 2);
         let sb = suite("b", &["t1"], 2);
         let a = report(
@@ -177,6 +176,12 @@ mod tests {
                 ],
             ),
         );
+        (a, b)
+    }
+
+    #[test]
+    fn moved_checks_come_with_example_runs_of_each_side() {
+        let (a, b) = poked_reports();
         let c = compare(&a, &b);
         let d = suite_digest(&a, &b, &c);
         assert_eq!(d.checks_moved.len(), 1);

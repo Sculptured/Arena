@@ -21,9 +21,8 @@ fn json_is_found_bare_fenced_or_inside_text() {
     assert!(json_in("[1, 2]").is_err());
 }
 
-#[test]
-fn a_run_review_keeps_real_steps_and_drops_the_rest() {
-    let answer = json!({
+fn messy_run_answer() -> Value {
+    json!({
         "verdict": "The deviation was never opened.",
         "went_wrong": [
             {"title": "Deviation not created", "why": "insert_doc lacked a subject",
@@ -39,7 +38,12 @@ fn a_run_review_keeps_real_steps_and_drops_the_rest() {
         ],
         "went_well": ["Batch held", "", 3],
         "confidence": "HIGH"
-    });
+    })
+}
+
+#[test]
+fn a_run_review_keeps_real_steps_and_drops_the_rest() {
+    let answer = messy_run_answer();
     let (r, issues) = run_review(&answer, &citable()).unwrap();
     assert_eq!(r.went_wrong.len(), 3);
     assert_eq!(r.went_wrong[0].steps, [110]);
@@ -56,6 +60,10 @@ fn a_run_review_keeps_real_steps_and_drops_the_rest() {
     );
     assert_eq!(r.went_well, ["Batch held"]);
     assert_eq!(r.confidence, "high");
+    assert_run_review_issues(&issues);
+}
+
+fn assert_run_review_issues(issues: &Issues) {
     let said = issues.0.join("\n");
     for s in [
         "999",

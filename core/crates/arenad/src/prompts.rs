@@ -227,20 +227,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_suggested_team_comes_with_its_runner_the_default_first() {
-        let role = |id: &str| TeamRole {
+    fn role(id: &str) -> TeamRole {
+        TeamRole {
             id: id.into(),
             name: id.into(),
             prompt: id.into(),
             read_only: false,
-        };
-        let team = |id: &str, runner: Option<&str>| BenchTeam {
+        }
+    }
+
+    fn team(id: &str, runner: Option<&str>) -> BenchTeam {
+        BenchTeam {
             id: id.into(),
             name: id.into(),
             agents: vec![role("a")],
             runner: runner.map(Into::into),
-        };
+        }
+    }
+
+    #[test]
+    fn every_suggested_team_comes_with_its_runner_the_default_first() {
         let mut b = bench(Some(team("single", None)), None);
         b.teams = vec![team("lead", Some("dispatch")), team("odd", Some("nope"))];
         let haiku = Pick {
@@ -260,6 +266,10 @@ mod tests {
                 ("odd".into(), Runner::Chain, h)
             ]
         );
+        assert_generic_team_is_single_agent_chain();
+    }
+
+    fn assert_generic_team_is_single_agent_chain() {
         let generic = suggested_teams(&bench(None, None), &Pick::default());
         assert_eq!(generic.len(), 1);
         let v = serde_json::to_value(&generic[0]).unwrap();

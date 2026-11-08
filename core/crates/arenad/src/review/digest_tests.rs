@@ -47,6 +47,14 @@ fn the_team_run_digest_names_what_went_wrong_with_steps() {
     assert_eq!(d.team.agents.items.len(), 6);
     let checks = d.checks.as_ref().expect("the run was scored");
     assert!(!checks.passed);
+    assert_team_run_failed_checks(&d);
+    assert_team_run_problems_and_writes(&d);
+    assert!(checks.differing.is_empty());
+    assert_team_run_world_and_notes(&d);
+}
+
+fn assert_team_run_failed_checks(d: &Digest) {
+    let checks = d.checks.as_ref().expect("the run was scored");
     let failed: Vec<&str> = (checks.items.items.iter())
         .filter(|c| !c.passed)
         .map(|c| c.name.as_str())
@@ -67,6 +75,9 @@ fn the_team_run_digest_names_what_went_wrong_with_steps() {
         .iter()
         .filter(|c| c.safety)
         .all(|c| c.passed));
+}
+
+fn assert_team_run_problems_and_writes(d: &Digest) {
     // The ERP refused the deviation without a subject: a failed write at step 110.
     let p = d
         .problems
@@ -92,7 +103,9 @@ fn the_team_run_digest_names_what_went_wrong_with_steps() {
         .iter()
         .all(|w| w.agent.as_deref() != Some("link")));
     assert_eq!(d.writes.by_world.get("decide_change"), Some(&17));
-    assert!(checks.differing.is_empty());
+}
+
+fn assert_team_run_world_and_notes(d: &Digest) {
     // The rejected schedule change shows among the world's events.
     assert!(d
         .world_events

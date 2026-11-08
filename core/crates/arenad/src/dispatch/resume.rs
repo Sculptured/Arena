@@ -244,6 +244,10 @@ mod tests {
     /// The lead delegated to both; qa took its work and reported; supply's work came while it was
     /// busy with something else; the lead was woken once for an idle team.
     fn record() -> Vec<Event> {
+        [starts(), delegations(), work(), reports(), idling()].concat()
+    }
+
+    fn starts() -> Vec<Event> {
         vec![
             ev(1, "", EventKind::RunStart, json!({})),
             ev(2, "lead", EventKind::AgentStart, json!({})),
@@ -255,6 +259,11 @@ mod tests {
                 EventKind::Wake,
                 json!({"reason": "start", "mail": [], "input": "ticket"}),
             ),
+        ]
+    }
+
+    fn delegations() -> Vec<Event> {
+        vec![
             ev(
                 6,
                 "lead",
@@ -267,6 +276,11 @@ mod tests {
                 EventKind::Message,
                 json!({"to": "supply", "text": "warm up"}),
             ),
+        ]
+    }
+
+    fn work() -> Vec<Event> {
+        vec![
             ev(
                 8,
                 "qa",
@@ -285,6 +299,11 @@ mod tests {
                 EventKind::ToolCall,
                 json!({"name": "propose_change", "args": {"action": "batch_hold"}, "result": {"id": "C-1"}}),
             ),
+        ]
+    }
+
+    fn reports() -> Vec<Event> {
+        vec![
             ev(
                 11,
                 "lead",
@@ -297,6 +316,11 @@ mod tests {
                 EventKind::Report,
                 json!({"to": "lead", "text": "hold proposed: C-1"}),
             ),
+        ]
+    }
+
+    fn idling() -> Vec<Event> {
+        vec![
             ev(
                 13,
                 "qa",

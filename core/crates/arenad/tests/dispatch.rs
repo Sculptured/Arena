@@ -137,38 +137,46 @@ fn a_lead_that_cant_reach_its_model_ends_the_run_infra_error() {
         );
         let evs = fx.state.store.events(&branch).await.unwrap();
         assert_eq!(evs[0].payload["runner"], "dispatch");
-        let kinds: Vec<(EventKind, Option<&str>)> = (evs.iter())
-            .filter(|e| {
-                !matches!(
-                    e.kind,
-                    EventKind::ToolCall | EventKind::ModelCall | EventKind::WorldView
-                )
-            })
-            .map(|e| (e.kind, e.agent.as_deref()))
-            .collect();
-        let lead = Some("lead");
-        let helper = Some("helper");
-        assert_eq!(
-            kinds,
-            [
-                (EventKind::RunStart, None),
-                (EventKind::AgentStart, lead),
-                (EventKind::AgentStart, helper),
-                (EventKind::Wake, lead),
-                (EventKind::Idle, lead),
-                (EventKind::AgentEnd, lead),
-                (EventKind::AgentEnd, helper),
-            ]
-        );
-        let wake = &of_kind(&evs, EventKind::Wake)[0].payload;
-        assert_eq!(wake["reason"], "start");
-        let input = wake["input"].as_str().unwrap();
-        assert!(
-            input.contains("You lead this run") && input.contains("`helper`"),
-            "{input}"
-        );
+        assert_lifecycle_events(&evs);
+        assert_lead_woken_with_its_brief(&evs);
         assert!(fx.state.live.read().unwrap().is_empty());
     })
+}
+
+fn assert_lifecycle_events(evs: &[Event]) {
+    let kinds: Vec<(EventKind, Option<&str>)> = (evs.iter())
+        .filter(|e| {
+            !matches!(
+                e.kind,
+                EventKind::ToolCall | EventKind::ModelCall | EventKind::WorldView
+            )
+        })
+        .map(|e| (e.kind, e.agent.as_deref()))
+        .collect();
+    let lead = Some("lead");
+    let helper = Some("helper");
+    assert_eq!(
+        kinds,
+        [
+            (EventKind::RunStart, None),
+            (EventKind::AgentStart, lead),
+            (EventKind::AgentStart, helper),
+            (EventKind::Wake, lead),
+            (EventKind::Idle, lead),
+            (EventKind::AgentEnd, lead),
+            (EventKind::AgentEnd, helper),
+        ]
+    );
+}
+
+fn assert_lead_woken_with_its_brief(evs: &[Event]) {
+    let wake = &of_kind(evs, EventKind::Wake)[0].payload;
+    assert_eq!(wake["reason"], "start");
+    let input = wake["input"].as_str().unwrap();
+    assert!(
+        input.contains("You lead this run") && input.contains("`helper`"),
+        "{input}"
+    );
 }
 
 #[test]
