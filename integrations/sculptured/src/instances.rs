@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::live::Run;
 use crate::saves::{self, Meta};
 use crate::server::{self, Pids};
-use crate::team::{self, PROPOSERS};
+use crate::team::{self, MAX_WAITING};
 use crate::{reraise, Sculptured, R};
 
 /// A save to start from: its folder, what it records and the changes it holds.
@@ -95,10 +95,10 @@ impl Sculptured {
         }
         let changes = saves::changes(&dir).map_err(PartError::internal_from)?;
         let waiting = reraise::waiting(&changes).len();
-        if waiting > PROPOSERS {
+        if waiting > MAX_WAITING {
             let msg = format!(
                 "save {} has {waiting} changes waiting for a decision; a restored instance can \
-                 propose at most {PROPOSERS} again",
+                 propose at most {MAX_WAITING} again",
                 f.save
             );
             return Err(PartError::cant_restore(msg));
@@ -127,7 +127,7 @@ impl Sculptured {
         (run.port, run.pids.hostd) = (Some(ready.port), ready.hostd);
         self.live.record(id, &run)?;
         let api = Api::new(ready.port)?;
-        team::ensure_running(&api, team).await?;
+        team::ensure(&api, team).await?;
         if let Some(r) = from {
             let aliases = reraise::reraise(&api, team, &r.changes, r.meta.aliases).await?;
             self.live.set_aliases(id, &aliases)?;
