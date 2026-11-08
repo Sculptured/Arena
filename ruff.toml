@@ -1,4 +1,4 @@
-# Python code health for every package in the repo (kits/python, integrations/*, examples/*).
+# Python code health for every package in the repo (kits/python, integrations/*, sdk/python).
 # Limits mirror the Rust and TypeScript rules: short, low-complexity functions.
 line-length = 100
 extend-exclude = ["core", "ui", "**/node_modules", "**/.venv"]

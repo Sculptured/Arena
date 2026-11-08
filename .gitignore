@@ -5,3 +5,6 @@ ui/dist/
 core/saves/
 __pycache__/
 ui/lint/node_modules/
+
+# Local git worktrees
+/.worktrees/
