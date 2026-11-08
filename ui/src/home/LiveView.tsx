@@ -26,6 +26,7 @@ import { rewindSeq } from '../world/scrub';
 import { useViews } from '../world/useWorld';
 import { taskOf } from '../run/runStats';
 import { useNow } from './useHome';
+import { LiveRunReview } from '../review/RunReview';
 
 type Main = 'timeline' | 'twin';
 
@@ -176,6 +177,7 @@ export function LiveRun({ runId, branchId, nameOf, onAgain, onNew }: {
       {error && <ErrorState error={error} onRetry={reload} />}
       {c.error && <ErrorState error={c.error} hint="The run carries on as it was." />}
       {d && <Ended d={d} runId={runId} selected={selected} onAgain={onAgain} onNew={onNew} />}
+      {d && <LiveRunReview runId={runId} d={d} onStep={setSelected} />}
       {d && <MainArea runId={runId} d={d} main={main} flow={flow} now={now} selected={selected} onSelect={setSelected} />}
       <Dialog open={c.stopping} onOpenChange={c.setStopping}>
         <DialogContent title="Stop this run?" description="The agents stop where they are. The run ends now and is not scored; its steps so far stay recorded.">

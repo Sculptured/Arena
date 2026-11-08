@@ -268,6 +268,14 @@ start_seq`), as compare does:
   batch and long-context prices are not modelled); otherwise `unknown`. Arena never makes up a price. The branch's
   cost is the sum when every agent's is known (labelled `mixed` when their labels differ), else `unknown`.
 
+## AI review
+
+Optional, and off with `ARENA_REVIEW=off` or in the web UI's Advanced menu. A real model (Claude Code Sonnet by
+default) reads a compact digest of a run's record and says where it went wrong (each claim citing steps), what to
+change (a prompt, the team, a tool, the model or the process; for a prompt change the sentences to add) and what
+went well; for two runs or two suites, the few differences that matter and which did better. arenad checks every
+citation against the record and stores the review. Details in [reference.md](reference.md#ai-review).
+
 ## Cost labels
 
 - `openrouter`: the cost OpenRouter reports (API mode on OpenRouter).

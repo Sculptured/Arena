@@ -11,6 +11,7 @@ from arena.models import BranchRecord, CheckResult, Event, as_scenario, as_team
 from arena.sse import parse
 from arena.mcp import Tool, ToolResult
 from arena.env import _messages_for, _parse_action, END
+from arena.client import wait_review
 
 
 def test_sse_parse_events_comments_and_multiline():
@@ -126,3 +127,13 @@ def test_env_helpers():
           Event("b", 7, None, "a", "handoff", {"note": "n"}),
           Event("b", 8, None, "b", "message", {"to": "*", "text": "own"})]
     assert [m["text"] for m in _messages_for("b", ev)] == ["hi", "all", "n"]
+
+
+def test_wait_review_follows_a_running_review_to_its_end():
+    answers = iter([{"status": "running"}, {"status": "done", "review": {"verdict": "v"}}])
+    slept = []
+    r = wait_review(lambda: next(answers), {"status": "running", "key": "branch:b"}, 60, 1.5, slept.append)
+    assert r["review"] == {"verdict": "v"} and slept == [1.5, 1.5]
+    assert wait_review(lambda: None, {"status": "done"}, 60, 1, slept.append) == {"status": "done"}
+    with pytest.raises(TimeoutError):
+        wait_review(lambda: {"status": "running"}, {"status": "running"}, -1, 0, lambda _: None)

@@ -6,6 +6,7 @@ import { ErrorState, LoadingState } from '../components/ui/state';
 import { StatusMark, Tag } from '../components/ui/status';
 import { RowTh, Table, Td, Th, Tr } from '../components/ui/table';
 import { compareSuites } from './api';
+import { SuiteWhatMatters } from '../review/WhatMatters';
 import { type Unit, change, fmt, pct, pts, suiteMark, verdictMark } from './suite';
 import type { Delta, SuiteComparison } from './types';
 
@@ -85,6 +86,7 @@ export default function SuiteComparePage() {
         meta="B against A, judged from checks and safety; time and cost flagged beyond 10%." />
       <PageBody>
         <Sides c={c} />
+        <SuiteWhatMatters a={a} b={b} />
         <Figures c={c} />
         <Checks c={c} />
       </PageBody>

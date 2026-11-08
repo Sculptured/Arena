@@ -4,6 +4,7 @@ import { Button } from '../components/ui/button';
 import { CORE } from '../core';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { Kbd } from '../components/ui/kbd';
+import ReviewToggle from '../review/ReviewToggle';
 import { Tooltip } from '../components/ui/tooltip';
 import { cn } from '@/lib/cn';
 import { type Mode, hereItems, hereOf } from './palette';
@@ -43,6 +44,7 @@ function AdvancedMenu({ onPalette }: { onPalette: (start?: Mode) => void }) {
         <DropdownMenuItem onSelect={() => onPalette({ kind: 'world' })}>World view of a run…</DropdownMenuItem>
         <DropdownMenuLabel>Team</DropdownMenuLabel>
         <DropdownMenuItem onSelect={() => nav('/team')}>Team editor</DropdownMenuItem>
+        <ReviewToggle />
         <DropdownMenuLabel className="font-normal" title="Open the UI with ?core=<url> to use another Arena core, or ?core= to go back to this one">
           Arena core: {CORE || 'this server'}
         </DropdownMenuLabel>

@@ -256,6 +256,52 @@ class Arena:
         idb = b.id if isinstance(b, Suite) else b
         return self.get("/api/suites/compare", a=ida, b=idb)
 
+    # -------------------------------------------------------------- AI review
+
+    def review_settings(self) -> dict[str, Any]:
+        """``{enabled, model, why?}``: whether arenad's AI review is on, and with which model."""
+        return self.get("/api/review/settings")
+
+    def _review(
+        self, path: str, params: dict[str, Any], again: bool, wait: bool, timeout: float, poll: float
+    ) -> dict[str, Any]:
+        """Starts (or reads the stored) review at ``path``; with ``wait``, until it has ended."""
+        asked = {**params, "again": "1"} if again else params
+        first = self._request("POST", path, params=asked)
+        if not wait:
+            return first
+        return wait_review(lambda: self.get(path, **params), first, timeout, poll)
+
+    def compare_review(
+        self,
+        a: Union[str, "Branch"],
+        b: Union[str, "Branch"],
+        again: bool = False,
+        wait: bool = True,
+        timeout: float = 900.0,
+        poll: float = 3.0,
+    ) -> dict[str, Any]:
+        """An AI review of two ended branches: ``review`` is ``{headline, differences:
+        [{title, a, b, why_it_matters, steps_a, steps_b}], which_is_better, why}``. Stored with the
+        pair; ``again=True`` asks for a new one. Runs a real model (it costs what the model costs)."""
+        return self._review("/api/compare/review", {"a": _bid(a), "b": _bid(b)}, again, wait, timeout, poll)
+
+    def compare_suites_review(
+        self,
+        a: Union[str, "Suite"],
+        b: Union[str, "Suite"],
+        again: bool = False,
+        wait: bool = True,
+        timeout: float = 900.0,
+        poll: float = 3.0,
+    ) -> dict[str, Any]:
+        """An AI review of suite ``b`` against ``a``, citing example runs (branch ids) in
+        ``steps_a``/``steps_b``. As :meth:`compare_review`."""
+        ida = a.id if isinstance(a, Suite) else a
+        idb = b.id if isinstance(b, Suite) else b
+        params = {"a": ida, "b": idb}
+        return self._review("/api/suites/compare/review", params, again, wait, timeout, poll)
+
     # -------------------------------------------------------------- features
 
     def supports_pause(self) -> bool:
@@ -269,6 +315,21 @@ class Arena:
             except ApiError:
                 self._pause_supported = True
         return self._pause_supported
+
+
+def wait_review(
+    fetch: Any, first: dict[str, Any], timeout: float, poll: float, sleep: Any = time.sleep
+) -> dict[str, Any]:
+    """``first``, or what ``fetch()`` gives, once its ``status`` is no longer ``running``
+    (``done`` with ``review``, or ``error`` with ``error``); TimeoutError after ``timeout`` s."""
+    deadline = time.monotonic() + timeout
+    r = first
+    while r.get("status") == "running":
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"the review {r.get('key')} is still running after {timeout} s")
+        sleep(poll)
+        r = fetch()
+    return r
 
 
 def _bid(b: Union[str, "Branch"]) -> str:
@@ -422,6 +483,17 @@ class Branch:
             if deadline is not None and time.monotonic() > deadline:
                 raise TimeoutError(f"branch {self.id} still {rec.status} after {timeout} s")
             time.sleep(poll)
+
+    def review(
+        self, again: bool = False, wait: bool = True, timeout: float = 900.0, poll: float = 3.0
+    ) -> dict[str, Any]:
+        """An AI review of this ended branch: where it went wrong and what to change. ``review`` is
+        ``{verdict, went_wrong: [{title, why, steps, severity}], suggestions: [{change, why, kind,
+        agent?, prompt_text?, step?}], went_well, confidence}``, with ``model``, ``cost_usd`` and
+        ``issues`` (citations arenad dropped). Stored with the branch; ``again=True`` asks for a new
+        one. Runs a real model (it costs what the model costs); 409 when AI review is off."""
+        path = f"/api/branches/{self.id}/review"
+        return self.arena._review(path, {}, again, wait, timeout, poll)
 
     # -------------------------------------------------------------- forks
 
