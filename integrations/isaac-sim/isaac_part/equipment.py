@@ -103,6 +103,11 @@ class Equipment:
                 "robot": meta.get("robot"), "status": c["status"], "safe_stopped": c["status"] != RUNNING,
                 "parts": parts, "rate_per_hour": meta["rate_per_hour"], "kw": kw}
 
+    def visual_state(self, factory) -> dict:
+        """What the showcase's visuals read each frame: the cells, the load and the signage."""
+        power = None if self.power is None else {"kw": self.load(factory)}
+        return {"cells": {cid: self.cell_view(cid) for cid in self.cells}, "power": power, "signage": self.signage}
+
     def state(self, factory) -> dict:
         """What Plant.state adds to the factory's state: `cells`, and `power` when it is configured."""
         out = {"cells": [self.cell_view(cid) for cid in self.cells]}

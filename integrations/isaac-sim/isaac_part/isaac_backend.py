@@ -56,7 +56,7 @@ def _stage(app, cfg, data):
     builder = scene.build_scene(ctx.get_stage(), root, use_assets=root is not None, data=data)
     if cfg.scene == "showcase" and cfg.record is not None:
         from . import showcase_scene
-        _APP["dressed"] = showcase_scene.dress(builder, root, data, log)
+        _APP["dressed"] = showcase_scene.dress(builder, root, data, log, shift=bool(cfg.cells))
     for _ in range(20):
         app.update()
     return ctx.get_stage()

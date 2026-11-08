@@ -16,7 +16,7 @@ def _factory_view(cfg, stage, labels):
     visuals = sources.import_read_only(cfg.isaac_path, "visuals", "isaac_path")
     view = visuals.Visuals(stage, cfg.camera, label_dir=labels, log=log)
 
-    def show(factory, events, now):
+    def show(factory, events, now, _extras=None):
         view.apply(factory.visual_state(), events, now)
     return show, None
 
@@ -54,7 +54,7 @@ class Video:
         """The visuals for the factory's state and its new events, then one rendered frame, at the plant's time."""
         t0 = time.perf_counter()
         now = plant.steps / self.hz
-        self.show(plant.factory, self._new_events(plant), now)
+        self.show(plant.factory, self._new_events(plant), now, plant.act(plant.equipment.visual_state))
         t1 = time.perf_counter()
         if self.rec.capture(now):
             self.frames += 1
@@ -66,7 +66,7 @@ class Video:
         from PIL import Image
         folder.mkdir(parents=True, exist_ok=True)
         now = plant.steps / self.hz
-        self.show(plant.factory, self._new_events(plant), now)
+        self.show(plant.factory, self._new_events(plant), now, plant.act(plant.equipment.visual_state))
         for name in shots:
             self.view.aim(name)
             for _ in range(recording.STILL_SETTLE_FRAMES):

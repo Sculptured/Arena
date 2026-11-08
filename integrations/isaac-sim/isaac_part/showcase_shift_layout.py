@@ -11,7 +11,7 @@ from .showcase_camera import Shot
 
 CELL = (12.5, 6.5)  # the cell's centre, east of Line B's stillage and the technicians' aisle (x 7.4)
 CELL_SIZE = (5.2, 4.4)  # fenced floor, x by y
-ARM_BASE = (CELL[0] - 1.0, CELL[1], 0.62)  # on a pedestal, the table east of it
+ARM_BASE = (CELL[0] - 0.35, CELL[1], 0.62)  # on a pedestal, the table east of it
 TABLE = (CELL[0] + 0.55, CELL[1], 0.86)  # the welding fixture's top
 TORCH = 0.32  # from the arm's last joint to the torch tip, along the tool's down axis
 WELD_CYCLE_S = 14.0
@@ -25,10 +25,10 @@ DOCK_BOARD = (-4.2, -8.9, 2.5)  # facing north, over the receiving dock
 SCREEN_WEST, SCREEN_NORTH, SCREEN_SOUTH = -90.0, 180.0, 0.0  # a screen's yaw: which way it faces
 
 # (phase in the weld cycle, seam point offset from the table top centre in metres, welding)
-WELD_PATH = ((0.0, (-0.05, -0.55, 0.30), False), (0.12, (-0.05, -0.45, 0.02), False),
-             (0.42, (-0.05, 0.45, 0.02), True), (0.50, (-0.05, 0.45, 0.25), False),
-             (0.58, (0.25, 0.40, 0.25), False), (0.64, (0.25, 0.40, 0.02), False),
-             (0.88, (0.25, -0.40, 0.02), True), (0.95, (0.25, -0.50, 0.30), False))
+WELD_PATH = ((0.0, (-0.3, -0.55, 0.30), False), (0.12, (-0.3, -0.45, 0.02), False),
+             (0.42, (-0.3, 0.45, 0.02), True), (0.50, (-0.3, 0.45, 0.25), False),
+             (0.58, (0.0, 0.40, 0.25), False), (0.64, (0.0, 0.40, 0.02), False),
+             (0.88, (0.0, -0.40, 0.02), True), (0.95, (0.0, -0.40, 0.25), False))
 
 
 @dataclass(frozen=True)
@@ -45,17 +45,17 @@ def _torch_down() -> np.ndarray:
 
 def weld_cycle(chain) -> WeldCycle:
     """Joint keys for the seams, solved from the arm's own joints, each from the last so the arm keeps one branch."""
-    q = np.array([0.0, -1.2, 1.6, -1.95, -1.57, 0.0])
+    q = np.array([0.0, -1.57, 1.57, -1.57, -1.57, 0.0])
     keys, burning = [], []
     for phase, (dx, dy, dz), welding in WELD_PATH:
         at = (TABLE[0] + dx - ARM_BASE[0], TABLE[1] + dy - ARM_BASE[1], TABLE[2] + dz - ARM_BASE[2])
-        q = robot.solve(chain, robot.pose(at, _torch_down()), q)
+        q = robot.solve(chain, robot.pose(at, _torch_down()), q, iterations=2000, tol=1e-3)
         keys.append((phase, q.copy()))
         if welding:
             burning.append(phase)
     phases = [p for p, *_ in WELD_PATH]
     ranges = tuple((phases[phases.index(p) - 1], p) for p in burning)
-    park = robot.solve(chain, robot.pose((0.35, 0.0, 0.85), _torch_down()), q)
+    park = robot.solve(chain, robot.pose((0.35, 0.0, 0.85), _torch_down()), q, iterations=2000, tol=1e-3)
     return WeldCycle(robot.CycleMotion(keys), ranges, park)
 
 

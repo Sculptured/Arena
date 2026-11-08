@@ -20,6 +20,14 @@ FIRST_WARNING = (("press_a", 8.0), ("hmi_a", 4.0))
 SECOND_WARNING = (("press_a_low", 7.0), ("hmi_a", 4.0), ("press_a", 8.0))
 TRIP = (("press_a", 5.0), ("beacon_a", 5.0), ("hmi_a", 4.0), ("infeed_a", 9.0), ("outfeed_a", 7.0), ("wide_a", 8.0))
 AFTERMATH = (("wide_a", 8.0), ("infeed_a", 6.0), ("beacon_a", 4.0), ("outfeed_a", 5.0), ("wide", 7.0))
+# The shift's fronts (`shift` cue events from showcase_shift_visuals): each cuts to what shows it.
+SHIFT_CUES = {"notified": (("energy_board", 6.0), ("wide_shift", 5.0)), "active": (("energy_board", 6.0),),
+              "intrusion": (("gateway", 6.0), ("cell_r1", 5.0)), "isolated": (("gateway", 5.0), ("cell_r1", 4.0)),
+              "revoked": (("gateway", 4.0),), "normal": (("gateway", 4.0), ("cell_r1", 5.0)),
+              "truck": (("dock_board", 6.0),), "cell_stop": (("cell_r1_close", 4.0), ("cell_r1", 5.0)),
+              "cell_start": (("cell_r1_close", 6.0),), "load": (("energy_board", 4.0),)}
+SHIFT_ESTABLISHING = (("wide_shift", 8.0), ("cell_r1_close", 7.0), ("robot_b", 6.0), ("amr", 7.0),
+                      ("energy_board", 4.0), ("belt_c", 6.0), ("cell_r1", 6.0), ("wide", 7.0))
 CUTS = {"technician": (("service_a", 8.0),), "repair": (("press_a", 8.0),), "lockout": (("service_a", 6.0),),
         "delivery": (("dock", 10.0),)}
 
@@ -27,6 +35,8 @@ CUTS = {"technician": (("service_a", 8.0),), "repair": (("press_a", 8.0),), "loc
 def _cue(event: dict):
     """The shots an event calls for, or None. Only PR-A1 fails in this scenario; other machines' news stays off."""
     kind, text = event.get("kind"), event.get("text", "")
+    if kind == "shift":
+        return SHIFT_CUES.get((event.get("data") or {}).get("cue"))
     if kind == "alarm" and "PR-A1" in text:
         return TRIP
     if kind == "warning" and "PR-A1" in text:
@@ -39,11 +49,12 @@ def _cue(event: dict):
 class Director:
     """`auto` follows the plan; any other mode is a shot's name and stays on it."""
 
-    def __init__(self, shots: dict, mode: str = "auto"):
+    def __init__(self, shots: dict, mode: str = "auto", idle=ESTABLISHING):
         self.shots, self.mode = shots, mode
         self.queue = []
         self.current, self.started, self.ends = mode if mode != "auto" else "wide", 0.0, 0.0
-        self.idle, self.idle_i = ESTABLISHING, 0
+        self.idle, self.idle_i = idle, 0
+        self.cued = False  # whether the shot on now came from an event
         self.cuts = []  # (time, shot), for the run's report
 
     def _start(self, name: str, seconds: float, now: float) -> None:
@@ -51,6 +62,7 @@ class Director:
         self.cuts.append((round(now, 2), name))
 
     def _next(self, now: float) -> None:
+        self.cued = bool(self.queue)
         if self.queue:
             self._start(*self.queue.pop(0), now)
             return
@@ -67,6 +79,11 @@ class Director:
                 continue
             if cue is TRIP:
                 self.idle, self.idle_i = AFTERMATH, 0
+            if event.get("kind") == "shift":  # fronts open together: each gets its shots, in turn
+                self.queue.extend(c for c in cue if c not in self.queue)
+                if not self.cued:
+                    self.ends = now
+                continue
             self.queue = list(cue)
             self.ends = now  # cut now
         if now >= self.ends:
