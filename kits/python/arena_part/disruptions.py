@@ -135,6 +135,25 @@ def before_call(config, state, kinds, tool) -> Fired:
     return out
 
 
+def on_call(config, state, kinds, tool, world_tools=frozenset()) -> Fired:
+    """For a call of `tool` on `state` (changed in place): fires and counts the disruptions it sets off,
+    unless it is one of the part's `world_tools` (a setup's or a link's call counts for nothing)."""
+    if tool in world_tools or not pending(state, tool):
+        return Fired()
+    return before_call(config, state, kinds, tool)
+
+
+def merged(out: dict, before: Fired) -> dict:
+    """A call_tool answer `out` with what the disruptions that fired before it wrote and gave put first."""
+    if not before.writes and not before.events:
+        return out
+    out["writes"] = before.writes + [k for k in out["writes"] if k not in before.writes]
+    events = before.events + out.get("events", [])
+    if events:
+        out["events"] = events
+    return out
+
+
 def docs(state) -> dict:
     """`{_disruption/<id>: doc}`: each disruption with how many calls it has seen and whether it fired.
     The keys are internal (docs/protocol.md, "Ids and keys"): arenad saves them but no step writes them."""
