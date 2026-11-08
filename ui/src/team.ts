@@ -1,4 +1,4 @@
-import { defaultTeam } from './api';
+import { defaultTeam, suggestedTeams } from './api';
 import type { AgentSpec, Runner, Team } from './types';
 
 export const TEAM_KEY = 'arena.team.v1';
@@ -35,17 +35,41 @@ export function clearStoredTeam(): void {
   }
 }
 
-/** The stored team, else the server's default. */
+/** What makes two teams the same for `isUntouched`: their agents as arenad runs them. */
+const sameAgents = (a: Team, b: Team) =>
+  JSON.stringify(a.agents.map(({ id, name, kind, model, prompt, read_only }) => [id, name, kind, model, prompt, !!read_only]))
+  === JSON.stringify(b.agents.map(({ id, name, kind, model, prompt, read_only }) => [id, name, kind, model, prompt, !!read_only]));
+
+/**
+ * True when `stored` is one of the benchmark's suggested teams as it came, never edited nor
+ * picked on purpose: a default the browser kept, which follows the benchmark's new default.
+ */
+export function isUntouched(stored: Team, suggested: Team[]): boolean {
+  return !stored.picked && suggested.some((t) => t.id === stored.id && t.name === stored.name && sameAgents(t, stored));
+}
+
+/**
+ * The stored team, else the server's default. A stored team that is an untouched suggestion other
+ * than the default (an old default the browser kept) gives way to the default.
+ */
 export async function loadTeam(): Promise<Team> {
-  return readStoredTeam() ?? (await defaultTeam());
+  const stored = readStoredTeam();
+  if (!stored) return defaultTeam();
+  const suggested = await suggestedTeams().catch(() => [] as Team[]);
+  const first = suggested[0];
+  if (first && stored.id !== first.id && isUntouched(stored, suggested.slice(1))) {
+    clearStoredTeam();
+    return first;
+  }
+  return stored;
 }
 
 /**
  * The team as a run takes it: an open agent's blank provider dropped; with the `external` runner,
- * every agent is `external` (the system that drives the run runs them, not arenad). The board
- * stays in the browser.
+ * every agent is `external` (the system that drives the run runs them, not arenad). The board,
+ * the suggested runner and the picked mark stay in the browser.
  */
-export function teamForRun({ board: _board, ...team }: Team, runner: Runner = 'chain'): Team {
+export function teamForRun({ board: _board, runner: _runner, picked: _picked, ...team }: Team, runner: Runner = 'chain'): Team {
   return {
     ...team,
     agents: team.agents.map(({ provider, ...a }) => {

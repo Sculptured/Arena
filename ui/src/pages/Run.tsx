@@ -41,6 +41,7 @@ export function runnerLine(events: Event[]): string {
   return {
     chain: 'Agents ran one after another; handoffs and messages optional.',
     concurrent: 'Agents ran at once; handoffs and messages optional.',
+    dispatch: 'A lead dispatched work to the team; agents woke for work, reported back and stayed available.',
     external: 'An external system drove the agents through their endpoints.',
   }[rs.runner];
 }

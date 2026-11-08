@@ -72,13 +72,19 @@ function Ruler({ layout }: { layout: Layout }) {
   );
 }
 
-/** Lane guides, each lane's active span, and the connectors of messages and handoffs between lanes. */
+/** Lane guides, each lane's active span (its waits for work faint), and the connectors of messages, handoffs, delegations and reports between lanes. */
 function Wires({ layout, lanes, width, selected }: { layout: Layout; lanes: number; width: number; selected: number | null }) {
   const y = (lane: number) => RULER_H + lane * LANE_H + LANE_H / 2;
   return (
     <svg className="pointer-events-none absolute top-0 left-0" width={width} height={RULER_H + lanes * LANE_H} aria-hidden="true">
       {layout.ticks.map((t) => <line key={t.x} x1={t.x} x2={t.x} y1={RULER_H} y2={RULER_H + lanes * LANE_H} stroke="var(--line)" strokeDasharray="2 4" />)}
       {layout.bars.map((b) => <line key={b.lane} x1={b.x1} x2={b.x2} y1={y(b.lane)} y2={y(b.lane)} stroke="var(--line-strong)" strokeWidth={1} />)}
+      {layout.gaps.map((g) => (
+        <g key={`gap-${g.lane}-${g.x1}`}>
+          <line x1={g.x1} x2={g.x2} y1={y(g.lane)} y2={y(g.lane)} stroke="var(--surface)" strokeWidth={3} />
+          <line x1={g.x1} x2={g.x2} y1={y(g.lane)} y2={y(g.lane)} stroke="var(--line)" strokeWidth={1} strokeDasharray="1 4" />
+        </g>
+      ))}
       {layout.connectors.map((c) => {
         const down = c.to > c.from;
         const y2 = y(c.to) + (down ? -7 : 7);

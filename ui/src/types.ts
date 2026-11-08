@@ -4,8 +4,11 @@ import type { RecordedScenario, ScenarioOptions } from './scenario/types';
 
 export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external';
 
-/** Who drives a run's agents (`model.rs` `Runner`). `external`: the design's own system, over the API. */
-export type Runner = 'chain' | 'concurrent' | 'external';
+/**
+ * Who drives a run's agents (`model.rs` `Runner`). `dispatch`: a lead delegates to the team, whose
+ * agents wake for work and stay available; `external`: the design's own system, over the API.
+ */
+export type Runner = 'chain' | 'concurrent' | 'dispatch' | 'external';
 
 /** Model arenad uses for an OpenRouter agent with no model set (`providers/mod.rs`). */
 export const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-chat-v3.1';
@@ -45,7 +48,17 @@ export type EventKind =
   /** Someone paused the branch: its calls wait and its clock stands still until `resume`. */
   | 'pause'
   /** The branch goes on after a pause (`payload: {paused_ms}`). */
-  | 'resume';
+  | 'resume'
+  /** A dispatch run's lead gives an agent work (`payload: {to, task}`). */
+  | 'delegation'
+  /** An agent of a dispatch run reports to its lead (`payload: {to, text, turn_end?}`). */
+  | 'report'
+  /** arenad starts an agent's turn in a dispatch run (`payload: {reason, mail, idle_wake?, input}`). */
+  | 'wake'
+  /** An agent of a dispatch run ended its turn and waits (`payload: {ok, error?, text}`). */
+  | 'idle'
+  /** The lead of a dispatch run ends it (`payload: {summary}`). */
+  | 'finish';
 
 export type RestoreMode = 'exact' | 'approximate';
 /** How one part of a rerun's world is (or was) restored (`model.rs` `RestoredHow`). */
@@ -104,6 +117,8 @@ export interface AgentSpec {
   prompt: string;
   /** True when the team keeps this agent to read tools; absent or false, it may use every tool. */
   read_only?: boolean;
+  /** The agent that leads a dispatch run (absent everywhere: the first agent leads). */
+  lead?: boolean;
 }
 
 export interface Team {
@@ -112,6 +127,10 @@ export interface Team {
   agents: AgentSpec[];
   /** A Sculptured design's board (groups, places, arrows), kept in this browser; never sent to arenad. */
   board?: Board;
+  /** The runner a suggested team's prompts are written for (`GET /api/teams`); kept in this browser. */
+  runner?: Runner;
+  /** Picked from the benchmark's suggestions on purpose (kept in this browser): stays as it is. */
+  picked?: boolean;
 }
 
 export interface Change {
