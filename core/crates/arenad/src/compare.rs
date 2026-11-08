@@ -148,7 +148,14 @@ pub async fn differing_rows(
     let many = a.world.len() > 1;
     let mut out = vec![];
     for p in a.world.iter().filter(|p| !skip.contains(&p.part)) {
-        let rows = part_rows(hub, p, [a.save(&p.part)?, b.save(&p.part)?]).await?;
+        let rows = match part_rows(hub, p, [a.save(&p.part)?, b.save(&p.part)?]).await {
+            Ok(rows) => rows,
+            // A part that can't answer (one on another machine that is gone, say) is said to be
+            // uncompared rather than failing the whole comparison.
+            Err(e) => {
+                vec![json!({"key": "(not compared)", "a": format!("{e:#}"), "b": Value::Null})]
+            }
+        };
         out.extend(rows.into_iter().map(|mut r| {
             if many {
                 r["key"] = json!(format!("{}:{}", p.part, r["key"].as_str().unwrap_or("")));
