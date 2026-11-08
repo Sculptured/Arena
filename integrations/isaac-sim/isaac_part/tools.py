@@ -11,7 +11,7 @@ from . import views
 NO_ERP = ("{tool} needs the plant's Work Orders, which come from ERPNext; the plant runs without ERPNext in the "
           "arena")
 STATE_KEYS = ("clock", "speed", "scenario", "lines", "machines", "orders", "technicians", "operators", "shipments",
-              "robots", "sim")  # floor.py's plant_state
+              "robots", "sim", "cells", "power")  # floor.py's plant_state, and what the arena adds (equipment.py)
 
 
 @dataclass(frozen=True)
@@ -20,9 +20,10 @@ class Tool:
     description: str
     effect: str
     params: tuple
-    act: Callable  # (factory, args) -> result
+    act: Callable  # (factory, args) -> result; (plant, args) with on_plant
     keys: Callable  # (args, result) -> (reads, writes)
     checks: tuple = ()  # each (tool, factory, args) raises Refusal before anything changes
+    on_plant: bool = False  # act on the Plant (its equipment, its seed) rather than on the Factory
 
     def schema(self) -> dict:
         return {"name": self.name, "description": self.description, "effect": self.effect,
@@ -67,8 +68,8 @@ def _state_reads(_a, result):
     return sorted(views.docs_of(result)), []
 
 
-def _plant_state(f, _a):
-    s = f.state()
+def _plant_state(plant, _a):
+    s = plant.state()
     return {k: s[k] for k in STATE_KEYS if k in s}
 
 
@@ -89,7 +90,7 @@ TOOLS = {t.name: t for t in [
          "degraded, tripped, locked-out, maintenance or stopped; sensors: vibration_mm_s and its ISO 10816 zone, "
          "flywheel_rpm and strokes_per_min measured, spindle_temp_c modelled; strokes counted; lockout), order, "
          "technician and operator, shipment and robot. `clock` is the plant clock; `sim` says what ran it.", "read",
-         (), _plant_state, _state_reads),
+         (), _plant_state, _state_reads, on_plant=True),
     Tool("machine_telemetry", "Sensor history for one machine at 1 Hz (vibration mm/s RMS, flywheel rpm, "
          "strokes/min, spindle temperature C, which is modelled).", "read",
          (Param("machine", "string"), Param("minutes", "integer", 30)), _telemetry,
@@ -133,13 +134,23 @@ TOOLS = {t.name: t for t in [
          "(0.5 to 1.25).", "write", (Param("line", "string"), Param("status", "string"), Param("rate", "number", None)),
          lambda f, a: f.set_line(a["line"], a["status"], a["rate"]), _writes(_key("line", "line")),
          (_known("line", "lines_meta", "line"),)),
+    Tool("safe_stop_cell", "Safe-stop a robot cell: the robot parks and the cell's safety PLC holds it. Its zone "
+         "can then be isolated.", "write", (Param("cell", "string"), Param("reason", "string", None)),
+         lambda p, a: p.equipment.safe_stop(p.factory, a["cell"], a["reason"]), _writes(_key("cell", "cell")),
+         on_plant=True),
+    Tool("start_cell", "Start a safe-stopped robot cell. Needs its station staffed by a certified operator on shift "
+         "and its zone not isolated.", "write", (Param("cell", "string"),),
+         lambda p, a: p.equipment.start(p.factory, a["cell"]), _writes(_key("cell", "cell")), on_plant=True),
+    Tool("plant_scenario", "Sets the plant's scenario: press-wear (PR-A1's bearing wears from now) or calm (a task's "
+         "setup calls it; agents don't get it).", "write", (Param("name", "string"),),
+         lambda p, a: p.set_scenario(a["name"]), lambda _a, _r: ([], ["plant/clock"]), on_plant=True),
 ]}
 
 
-def _act(tool, f, args):
+def _act(tool, plant, f, args):
     for check in tool.checks:
         check(tool, f, args)
-    return views.plain(tool.act(f, args))
+    return views.plain(tool.act(plant if tool.on_plant else f, args))
 
 
 def run_tool(plant, name: str, args) -> dict:
@@ -151,7 +162,7 @@ def run_tool(plant, name: str, args) -> dict:
         raise errors.invalid(f"unknown tool {name}")
     try:
         args = normalize(tool.name, tool.params, args)
-        result = plant.act(lambda f: _act(tool, f, args))
+        result = plant.act(lambda f: _act(tool, plant, f, args))
     except (Refusal, ValueError) as e:
         return refused(str(e))
     reads, writes = tool.keys(args, result)

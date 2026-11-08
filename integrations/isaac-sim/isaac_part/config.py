@@ -6,6 +6,8 @@ from pathlib import Path
 
 from arena_part import errors, params
 
+from . import equipment
+
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
 SCENES = ("ridgeline", "showcase")
 DEFAULT_ISAAC = (PACKAGE_DIR / ".." / ".." / ".." / "Sculptured-Examples" / "factory" / "isaac").resolve()
@@ -24,6 +26,8 @@ class Config:
     record_fps: int = 30  # frames per second of arena time; the MP4 plays at this rate, so in arena time
     scene: str = "ridgeline"  # what the plant looks like: the factory's own scene, or "showcase" (visuals only)
     record_height: int = 720  # the MP4's height in pixels; the width follows at 16:9
+    cells: tuple = ()  # robot cells the arena adds beside the factory's presses (equipment.py)
+    power: dict | None = None  # the plant's load model; None: no load is reported
 
 
 def parse_config(config) -> Config:
@@ -35,7 +39,17 @@ def parse_config(config) -> Config:
     if not isinstance(scenario, bool):
         raise errors.invalid(f"scenario must be true or false, got {scenario!r}")
     return Config(isaac, data, params.config_datetime(config, "plant_start", DEFAULT_PLANT_START),
-                  _positive(hz, "physics_hz"), scenario, **_recording(config))
+                  _positive(hz, "physics_hz"), scenario, **_recording(config), **_equipment(config))
+
+
+def _equipment(config) -> dict:
+    """`cells` (default none) and `power` (default none), checked for shape."""
+    cells, power = config.get("cells", []), config.get("power")
+    try:
+        equipment.check_config(cells, power)
+    except ValueError as e:
+        raise errors.invalid(str(e)) from None
+    return {"cells": tuple(cells), "power": power}
 
 
 def _positive(n, name):

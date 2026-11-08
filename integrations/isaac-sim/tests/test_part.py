@@ -282,7 +282,8 @@ def test_tools_keys_and_refusals():
     part = started()
     names = {t["name"] for t in part.describe()["tools"]}
     assert names == {"plant_state", "machine_telemetry", "vibration_spectrum", "recent_events", "wait_for_event",
-                     "predict_move", "dispatch_technician", "set_line_status", "add_shipment"}
+                     "predict_move", "dispatch_technician", "set_line_status", "add_shipment", "safe_stop_cell",
+                     "start_cell", "plant_scenario"}
     sent = part.call_tool("i1", "dispatch_technician",
                           {"proposal_id": "P", "technician": "T-1", "machine": "PR-A1", "task": "inspect"}, 1_000)
     assert sent["result"]["status"] == "walking" and sent["writes"] == ["technician/T-1", "machine/PR-A1"]
@@ -378,15 +379,20 @@ def test_mirror_mode_has_no_tools_and_relays_events(stub_plant, saves_root):
 
 
 def checker():
-    for profile in ("debug", "release"):
-        p = ARENA / "core" / "target" / profile / "arena-part-check"
-        if p.is_file():
-            return p
+    dirs = [Path(os.environ["ARENA_BIN_DIR"])] if os.environ.get("ARENA_BIN_DIR") else []
+    for d in dirs + [ARENA / "core" / "target" / profile for profile in ("debug", "release")]:
+        if (d / "arena-part-check").is_file():
+            return d / "arena-part-check"
     return None
 
 
-def test_conformance(tmp_path):
-    """arena-part-check on a copy of the manifest that runs the stand-in backend."""
+SHIFT_PLANT = ARENA / "benchmarks" / "factory" / "data" / "shift.json"
+
+
+@pytest.mark.parametrize("config", [None, "shift"])
+def test_conformance(tmp_path, config):
+    """arena-part-check on a copy of the manifest that runs the stand-in backend: as it is, and with the factory
+    benchmark's robot cell and load model (its shift task's config)."""
     binary = checker()
     if binary is None or shutil.which("uv") is None:
         pytest.skip("arena-part-check is not built (cargo build -p parts --bin arena-part-check) or uv missing")
@@ -398,7 +404,11 @@ def test_conformance(tmp_path):
     saves = tmp_path / "check-saves"
     saves.mkdir()
     env = {**os.environ, "ARENA_SAVES": str(saves)}
-    r = subprocess.run([str(binary), str(tmp_path / "pkg")], capture_output=True, text=True, env=env, timeout=300)
+    args = [str(binary), str(tmp_path / "pkg")]
+    if config:
+        (tmp_path / "config.json").write_text(json.dumps(json.loads(SHIFT_PLANT.read_text())["plant"]))
+        args += ["--config", str(tmp_path / "config.json")]
+    r = subprocess.run(args, capture_output=True, text=True, env=env, timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     report = json.loads(r.stdout)
     restore = next(s for s in report["steps"] if s["name"] == "restore")["detail"]

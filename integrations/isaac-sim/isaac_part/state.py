@@ -33,15 +33,16 @@ class _Pickler(pickle.Pickler):
 
 
 def made_with(backend, hz: int, cfg) -> dict:
-    """What a save must match to be restored: backend, physics rate, plant clock start, data file."""
+    """What a save must match to be restored: backend, physics rate, plant clock start, data file, the cells and
+    the load model."""
     return {"backend": backend.name, "physics_hz": hz, "plant_start": cfg.plant_start.isoformat(),
-            "data_path": str(cfg.data_path)}
+            "data_path": str(cfg.data_path), "cells": list(cfg.cells), "power": cfg.power}
 
 
 def snapshot(plant) -> dict:
     f = plant.factory
     return {"made_with": made_with(plant.backend, plant.hz, plant.cfg), "steps": plant.steps,
-            "last_seq": plant.last_seq,
+            "last_seq": plant.last_seq, "seed": plant.seed, "equipment": plant.equipment.snapshot(),
             "factory": {a: getattr(f, a) for a in FACTORY_SAVED}, "sim": plant.backend.get_state(plant.io)}
 
 
@@ -86,4 +87,5 @@ def restore(plant, snap: dict) -> None:
             setattr(f, a, snap["factory"][a])
         plant.backend.set_state(plant.io, snap["sim"], f)
     plant.act(put)
-    plant.steps, plant.last_seq = snap["steps"], snap["last_seq"]
+    plant.steps, plant.last_seq, plant.seed = snap["steps"], snap["last_seq"], snap["seed"]
+    plant.equipment.restore(snap["equipment"])
