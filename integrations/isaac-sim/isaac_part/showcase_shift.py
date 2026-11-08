@@ -153,7 +153,7 @@ def _table(d, root) -> None:
     part.box((x - 0.3, y, top + 0.03), (0.12, 1.0, 0.06), 0.004)
     part.box((x, y, top + 0.03), (0.12, 0.9, 0.06), 0.004)
     part.box((x - 0.15, y, top + 0.005), (0.5, 1.05, 0.01), 0.002)
-    d.mesh(f"{root}/Table", frame.arrays(), d.paint("dark"))
+    d.mesh(f"{root}/Table", frame.arrays(), d.paint("steel"))
     d.mesh(f"{root}/Workpiece", part.arrays(), d.paint("formed"))
 
 

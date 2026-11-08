@@ -89,7 +89,7 @@ def shots() -> dict:
     gx, gy = GATEWAY
     dx, dy, dz = DOCK_BOARD
     return {
-        "cell_r1": Shot((cx - 7.5, cy - 6.0, 3.4), (cx, cy, 1.0), 20.0, eye_end=(cx - 6.5, cy - 6.4, 3.1)),
+        "cell_r1": Shot((cx - 3.8, cy - 5.0, 2.7), (cx + 0.2, cy, 1.0), 22.0, eye_end=(cx - 2.8, cy - 5.3, 2.5)),
         "cell_r1_close": Shot((cx - 2.6, cy - 2.6, 1.7), (TABLE[0], TABLE[1], TABLE[2] + 0.2), 24.0,
                               eye_end=(cx - 2.2, cy - 2.8, 1.6)),
         "energy_board": Shot((ex - 5.5, ey - 1.6, 2.0), (ex, ey, ez), 26.0, eye_end=(ex - 5.0, ey - 1.2, 2.0)),
