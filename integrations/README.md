@@ -26,6 +26,9 @@ The table is in the main `README.md`, with what was verified. Each folder has a 
 | `ridgeline-hub` | the factory's outside companies, on the arena clock |
 | `isaac-sim` | the factory plant on Isaac Sim, or a stand-in |
 | `isaac-sim-mirror` | a read-only view of a running plant |
+| `utility` | a simulated electric utility and site meter, on the arena clock |
+| `ot-network` | a simulated plant OT network and IT/OT remote-access gateway |
+| `shift-roster` | a simulated shift roster with certifications |
 
 Examples to copy: `kits/rust/examples/counter.rs` and `kits/python/examples/counter.py`.
 

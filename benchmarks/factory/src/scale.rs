@@ -269,12 +269,17 @@ pub fn enlarge(data: &Value, extra: &Value) -> (Value, Value) {
 
 /// The orders the outage of `line` affects: on it, due within [`AFFECTED_DAYS`].
 pub fn affected<'a>(data: &'a Value, line: &'a Value) -> impl Iterator<Item = &'a Value> {
-    list(data, "orders").filter(move |o| {
-        &o["line"] == line
-            && o["due_in_days"]
-                .as_i64()
-                .is_some_and(|d| d <= AFFECTED_DAYS)
-    })
+    due_within(data, line, AFFECTED_DAYS)
+}
+
+/// The orders on `line` due within `days`.
+pub fn due_within<'a>(
+    data: &'a Value,
+    line: &'a Value,
+    days: i64,
+) -> impl Iterator<Item = &'a Value> {
+    list(data, "orders")
+        .filter(move |o| &o["line"] == line && o["due_in_days"].as_i64().is_some_and(|d| d <= days))
 }
 
 #[cfg(test)]

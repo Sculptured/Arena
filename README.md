@@ -213,6 +213,9 @@ the prefix `live_` and needs Docker or a real server. Each folder's README has t
 | `ridgeline-hub` | A factory's simulated suppliers, carriers, insurer and customers | save | no | yes | Python tests against the real hub `market.py`, with `arena-part-check`. No services, no arenad run |
 | `isaac-sim` | A factory plant, on Isaac Sim physics or a stand-in | replay | yes | yes | **Stand-in only.** Python tests with `arena-part-check`. The `isaac` backend has never run on Isaac Sim |
 | `isaac-sim-mirror` | A read-only view of a running plant | none | no | yes | One Python test against a stub HTTP server. A world containing it can't be rerun |
+| `utility` | A simulated electric utility: the site meter fed from the plant's load, tariff, demand-response events | save | no | yes | Python tests with `arena-part-check`. No arenad run |
+| `ot-network` | A simulated plant OT network: zones, conduits, the IT/OT gateway's sessions, the incident playbook | save | no | no | Python tests with `arena-part-check`. No arenad run |
+| `shift-roster` | A simulated shift roster: stations, operators, certifications, call-outs and call-ins | save | no | no | Python tests with `arena-part-check`. No arenad run |
 | `counter` (Rust), `counter-py` (Python) | Kit examples: one integer per instance | save (flavours: replay, approximate) | no (flavour) | yes | Kit and core tests (`kits/*/tests`, `core/crates/parts/tests`, arenad tests) |
 
 Only `postgres` (through the retail example) has been used in an arenad run with agents. The other
