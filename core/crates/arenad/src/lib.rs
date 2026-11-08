@@ -20,6 +20,7 @@ pub mod providers;
 pub mod recorded;
 pub mod replay;
 pub mod restore;
+pub mod review;
 pub mod runner;
 pub mod saves;
 pub mod scenario;

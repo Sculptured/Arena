@@ -12,7 +12,9 @@ use crate::{
 };
 use parts::proto::Mode;
 
+mod reviews;
 mod suites;
+pub use reviews::{ReviewDone, StoredReview};
 pub use suites::NewSuite;
 
 pub type RunId = String;
@@ -63,6 +65,7 @@ const EVENT_COLS: &str = "branch_id, seq, at, agent, kind, payload";
 async fn migrate(client: &Client) -> Result<()> {
     client.batch_execute(SCHEMA).await?;
     client.batch_execute(suites::SCHEMA).await?;
+    client.batch_execute(reviews::SCHEMA).await?;
     client
         .execute(
             "UPDATE branches SET status = 'interrupted', ended_at = now() WHERE status = 'running'",
@@ -70,6 +73,7 @@ async fn migrate(client: &Client) -> Result<()> {
         )
         .await?;
     client.execute(suites::INTERRUPT, &[]).await?;
+    client.execute(reviews::INTERRUPT, &[]).await?;
     Ok(())
 }
 
