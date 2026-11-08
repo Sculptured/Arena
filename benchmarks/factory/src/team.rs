@@ -174,7 +174,8 @@ Dispatch work to them with `message` when you see something on their front, and 
 revoked, then restart its cell (`start_cell`) if its station is staffed and the utility's target still \
 holds with it running. Notify each customer on their approved notice, log a note on their CRM account \
 and move each noticed order's opportunity to its new date. Finish only when every role has told you it \
-is done and no change waits for you: check the meter, the network, the roster and the trucks once \
+is done and no change waits for you. Don't wait for a demand-response window to end: once the load \
+holds under its target, it is handled. Check the meter, the network, the roster and the trucks once \
 more, record the shift report as a Note in the ERP whose title starts with \"Shift report\", and end \
 with a short summary.";
 
