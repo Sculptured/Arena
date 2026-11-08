@@ -36,6 +36,7 @@ describe('metrics', () => {
   it('says how the agents ran, old runs included', () => {
     expect(runnerLine(runStart({ task_id: '1' }))).toContain('recorded before runners');
     expect(runnerLine(runStart({ task_id: '1', runner: 'concurrent' }))).toContain('at once');
+    expect(runnerLine(runStart({ task_id: '1', runner: 'dispatch' }))).toContain('A lead dispatched');
     expect(runnerLine([])).toBe('');
   });
 });

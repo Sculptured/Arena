@@ -1,6 +1,8 @@
 //! The incident's ticket, the rules every agent gets and the deployments this benchmark suggests
-//! (`data/teams.json`): a single agent and a coordinated team whose roles have only the tools
-//! their decisions need, with short prompts and compact reports. Arena imposes none of it.
+//! (`data/teams.json`): a single agent (arenad's default), a dispatching team whose lead delegates
+//! to the roles (for arenad's `dispatch` runner), and the coordinated team for a chain, whose roles
+//! have only the tools their decisions need, with short prompts and compact reports. Arena imposes
+//! none of it.
 use std::sync::OnceLock;
 
 use arena_part::proto::{BenchTeam, TeamRole};
@@ -50,8 +52,14 @@ pub struct Role {
 pub struct Deployment {
     pub id: String,
     pub name: String,
+    /// The arenad runner its prompts are written for (absent: any).
+    #[serde(default)]
+    pub runner: Option<String>,
     pub roles: Vec<Role>,
 }
+
+/// The deployments by id, the default first.
+pub const DEPLOYMENTS: [&str; 3] = ["single", "dispatch", "team"];
 
 #[derive(Debug, Deserialize)]
 pub struct Teams {
@@ -75,13 +83,14 @@ pub fn tools_of(role: &Role) -> Vec<&'static str> {
 
 fn deployment(id: &str) -> &'static Deployment {
     let found = teams().deployments.iter().find(|d| d.id == id);
-    found.expect("data/teams.json has the single agent and the team")
+    found.expect("data/teams.json has every deployment of DEPLOYMENTS")
 }
 
-/// `id`'s deployment as arenad's team: every role but the last hands off.
+/// `id`'s deployment as arenad's team: in a chain every role but the last hands off.
 pub fn bench_team(id: &str) -> BenchTeam {
     let d = deployment(id);
     let last = d.roles.len().saturating_sub(1);
+    let chain = d.runner.as_deref() == Some("chain");
     let agent = |(i, r): (usize, &Role)| TeamRole {
         id: r.id.clone(),
         name: r.name.clone(),
@@ -89,7 +98,7 @@ pub fn bench_team(id: &str) -> BenchTeam {
             "You are the {} at Larchmont Biologics. {}{}",
             r.name,
             r.prompt,
-            if i < last { HANDOFF } else { "" }
+            if chain && i < last { HANDOFF } else { "" }
         ),
         read_only: r.read_only,
     };
@@ -97,7 +106,14 @@ pub fn bench_team(id: &str) -> BenchTeam {
         id: d.id.clone(),
         name: d.name.clone(),
         agents: d.roles.iter().enumerate().map(agent).collect(),
+        runner: d.runner.clone(),
     }
+}
+
+/// Every deployment but `default`, as the other teams arenad offers.
+pub fn other_teams(default: &str) -> Vec<BenchTeam> {
+    let others = DEPLOYMENTS.iter().filter(|id| **id != default);
+    others.map(|id| bench_team(id)).collect()
 }
 
 #[cfg(test)]
@@ -129,6 +145,36 @@ mod tests {
         );
         assert!(!t.agents.last().unwrap().prompt.contains("handing off"));
         assert!(INSTRUCTIONS.len() < 2000 && TICKET.len() < 700);
+    }
+
+    #[test]
+    fn the_dispatching_team_is_led_by_the_coordinator_and_never_hands_off() {
+        let t = bench_team("dispatch");
+        assert_eq!(t.runner.as_deref(), Some("dispatch"));
+        let ids: Vec<&str> = t.agents.iter().map(|a| a.id.as_str()).collect();
+        let chain: Vec<String> = bench_team("team")
+            .agents
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(
+            ids, chain,
+            "the coordinated roles, the coordinator first (it leads)"
+        );
+        assert!(t.agents[0].prompt.contains("delegate") && t.agents[0].read_only);
+        for a in &t.agents {
+            let p = a.prompt.to_lowercase();
+            assert!(
+                !p.contains("hand off") && !p.contains("handing off"),
+                "{}",
+                a.id
+            );
+            assert!(a.prompt.len() < 800, "{} stays short", a.id);
+        }
+        assert!(t.agents[1..].iter().all(|a| a.prompt.contains("Report")));
+        let others: Vec<String> = other_teams("single").into_iter().map(|t| t.id).collect();
+        assert_eq!(others, ["dispatch", "team"]);
+        assert_eq!(bench_team("single").runner, None);
     }
 
     #[test]

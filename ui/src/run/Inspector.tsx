@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { type ReactElement, useEffect, useState } from 'react';
 import { rows } from '../api';
 import { Button } from '../components/ui/button';
 import { StatusMark, Tag } from '../components/ui/status';
 import { EmptyState, ErrorState } from '../components/ui/state';
 import { Kbd } from '../components/ui/kbd';
 import { actionWord, classify, systemLine, worldInfo } from '../control/actions';
+import { wakeWord } from '../control/lanes';
 import { missingPermit, permitOf } from '../control/permit';
 import { notComparedLine, savedLine } from '../restore';
 import { costIsUnknown, providerId, providerName, providerOf } from '../providers';
@@ -196,6 +197,22 @@ function AgentEnd({ p, team, agent }: { p: Payload; team?: Team; agent: string |
   );
 }
 
+/** Why a dispatch run woke the agent, the steps whose mail it got, and the input it was given. */
+function Wake({ p }: { p: Record<string, unknown> }) {
+  const mail = Array.isArray(p.mail) ? p.mail.map(String) : [];
+  const title = `${wakeWord(p)}${mail.length ? ` (step ${mail.join(', ')})` : ''}: its input`;
+  return <Block title={title} value={p.input} />;
+}
+
+/** A dispatch run's steps in words: delegations, reports, wakes, waits and the lead's finish. */
+const DISPATCH: Partial<Record<Event['kind'], (p: Payload) => ReactElement>> = {
+  delegation: (p) => <Block title={`Work given to ${String(p.to)}`} value={p.task} />,
+  report: (p) => <Block title={p.turn_end ? `What it said at the end of its turn, passed on to ${String(p.to)} as its report` : `Report to ${String(p.to)}`} value={p.text} />,
+  wake: (p) => <Wake p={p} />,
+  idle: (p) => <Block title={p.ok === false ? `Its turn failed; it waits: ${String(p.error ?? '')}` : 'Ended its turn and waits for work; it said'} value={p.text} />,
+  finish: (p) => <Block title="Finished the run (only the lead can): every agent stopped and the world was scored" value={p.summary} />,
+};
+
 export interface InspectorProps {
   branchId: string;
   event: Event | null;
@@ -214,7 +231,7 @@ function Body({ branchId, event, team, autoRows, events = [] }: InspectorProps &
     case 'message': return <Block title={`Message to ${p.to === '*' ? 'everyone' : String(p.to)}`} value={p.text} />;
     case 'check': return <Check p={p} />;
     case 'agent_end': return <AgentEnd p={p} team={team} agent={event.agent} />;
-    default: return <Block title="Payload" value={p} />;
+    default: return DISPATCH[event.kind]?.(p) ?? <Block title="Payload" value={p} />;
   }
 }
 

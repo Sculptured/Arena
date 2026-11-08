@@ -25,10 +25,10 @@ async fn main() -> anyhow::Result<()> {
         Some(other) => anyhow::bail!("--backend must be standin or isaac, not {other}"),
     };
     let data = arg("--data").unwrap_or_else(|| arena_factory::DEFAULT_DATA.to_string());
-    let team = arg("--team").unwrap_or_else(|| "incident".into());
+    let team = arg("--team").unwrap_or_else(|| "single".into());
     anyhow::ensure!(
         arena_factory::team::named(&team).is_some(),
-        "--team must be incident or shift, not {team}"
+        "--team must be single, incident or shift, not {team}"
     );
     let factory = Factory::new(backend, data.into())
         .with_plant_config(plant_config()?)

@@ -114,14 +114,19 @@ named by its PO number or its ERP sales order.
 
 ## The deployments
 
-`data/teams.json` holds the two deployments the benchmark suggests, as data a design (a Sculptured board, an external
-runner) can use: each role's short prompt, the tool groups its decisions need and the change actions it proposes. Arena
-imposes none of it.
+`data/teams.json` holds the three deployments the benchmark suggests, as data a design (a Sculptured board, an
+external runner) can use: each role's short prompt, the tool groups its decisions need, the change actions it proposes,
+and the arenad runner its prompts are written for. Arena imposes none of it. arenad offers the first as its default
+team and the others one click away (`teams` in `describe`; `arena-pharma --team dispatch` or `--team team` makes
+another the default).
 
-- **Single agent** (`arena-pharma --team single`): one role with every tool.
-- **Coordinated team** (the default): a read-only coordinator, a read-only **records analyst who alone has the raw ERP
-  and CRM query tools**, then quality, supply planning, production and logistics/customer service, each with only its
-  own tools and starting from the reports. No role decides a change.
+- **Single agent** (the default): one role with every tool.
+- **Dispatching team** (runner `dispatch`): the coordinated roles below, the read-only coordinator leading: it plans,
+  delegates each part as soon as what it needs is known, passes on what one role reports that another needs, checks
+  the reports, follows up and finishes. The others do their part, report, and stay available.
+- **Coordinated team** (runner `chain`): a read-only coordinator, a read-only **records analyst who alone has the raw
+  ERP and CRM query tools**, then quality, supply planning, production and logistics/customer service, each with only
+  its own tools and starting from the reports, each handing off to the next. No role decides a change.
 
 Prompts are tool-agnostic and short; the shared rules (`src/team.rs`) are under 2,000 characters.
 

@@ -53,6 +53,7 @@ fn agent(id: &str, model: Option<&str>) -> AgentSpec {
         prompt: "p".into(),
         provider: None,
         read_only: false,
+        lead: false,
     }
 }
 

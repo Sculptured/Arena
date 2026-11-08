@@ -28,11 +28,19 @@ export interface Mark {
   to?: string | null;
 }
 
+/** A time an agent of a dispatch run waited for work (`end` null: it was still waiting). */
+export interface Gap {
+  start: number;
+  end: number | null;
+}
+
 export interface LaneRow {
   /** The agent id; `world` for the world's own steps (links, world events), `check` for scoring. */
   id: string;
   name: string;
   marks: Mark[];
+  /** When the agent waited, idle, for work (dispatch runs only). */
+  gaps?: Gap[];
 }
 
 export const WORLD_LANE = 'world';
@@ -65,6 +73,27 @@ function messageMark(e: Event, p: Payload, base: Base): Mark {
   return { ...base, kind: 'message', label: `${word} → ${to}`, detail: String(p.text ?? p.note ?? ''), to: raw };
 }
 
+/** A dispatch run's delegation (lead → agent) or report (agent → lead), drawn as a message. */
+function dispatchMark(e: Event, p: Payload, base: Base): Mark {
+  const to = typeof p.to === 'string' ? p.to : null;
+  if (e.kind === 'delegation') return { ...base, kind: 'message', label: `Delegate → ${to ?? '?'}`, detail: String(p.task ?? ''), to };
+  const word = p.turn_end ? 'Report (turn end)' : 'Report';
+  return { ...base, kind: 'message', label: `${word} → ${to ?? 'lead'}`, detail: String(p.text ?? ''), to };
+}
+
+/** Why a dispatch run woke an agent, in a few words. */
+export function wakeWord(p: Payload): string {
+  switch (p.reason) {
+    case 'start': return 'Started with the ticket';
+    case 'idle': return `Woken: the team was waiting (${String(p.idle_wake ?? '')})`;
+    case 'resume': return 'Carried on after the fork';
+    default: {
+      const n = Array.isArray(p.mail) ? p.mail.length : 0;
+      return n > 1 ? `Woken by ${n} messages` : 'Woken by work or a message';
+    }
+  }
+}
+
 function endMark(p: Payload, base: Base): Mark {
   const failed = p.ok === false;
   return { ...base, kind: 'end', label: failed ? 'Ended: failed' : 'Ended', detail: String(p.error ?? ''), outcome: failed ? 'error' : 'ok' };
@@ -73,6 +102,10 @@ function endMark(p: Payload, base: Base): Mark {
 const MARKS: Partial<Record<Event['kind'], (e: Event, p: Payload, base: Base) => Mark>> = {
   message: messageMark,
   handoff: messageMark,
+  delegation: dispatchMark,
+  report: dispatchMark,
+  wake: (_e, p, base) => ({ ...base, kind: 'start', label: wakeWord(p), detail: '' }),
+  finish: (_e, p, base) => ({ ...base, kind: 'end', label: 'Finished the run', detail: String(p.summary ?? '') }),
   model_call: (_e, _p, base) => ({ ...base, kind: 'model', label: 'Model call', detail: '' }),
   agent_start: (_e, _p, base) => ({ ...base, kind: 'start', label: 'Start', detail: '' }),
   agent_end: (_e, p, base) => endMark(p, base),
@@ -108,11 +141,33 @@ export function buildLanes(events: Event[], team: Team, startSeq: number | null 
     if (!rows.has(id)) rows.set(id, { id, name: id === WORLD_LANE ? 'World' : id === CHECK_LANE ? 'Check' : id, marks: [] });
     rows.get(id)!.marks.push(mark);
   }
+  for (const [id, row] of rows) {
+    const gaps = gapsOf(sorted, id);
+    if (gaps.length) row.gaps = gaps;
+  }
   const special = [WORLD_LANE, CHECK_LANE];
   const all = [...rows.values()];
   const agents = all.filter((r) => !special.includes(r.id));
   const tail = special.map((id) => rows.get(id)).filter((r): r is LaneRow => !!r && r.marks.length > 0);
   return [...agents, ...tail];
+}
+
+/**
+ * When `agent` waited for work in a dispatch run: from its start (or a turn's end) to the next
+ * wake, or to its end (null while it still waits). None for a run without wakes.
+ */
+export function gapsOf(sorted: Event[], agent: string): Gap[] {
+  const mine = sorted.filter((e) => e.agent === agent && ['agent_start', 'wake', 'idle', 'agent_end'].includes(e.kind));
+  if (!mine.some((e) => e.kind === 'wake')) return [];
+  const gaps: Gap[] = [];
+  let since: number | null = null;
+  for (const e of mine) {
+    const at = Date.parse(e.at);
+    if (e.kind === 'agent_start' || e.kind === 'idle') since ??= at;
+    else if (since != null) { gaps.push({ start: since, end: at }); since = null; }
+  }
+  if (since != null) gaps.push({ start: since, end: null });
+  return gaps;
 }
 
 export interface Span {

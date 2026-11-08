@@ -9,7 +9,7 @@
 mod compare;
 mod drive;
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
 mod load;
 mod outcome;
 mod report;
@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Runner, Team};
 use crate::scenario::Scenario;
 
-pub use compare::{compare, Comparison, Verdict};
+pub use compare::{compare, CheckDelta, Comparison, Delta, Verdict};
 pub use drive::{claim_external, spawn_builtin, ExternalClaim};
 pub use load::{listed, load, Listed};
 pub use outcome::{outcome, RunOutcome, GOLD_CHECK};
-pub use report::{report, CheckRate, Spread, SuiteReport};
+pub use report::{report, CheckRate, RunRow, Spread, SuiteReport};
 
 /// The most repeats a suite may ask for.
 pub const MAX_REPEATS: i32 = 100;

@@ -1,4 +1,4 @@
-import { FileUp, Pencil } from 'lucide-react';
+import { ChevronDown, FileUp, Pencil, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import ImportDialog from '../board/ImportDialog';
@@ -9,6 +9,8 @@ import { Panel, PanelHeader } from '../components/ui/panel';
 import { SidePanel } from '../components/ui/side-panel';
 import { LoadingState } from '../components/ui/state';
 import { Dialog, DialogContent } from '../components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
+import { RUNNER_WORDS } from './runners';
 import { cn } from '@/lib/cn';
 import type { Runner, Team } from '../types';
 
@@ -30,13 +32,42 @@ function BoardView({ team, runner, onExpand, className }: { team: Team; runner: 
   );
 }
 
-/** The team as a read-only board, with Import, Edit and Expand (the board full screen); a card's prompt opens beside it. */
-export default function TeamCard({ team, runner, onImported }: { team: Team | null; runner: Runner; onImported: (t: Team) => void }) {
+/** One suggested team in the picker: its name, its size and how it runs. */
+function suggestionLine(t: Team): string {
+  const n = t.agents.length;
+  const size = n === 1 ? 'one agent' : `${n} agents`;
+  return t.runner && t.runner !== 'chain' ? `${size} · ${RUNNER_WORDS[t.runner]}` : size;
+}
+
+/** The benchmark's suggested teams, one click away; picking one replaces the team (and its runner). */
+function TeamPicker({ teams, current, onPick }: { teams: Team[]; current: Team | null; onPick: (t: Team) => void }) {
+  if (teams.length < 2) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button size="sm"><Users />Suggested<ChevronDown /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent className="w-72">
+        <DropdownMenuLabel>The benchmark's teams</DropdownMenuLabel>
+        {teams.map((t) => (
+          <DropdownMenuItem key={t.id} onSelect={() => onPick({ ...t, picked: true })} className={current?.id === t.id ? 'bg-accent-soft' : ''}>
+            <span className="flex min-w-0 flex-col">
+              <span className="text-sm">{t.name}</span>
+              <span className="text-2xs text-muted">{suggestionLine(t)}</span>
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The team as a read-only board, with the suggested teams, Import, Edit and Expand (the board full screen); a card's prompt opens beside it. */
+export default function TeamCard({ team, runner, suggested = [], onImported }: { team: Team | null; runner: Runner; suggested?: Team[]; onImported: (t: Team) => void }) {
   const [importing, setImporting] = useState(false);
   const [expanded, setExpanded] = useState(false);
   return (
     <Panel className="flex min-h-0 flex-col">
       <PanelHeader title="Team" meta={team?.name}>
+        <TeamPicker teams={suggested} current={team} onPick={onImported} />
         <Button size="sm" onClick={() => setImporting(true)}><FileUp />Import</Button>
         <Button size="sm" asChild><Link to="/team"><Pencil />Edit</Link></Button>
       </PanelHeader>

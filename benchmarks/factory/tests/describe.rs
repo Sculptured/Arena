@@ -34,7 +34,9 @@ async fn it_describes_itself_without_the_factory_example() {
     assert_eq!(d.version, "0.4.0");
     assert_eq!(d.scenario_options.unwrap().disruptions.len(), 4);
     assert_eq!(d.view.unwrap().docs.len(), 6);
-    assert_eq!(d.team.unwrap().id, "incident");
+    assert_eq!(d.team.unwrap().id, "single");
+    let suggested: Vec<&str> = d.teams.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(suggested, ["incident", "shift"]);
 }
 
 #[tokio::test]

@@ -13,14 +13,26 @@ async fn it_describes_five_scenarios_over_five_parts() {
     assert_eq!(d.tasks.len(), 5);
     assert_eq!(d.tools.len(), 4);
     assert!(d.tools.iter().all(|t| t.effect == Effect::Read));
-    assert_eq!(d.team.unwrap().agents.len(), 6);
-    let single = Pharma {
-        team: "single".into(),
+    assert_eq!(
+        d.team.unwrap().agents.len(),
+        1,
+        "the single agent is the default"
+    );
+    let others: Vec<(&str, Option<&str>)> = (d.teams.iter())
+        .map(|t| (t.id.as_str(), t.runner.as_deref()))
+        .collect();
+    assert_eq!(
+        others,
+        [("dispatch", Some("dispatch")), ("team", Some("chain"))]
+    );
+    let team = Pharma {
+        team: "team".into(),
     }
     .describe()
     .await
     .unwrap();
-    assert_eq!(single.team.unwrap().agents.len(), 1);
+    assert_eq!(team.team.unwrap().agents.len(), 6);
+    assert_eq!(team.teams[0].id, "single");
 }
 
 #[tokio::test]

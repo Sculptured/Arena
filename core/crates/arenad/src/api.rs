@@ -42,6 +42,7 @@ use crate::{
 mod external;
 mod flow;
 mod names;
+mod review;
 mod suites;
 mod twin;
 mod world;
@@ -52,6 +53,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/providers", get(list_providers))
         .route("/api/tasks", get(tasks))
         .route("/api/team/default", get(default_team))
+        .route("/api/teams", get(suggested_teams))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/name", post(names::set))
@@ -67,6 +69,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(external::router())
         .merge(flow::router())
         .merge(suites::router())
+        .merge(review::router())
         .merge(twin::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))
 }
@@ -192,13 +195,31 @@ fn validate_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
     validate_agents(state, &team.agents)
 }
 
-/// 400 unless arenad can run the team itself: some agents, each valid, none external.
-fn validate_builtin_team(state: &AppState, team: &Team) -> Result<(), ApiError> {
+/// 400 unless arenad can run the team itself under `runner`: some agents, each valid, none
+/// external; in a dispatch run at most one lead, and only agents that keep a session.
+fn validate_builtin_team(state: &AppState, team: &Team, runner: Runner) -> Result<(), ApiError> {
     validate_team(state, team)?;
     if team.agents.iter().any(|a| a.kind == AgentKind::External) {
         return Err(ApiError::bad(
             "an external agent runs only in a run with runner \"external\"",
         ));
+    }
+    match runner {
+        Runner::Dispatch => validate_dispatch_team(team),
+        _ => Ok(()),
+    }
+}
+
+/// 400 when two agents are marked `lead`, or an agent can't stay alive across turns (Codex).
+fn validate_dispatch_team(team: &Team) -> Result<(), ApiError> {
+    if team.agents.iter().filter(|a| a.lead).count() > 1 {
+        return Err(ApiError::bad("mark at most one agent as the lead"));
+    }
+    if let Some(a) = team.agents.iter().find(|a| a.kind == AgentKind::Codex) {
+        return Err(ApiError::bad(format!(
+            "agent {:?} is a Codex agent, which can't keep a session across turns yet: a dispatch run needs Claude Code or arenad's own loop (open)",
+            a.id
+        )));
     }
     Ok(())
 }
@@ -363,6 +384,15 @@ async fn default_team(
     Ok(Json(prompts::default_team_with(&state.bench().await?, &q)))
 }
 
+/// Every team the benchmark suggests, the default first, each with the runner it is written for
+/// (`{...team, runner}`); the query as for `default_team`.
+async fn suggested_teams(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<prompts::Pick>,
+) -> ApiResult<Vec<prompts::Suggested>> {
+    Ok(Json(prompts::suggested_teams(&state.bench().await?, &q)))
+}
+
 async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSummary>> {
     Ok(Json(state.store.runs().await?))
 }
@@ -373,7 +403,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> ApiResult<Vec<RunSumma
 struct NewRun {
     task_id: String,
     team: Team,
-    /// `chain` (default), `concurrent`, or `external` (see `api::external`).
+    /// `chain` (default), `concurrent`, `dispatch`, or `external` (see `api::external`).
     #[serde(default)]
     runner: Runner,
     /// The disruptions to add to the task (`{disruptions: [{id, params}]}`).
@@ -396,7 +426,7 @@ async fn create_run(State(state): State<Arc<AppState>>, body: Bytes) -> ApiResul
     if req.runner == Runner::External {
         return external::create_run(state, cleanup, req.task_id, req.team, scenario).await;
     }
-    validate_builtin_team(&state, &req.team)?;
+    validate_builtin_team(&state, &req.team, req.runner)?;
     check_disk(&state).await?;
     let (run_id, branch_id) = detached(async move {
         let _cleanup = cleanup;

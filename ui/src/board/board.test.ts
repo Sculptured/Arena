@@ -40,6 +40,15 @@ describe('team board layout', () => {
     expect(b.groups).toEqual([]);
   });
 
+  it('puts the lead of a dispatching team above its team, an arrow to each', () => {
+    const t = team(4);
+    t.agents[2].lead = true;
+    const b = layoutBoard(t, 'dispatch');
+    expect(b.cards[0].agent.id).toBe('a2');
+    expect(b.cards.slice(1).map((c) => [c.agent.id, c.y])).toEqual([['a0', CARD_H + 48], ['a1', CARD_H + 48], ['a3', CARD_H + 48]]);
+    expect(b.links).toEqual([{ from: 'a2', to: 'a0' }, { from: 'a2', to: 'a1' }, { from: 'a2', to: 'a3' }]);
+  });
+
   it('puts agents that run at once in one row with no arrows', () => {
     const b = layoutBoard(team(5), 'concurrent');
     expect(new Set(b.cards.map((c) => c.y))).toEqual(new Set([0]));

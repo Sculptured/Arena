@@ -68,10 +68,14 @@ A team is a description: agents, each with an id, a name, a kind, a model and a 
 Every agent may call every one of the world's tools, writes included, unless its team marks it `read_only`: then
 it is given only the read tools, and a write call is refused and recorded. Who does what is the team's design,
 not arena's. `GET /api/team/default` gives the team the benchmark suggests (the retail example suggests a
-read-only triage, then a resolver), every agent Claude Code with model `sonnet` unless the query names another
-kind, model or provider. A benchmark that suggests none gets one generic agent.
+read-only triage, then a resolver; pharma and factory suggest a single agent), every agent Claude Code with model
+`sonnet` unless the query names another kind, model or provider. A benchmark that suggests none gets one generic
+agent. A benchmark may suggest more teams (`GET /api/teams`), each with the runner its prompts are written for:
+pharma offers a dispatching team and its coordinated chain beside the single agent, factory its incident team.
+The Run screen opens with the default and offers the others one click away; picking one picks its runner.
 
-Every agent also gets three tools for talking to the others, all optional and recorded when used:
+Every agent also gets three tools for talking to the others, all optional and recorded when used (a dispatch run
+has its own set, below):
 
 - `handoff {note, to?}`: a note for the agents that start after it (or for one agent). It ends nothing, and an
   agent may leave several.
@@ -84,9 +88,43 @@ Every agent also gets three tools for talking to the others, all optional and re
   task's ticket, the benchmark's instructions, and the handoff notes left for it so far.
 - `concurrent`: arenad starts every agent at once with the ticket and instructions. The branch is scored when all
   of them are done.
+- `dispatch`: a lead and its team (see [Dispatch runs](#dispatch-runs)).
 - `external`: the design's own code drives the agents (see [External designs](#external-designs)).
 
 In every runner the world freezes (no tick, no clock) once the agents are done, and is then scored.
+
+### Dispatch runs
+
+The lead is the agent the team marks `lead`, else its first. It starts with the ticket, the instructions and a
+short note on how the run works; every other agent starts idle. The talk tools are:
+
+- `delegate {to, task}` (the lead only): gives an agent work. It is recorded as a `delegation` event.
+- `report {text}` (every agent but the lead): reports to the lead, recorded as a `report` event.
+- `message {to, text}` and `inbox {}` as in the other runners (`inbox` also holds delegations and reports).
+- `finish {summary}` (the lead only): ends the run, recorded as a `finish` event. No other call goes through
+  after it.
+
+An agent wakes whenever work, a report or a message arrives for it while it is idle: arenad records a `wake`
+(`{reason, mail, idle_wake?, input}`: `mail` the steps whose mail the turn takes, `input` what the agent was
+given) and starts a turn with that mail. Mail for an agent that is working waits and comes, all of it, in its next
+turn. When a turn ends arenad records an `idle` (`{ok, error?, text}`): the agent waits, it isn't done. An agent
+that ends a turn without reporting has what it said last passed on to the lead as its report (a `report` with
+`turn_end: true`). Agents keep their context across turns: Claude Code runs as one long-lived headless process
+(`-p` with `stream-json` in and out, with the same isolation as in the other runners; each model call its stream
+shows is recorded as a `model_call` reported by the client), and an API-mode agent keeps its conversation in
+arenad's loop (at most 40 model calls a turn). Codex can't keep a session yet, so a dispatch team refuses it.
+Agents work at the same time; their world steps go through the branch's step lock as in every runner, so the
+record is one ordered sequence.
+
+The lead's `finish` ends the run: arenad refuses every later call, gives agents still working up to 45 seconds to
+end their turn, stops every agent, records each agent's end (tokens, cost, and the time it spent working), then
+freezes and scores the world. Guard rails (see `ARENA_DISPATCH_*` in [reference.md](reference.md#configuration)):
+a time limit for the run (60 minutes by default, time paused left out), and an idle rule: when every agent has
+waited with no mail for 20 seconds and the lead hasn't finished, the lead is woken with the state of the team
+(each agent's last words); after 3 such wakes the run ends `failed`, scored, with the reason. The time limit also
+ends it `failed`, scored. A lead whose turn fails ends the run (`failed` when it was the model's doing, else
+`infra_error`); an agent whose turn fails gets no more work, and the lead is told. Pause holds back new wakes as
+well as calls, and stop drops every agent at once, as in the other runners.
 
 **Runs recorded before runners** (no `runner` in their `RunStart`) keep the rules they ran under, and so do their
 forks: a chain where every agent but the last must call `handoff` with a note, or the branch fails; the last
@@ -147,8 +185,16 @@ restore mode.
   for an API-mode agent, to the model call that chose the tool call at step N. The response and the UI say
   where the fork started (`start_seq`), where you asked for (`moved_from`), and why (`reason`). These rules are
   the chain runner's. A fork of a `concurrent` run restarts every agent from the run's first agent start (agents
-  that ran at once can't be cut at one step each). A fork of an `external` run starts where asked: how its agents
-  resume is its design's choice ([External designs](#external-designs)).
+  that ran at once can't be cut at one step each). A fork of a `dispatch` run starts where asked (asked for
+  `RunStart`, at the first agent's start; asked for a step after the lead's `finish`, at the finish), and every
+  agent restarts there in a new session: its first turn's input has the ticket, the instructions and its own
+  history before the fork point (its wakes with their input, its tool calls with their results, the work it gave,
+  its reports and messages, and how its turns ended). The agents that were working at the fork point (woken, their
+  turn not ended) carry on at once; mail recorded before the fork point that no turn of its agent had taken is
+  delivered; the others wait for work; the lead's idle wakes so far still count. arena's own notices to the lead
+  (an agent failed) are in the input of the turn that got them, not recorded on their own. A fork of an
+  `external` run starts where asked: how its agents resume is its design's choice
+  ([External designs](#external-designs)).
 - A change is never silently ignored.
 - If there is no restore point for the step, or a part can't be restored in the mode asked for, the fork is
   refused with an error that names the part.
@@ -267,6 +313,14 @@ start_seq`), as compare does:
   labelled `list-price estimate` with the price's source and date (base input and output prices only: caching,
   batch and long-context prices are not modelled); otherwise `unknown`. Arena never makes up a price. The branch's
   cost is the sum when every agent's is known (labelled `mixed` when their labels differ), else `unknown`.
+
+## AI review
+
+Optional, and off with `ARENA_REVIEW=off` or in the web UI's Advanced menu. A real model (Claude Code Sonnet by
+default) reads a compact digest of a run's record and says where it went wrong (each claim citing steps), what to
+change (a prompt, the team, a tool, the model or the process; for a prompt change the sentences to add) and what
+went well; for two runs or two suites, the few differences that matter and which did better. arenad checks every
+citation against the record and stores the review. Details in [reference.md](reference.md#ai-review).
 
 ## Cost labels
 

@@ -79,6 +79,7 @@ fn unreachable_team() -> Team {
         prompt: format!("You are {id}."),
         provider: None,
         read_only: false,
+        lead: false,
     };
     Team {
         id: "t".into(),

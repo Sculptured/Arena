@@ -1,5 +1,6 @@
 // Where the action timeline draws things: each mark at its time in its agent's lane, the
-// connectors of messages and handoffs between lanes, each lane's active span, the time ticks,
+// connectors of messages, handoffs, delegations and reports between lanes, each lane's active span
+// (with the times a dispatch run's agent waited for work as faint gaps), the time ticks,
 // and which marks have room for their label (system kind and read/write).
 import { type LaneRow, type Mark, type Span, position } from '../control/lanes';
 import type { Pause } from './flow';
@@ -59,6 +60,13 @@ export interface Bar {
   x2: number;
 }
 
+/** A time an agent waited for work, drawn faint on its lane. */
+export interface GapBar {
+  lane: number;
+  x1: number;
+  x2: number;
+}
+
 /** A pause drawn across the lanes: nothing could happen in it. */
 export interface Band {
   x1: number;
@@ -72,6 +80,7 @@ export interface Layout {
   ticks: Tick[];
   bars: Bar[];
   bands: Band[];
+  gaps: GapBar[];
 }
 
 /** How far right of its mark's centre a label reaches at 11 px (shape, gap, text, padding), plus room before the next shape. */
@@ -125,7 +134,9 @@ export function layoutTimeline(lanes: LaneRow[], span: Span, width: number, mode
     return xs.length > 1 ? [{ lane: i, x1: Math.min(...xs), x2: Math.max(...xs) }] : [];
   });
   const bands = pauses.map((p) => ({ x1: xOf(p.start), x2: Math.max(xOf(p.end), xOf(p.start) + 2), open: p.open }));
-  return { placed, connectors: connectorsOf(placed, laneIndex), ticks: ticksOf(span, width), bars, bands };
+  const gaps = lanes.flatMap((l, i) => (l.gaps ?? []).map((g) => ({ lane: i, x1: xOf(g.start), x2: xOf(g.end ?? span.end) })))
+    .filter((g) => g.x2 - g.x1 >= 1);
+  return { placed, connectors: connectorsOf(placed, laneIndex), ticks: ticksOf(span, width), bars, bands, gaps };
 }
 
 /** Every step in the order the timeline moves through with ←/→ (model calls only when shown). */

@@ -27,7 +27,7 @@ type R<T> = Result<T, PartError>;
 pub const VERSION: &str = "0.1.0";
 
 /// The benchmark; `team` is the deployment of `data/teams.json` it offers as arenad's default
-/// team (`team` or `single`).
+/// team (`single`, `dispatch` or `team`); it offers the others beside it.
 pub struct Pharma {
     pub team: String,
 }
@@ -35,7 +35,7 @@ pub struct Pharma {
 impl Default for Pharma {
     fn default() -> Pharma {
         Pharma {
-            team: "team".into(),
+            team: "single".into(),
         }
     }
 }
@@ -58,6 +58,7 @@ impl Benchmark for Pharma {
             instructions: team::INSTRUCTIONS.into(),
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
             team: Some(team::bench_team(&self.team)),
+            teams: team::other_teams(&self.team),
             tools: reports::schemas(),
             links: world::links(),
             gates: world::gates(),

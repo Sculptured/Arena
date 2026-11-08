@@ -87,7 +87,9 @@ It is `opt_in`, so arenad's default stays the retail example; choose it with `AR
 
 ## The team
 
-`src/team.rs` holds the team it suggests. As in the factory example, each role does its own work with its own
+arenad's default team is the single agent in `src/single.rs`: one agent does every role's work and, as the only role,
+decides the changes it proposes. The incident team below (`src/team.rs`) is offered beside it, one click away, for a
+chain. As in the factory example, each role does its own work with its own
 tools, and a change is decided by another role than the one that proposed it:
 
 | Role | Does | Proposes | Decides |

@@ -98,6 +98,7 @@ impl Benchmark for Retail {
             }],
             tasks,
             instructions: self.policy.clone(),
+            teams: vec![],
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
             team: Some(team::team()),
             tools: schemas(),

@@ -2,9 +2,9 @@
 //! over the benchmark's instructions. A benchmark's own `team` and `instructions_title` win.
 use parts::proto::{BenchDescribe, BenchTeam, TeamRole};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::model::{trimmed, AgentKind, AgentSpec, Team};
+use crate::model::{trimmed, AgentKind, AgentSpec, Runner, Team};
 
 /// The heading over the instructions when the benchmark gives none.
 pub const INSTRUCTIONS_TITLE: &str = "Instructions";
@@ -44,6 +44,46 @@ pub struct Pick {
 /// kind's default model (none).
 pub fn default_team_with(bench: &BenchDescribe, pick: &Pick) -> Team {
     let mut team = default_team(bench);
+    run_as(&mut team, pick);
+    team
+}
+
+/// A team the benchmark suggests, with the runner its prompts are written for.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Suggested {
+    #[serde(flatten)]
+    pub team: Team,
+    pub runner: Runner,
+}
+
+/// Every team suggested for `bench`, the default first, each run as `pick` says. A team whose
+/// runner arenad doesn't know (or that names none) runs `chain`.
+pub fn suggested_teams(bench: &BenchDescribe, pick: &Pick) -> Vec<Suggested> {
+    let first = Suggested {
+        team: default_team_with(bench, pick),
+        runner: bench.team.as_ref().map_or(Runner::Chain, runner_of),
+    };
+    let others = bench.teams.iter().map(|t| {
+        let mut team = team_of(t);
+        run_as(&mut team, pick);
+        Suggested {
+            team,
+            runner: runner_of(t),
+        }
+    });
+    std::iter::once(first).chain(others).collect()
+}
+
+fn runner_of(t: &BenchTeam) -> Runner {
+    let named = t
+        .runner
+        .as_deref()
+        .map(|r| serde_json::from_value(r.into()));
+    named.and_then(Result::ok).unwrap_or_default()
+}
+
+/// Runs every agent of `team` as `pick` says.
+fn run_as(team: &mut Team, pick: &Pick) {
     for a in &mut team.agents {
         if let Some(k) = pick.kind.filter(|k| *k != a.kind) {
             (a.kind, a.model) = (k, None);
@@ -55,7 +95,6 @@ pub fn default_team_with(bench: &BenchDescribe, pick: &Pick) -> Team {
             a.provider = trimmed(p);
         }
     }
-    team
 }
 
 fn generic_team() -> Team {
@@ -89,6 +128,7 @@ fn agent(role: &TeamRole) -> AgentSpec {
         prompt: role.prompt.clone(),
         provider: None,
         read_only: role.read_only,
+        lead: false,
     }
 }
 
@@ -106,6 +146,7 @@ mod tests {
             instructions: "Do it well.".into(),
             instructions_title: title.map(Into::into),
             team,
+            teams: vec![],
             tools: vec![],
             links: vec![],
             gates: vec![],
@@ -143,6 +184,7 @@ mod tests {
             id: "pair".into(),
             name: "Pair".into(),
             agents: vec![role("first"), role("second")],
+            runner: None,
         };
         let t = default_team(&bench(Some(given), None));
         assert_eq!((t.id.as_str(), t.name.as_str()), ("pair", "Pair"));
@@ -182,6 +224,58 @@ mod tests {
         assert_eq!(
             (a.kind, a.model.as_deref()),
             (AgentKind::ClaudeCode, Some("opus"))
+        );
+    }
+
+    fn role(id: &str) -> TeamRole {
+        TeamRole {
+            id: id.into(),
+            name: id.into(),
+            prompt: id.into(),
+            read_only: false,
+        }
+    }
+
+    fn team(id: &str, runner: Option<&str>) -> BenchTeam {
+        BenchTeam {
+            id: id.into(),
+            name: id.into(),
+            agents: vec![role("a")],
+            runner: runner.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn every_suggested_team_comes_with_its_runner_the_default_first() {
+        let mut b = bench(Some(team("single", None)), None);
+        b.teams = vec![team("lead", Some("dispatch")), team("odd", Some("nope"))];
+        let haiku = Pick {
+            model: Some("haiku".into()),
+            ..Pick::default()
+        };
+        let got: Vec<_> = suggested_teams(&b, &haiku)
+            .into_iter()
+            .map(|s| (s.team.id, s.runner, s.team.agents[0].model.clone()))
+            .collect();
+        let h = Some("haiku".to_string());
+        assert_eq!(
+            got,
+            [
+                ("single".into(), Runner::Chain, h.clone()),
+                ("lead".into(), Runner::Dispatch, h.clone()),
+                ("odd".into(), Runner::Chain, h)
+            ]
+        );
+        assert_generic_team_is_single_agent_chain();
+    }
+
+    fn assert_generic_team_is_single_agent_chain() {
+        let generic = suggested_teams(&bench(None, None), &Pick::default());
+        assert_eq!(generic.len(), 1);
+        let v = serde_json::to_value(&generic[0]).unwrap();
+        assert_eq!(
+            (&v["id"], &v["runner"]),
+            (&"single-agent".into(), &"chain".into())
         );
     }
 

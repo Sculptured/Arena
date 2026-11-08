@@ -102,7 +102,7 @@ function failureText(tool: string, outcome: string, error: string | null): strin
   return `${tool} ${outcome}${error ? `: ${error}` : ''}`;
 }
 
-const FORKABLE = new Set<Event['kind']>(['tool_call', 'model_call', 'message', 'handoff', 'agent_start', 'agent_end']);
+const FORKABLE = new Set<Event['kind']>(['tool_call', 'model_call', 'message', 'handoff', 'agent_start', 'agent_end', 'delegation', 'report', 'wake', 'finish']);
 
 /**
  * Where "Rewind here" forks to keep the world exactly as it is after step `seq`: the first agent

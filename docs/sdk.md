@@ -147,6 +147,21 @@ suite.wait(); suite.summary                      # pass rate, score, safety viol
 arena.compare_suites(before, after)["verdict"]   # improved, regressed, same, incomparable
 ```
 
+## AI review
+
+A real model reads a digest of the run and says where it went wrong and what to change, or what matters
+between two runs or suites. Each call waits for the review (about 10 to 60 s) and returns the stored row
+(`status`, `review`, `model`, `cost_usd`, `issues`); a review is kept and not redone unless `again=True`.
+It costs what the model costs; when arenad has AI review off, the call raises `Conflict`.
+
+```python
+arena.review_settings()                          # {enabled, model, why?}
+r = branch.review()                              # {verdict, went_wrong, suggestions, went_well, confidence}
+r["review"]["went_wrong"][0]["steps"]            # steps of this branch, checked by arenad
+arena.compare_review(branch, fork)["review"]["headline"]
+arena.compare_suites_review(before, after)       # differences cite example runs (branch ids)
+```
+
 ## Export
 
 ```python
