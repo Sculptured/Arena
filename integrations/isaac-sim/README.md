@@ -209,11 +209,40 @@ The names and arguments are those of the factory's `mcp/src/ridgeline_mcp/floor.
 
   An unknown tool name is -32602.
 
+## Robot cells, the plant's load and its scenario: `cells`, `power`, `plant_scenario`
+
+The factory example has presses only. The arena adds, beside its `Factory` and without editing it
+(`isaac_part/equipment.py`), what the factory benchmark's shift task needs. A world that configures neither sees the
+plant as before (no extra keys, events or load).
+
+| key | default |
+|---|---|
+| `cells` | none. `[{id, name, rate_per_hour, running_kw, idle_kw, line?, zone?, robot?}]`: robot cells, each running at the start |
+| `power` | none. `{meter, base_kw, lines: {<line>: {running_kw, idle_kw}}}`: the plant's load model, for the lines on that meter |
+
+| Tool | Effect | Keys |
+|---|---|---|
+| `safe_stop_cell(cell, reason?)` | write | `cell/<id>`: the robot parks, its safety PLC holds; refused when it is safe-stopped already |
+| `start_cell(cell)` | write | `cell/<id>`: refused when it runs already |
+| `plant_scenario(name)` | write | `plant/clock`: `press-wear` starts PR-A1's wear now (what `scenario: true` does at the start); `calm` resets the plant with the run's seed, so no press wears. For a task's setup, so agents don't get it |
+
+- A cell counts the parts it makes from the physics steps it ran (`rate_per_hour`). It gives a `cell` event when it
+  stops or starts. Its document has `status` (`running` or `safe-stopped`), `safe_stopped`, `parts` and `kw`.
+- The load is `base_kw` plus each metered line's `running_kw` times its speed (`boost`) while it runs, else its
+  `idle_kw`, plus each cell's running or idle load. It is checked every 0.1 s of physics (from the step count, so
+  how the advances are split doesn't matter), and a change gives a `power` event `{kw, meter}` (in the event's
+  `detail`), which a benchmark can link to a utility's meter. The first check after the start reports it.
+- `plant_state` lists `cells` and `power`; `plant/power` is `{meter, kw, reported_kw}`.
+- An approximate save keeps the cells, the last load reported and the seed, and a save made with other `cells` or
+  `power` can't be restored (-32001).
+- Verified on `standin` only (`tests/test_equipment.py`, and `arena-part-check` with the factory benchmark's
+  `data/shift.json` plant config). Not run on Isaac Sim, and nothing in the Isaac Sim scene shows the cells yet.
+
 ## Keys, inspect and diff
 
 - Keys come from `state()`: `machine/<id>`, `line/<id>`, `order/<id>`, `technician/<id>`, `operator/<id>`,
-  `shipment/<id>`, `robot/<id>` and `incident/<id>`. There are also `plant/clock` (`t`, `clock`, `speed`,
-  `scenario`, `log_seq`) and `plant/sim`.
+  `shipment/<id>`, `robot/<id>` and `incident/<id>`, and the arena's `cell/<id>`. There are also `plant/clock` (`t`,
+  `clock`, `speed`, `scenario`, `log_seq`), `plant/sim` and, with `power`, `plant/power`.
 - `diff` compares documents exactly, except for floats inside the physics readings (`sensors` and `pose`
   subtrees). Those count as the same when they differ by at most 0.05 plus 1 % of the larger one, because they
   drift after an approximate restore. The protocol has no "not compared" mark.
@@ -353,6 +382,7 @@ uv run --with pytest --with asyncssh pytest -q
 Without `asyncssh`, the tests of `remote/sshd.py` are skipped.
 
 All tests run on `standin`. The conformance test runs `arena-part-check` on a copy of the manifest that uses
-`--backend standin`; it is skipped when the binary is not built (`cargo build -p parts --bin
-arena-part-check`). A restore in a fresh process is tested by running the part over stdio. The suite takes
+`--backend standin`, as it is and with the factory benchmark's cells and load model; it is skipped when the binary
+is not built (`cargo build -p parts --bin arena-part-check`; `ARENA_BIN_DIR` names where it is). Verified on Linux,
+2026-11-07: 61 passed, 1 skipped (`asyncssh` not installed), the conformance runs included. A restore in a fresh process is tested by running the part over stdio. The suite takes
 about 3 s.

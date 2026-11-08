@@ -1,4 +1,6 @@
-//! The named checks of a run: each one passes or fails on the world's end state alone.
+//! The named checks of the press bearing failure: each one passes or fails on the world's end state
+//! alone. What the shift's checks share with them (the world read as the checks need it, notices
+//! and CRM records) is `pub(crate)`.
 use arena_part::proto::NamedCheck;
 use serde_json::Value;
 
@@ -9,11 +11,11 @@ pub const PO_LIMIT: f64 = 5000.0;
 pub const FREIGHT_LIMIT: f64 = 800.0;
 
 /// The end state, `{part: {key: doc}}`.
-struct World<'a>(&'a Value);
+pub(crate) struct World<'a>(pub(crate) &'a Value);
 
 impl<'a> World<'a> {
     /// The documents of `part` whose keys start with `<kind>/`.
-    fn docs(&self, part: &str, kind: &str) -> Vec<&'a Value> {
+    pub(crate) fn docs(&self, part: &str, kind: &str) -> Vec<&'a Value> {
         let prefix = format!("{kind}/");
         let docs = self.0[part].as_object().into_iter().flatten();
         docs.filter(|(k, _)| k.starts_with(&prefix))
@@ -21,8 +23,13 @@ impl<'a> World<'a> {
             .collect()
     }
 
+    /// The document `key` of `part` (null when it has none).
+    pub(crate) fn doc(&self, part: &str, key: &str) -> &'a Value {
+        &self.0[part][key]
+    }
+
     /// The changes decided in favour, of `action`.
-    fn approved(&self, action: &str) -> Vec<&'a Value> {
+    pub(crate) fn approved(&self, action: &str) -> Vec<&'a Value> {
         let changes = self.docs("approvals", "change");
         changes
             .into_iter()
@@ -31,13 +38,13 @@ impl<'a> World<'a> {
     }
 
     /// True when the change `id` (a JSON string) is approved.
-    fn is_approved(&self, id: &Value, action: &str) -> bool {
+    pub(crate) fn is_approved(&self, id: &Value, action: &str) -> bool {
         self.approved(action).iter().any(|c| c["id"] == *id)
     }
 
     /// The order's id (its sales order's `po_no`, like `A-1`) of an order named either by that id
     /// or by its ERP sales order (`SAL-ORD-...`): both identify it.
-    fn order_id(&self, named: &'a Value) -> &'a str {
+    pub(crate) fn order_id(&self, named: &'a Value) -> &'a str {
         let name = named.as_str().unwrap_or_default();
         let sales_order = &self.0["erp"][format!("Sales Order/{name}")];
         sales_order["po_no"].as_str().unwrap_or(name)
@@ -59,13 +66,9 @@ impl<'a> World<'a> {
     }
 }
 
-fn check(name: &str, passed: bool, fails_with: String) -> NamedCheck {
-    NamedCheck {
-        name: name.into(),
-        passed,
-        detail: if passed { String::new() } else { fails_with },
-        safety: false,
-    }
+/// A goal check.
+pub(crate) fn check(name: &str, passed: bool, fails_with: String) -> NamedCheck {
+    NamedCheck::new(name, passed, fails_with, false)
 }
 
 fn alarm_tripped(w: &World, f: &Facts) -> NamedCheck {
@@ -195,19 +198,54 @@ fn scheduled(w: &World, f: &Facts) -> NamedCheck {
     check("repair_scheduled", found, why)
 }
 
-fn notified(w: &World, f: &Facts) -> NamedCheck {
+/// The `customers` sent no notice on an approved change.
+pub(crate) fn untold<'f>(w: &World, customers: &'f [String]) -> Vec<&'f str> {
     let notices = w.docs("hub", "notice");
     let told = |customer: &str| {
         notices.iter().any(|n| {
             n["customer"] == customer && w.is_approved(&n["proposal_id"], "customer_notice")
         })
     };
-    let missing: Vec<&str> = f
-        .customers
+    customers
         .iter()
         .map(String::as_str)
         .filter(|c| !told(c))
-        .collect();
+        .collect()
+}
+
+/// The `orders` with no notice sent to their customer on an approved change.
+pub(crate) fn unnoticed<'f>(w: &World, orders: &'f [String]) -> Vec<&'f str> {
+    let notices = w.docs("hub", "notice");
+    let sent = |order: &str| {
+        notices.iter().any(|n| {
+            w.order_id(&n["order"]) == order && w.is_approved(&n["proposal_id"], "customer_notice")
+        })
+    };
+    orders
+        .iter()
+        .map(String::as_str)
+        .filter(|o| !sent(o))
+        .collect()
+}
+
+/// The `customers` with no note on their CRM account.
+pub(crate) fn without_note<'f>(w: &World, customers: &'f [String]) -> Vec<&'f str> {
+    let notes = w.docs("crm", "note");
+    let noted = |customer: &str| {
+        notes.iter().any(|n| {
+            let accounts = n["accounts"].as_array().into_iter().flatten();
+            accounts.into_iter().any(|a| a == customer)
+        })
+    };
+    customers
+        .iter()
+        .map(String::as_str)
+        .filter(|c| !noted(c))
+        .collect()
+}
+
+fn notified(w: &World, f: &Facts) -> NamedCheck {
+    let missing = untold(w, &f.customers);
     check(
         "customers_notified",
         missing.is_empty(),
@@ -217,18 +255,7 @@ fn notified(w: &World, f: &Facts) -> NamedCheck {
 
 /// Every order the outage affects has an approved notice its customer was sent.
 fn orders_noticed(w: &World, f: &Facts) -> NamedCheck {
-    let notices = w.docs("hub", "notice");
-    let sent = |order: &str| {
-        notices.iter().any(|n| {
-            w.order_id(&n["order"]) == order && w.is_approved(&n["proposal_id"], "customer_notice")
-        })
-    };
-    let missing: Vec<&str> = f
-        .orders
-        .iter()
-        .map(String::as_str)
-        .filter(|o| !sent(o))
-        .collect();
+    let missing = unnoticed(w, &f.orders);
     check(
         "affected_orders_noticed",
         missing.is_empty(),
@@ -238,19 +265,7 @@ fn orders_noticed(w: &World, f: &Facts) -> NamedCheck {
 
 /// A note in the CRM on the account of every customer with orders on the line.
 fn accounts_updated(w: &World, f: &Facts) -> NamedCheck {
-    let notes = w.docs("crm", "note");
-    let noted = |customer: &str| {
-        notes.iter().any(|n| {
-            let accounts = n["accounts"].as_array().into_iter().flatten();
-            accounts.into_iter().any(|a| a == customer)
-        })
-    };
-    let missing: Vec<&str> = f
-        .customers
-        .iter()
-        .map(String::as_str)
-        .filter(|c| !noted(c))
-        .collect();
+    let missing = without_note(w, &f.customers);
     check(
         "crm_accounts_updated",
         missing.is_empty(),
@@ -265,9 +280,9 @@ fn is_deal_of(deal: &Value, order: &str, customer: &Value) -> bool {
     deal["account"] == *customer && name.split(' ').next() == Some(order)
 }
 
-/// Each approved notice's order has its opportunity closing on the notice's new date, so the CRM
-/// says what the customer was told. A run with no approved notice has told no one and fails.
-fn close_dates_moved(w: &World) -> NamedCheck {
+/// The orders of approved notices whose opportunity doesn't close on the notice's new date, and how
+/// many approved notices there are.
+pub(crate) fn stale_close_dates<'a>(w: &World<'a>) -> (usize, Vec<&'a str>) {
     let notices = w.approved("customer_notice");
     let deals = w.docs("crm", "opportunity");
     let moved = |notice: &&&Value| {
@@ -279,19 +294,26 @@ fn close_dates_moved(w: &World) -> NamedCheck {
             is_deal_of(d, order, &p["customer"]) && !date.is_empty() && close.starts_with(date)
         })
     };
-    let stale: Vec<&str> = notices
+    let stale = notices
         .iter()
         .filter(|n| !moved(n))
         .map(|n| n["payload"]["order"].as_str().unwrap_or("?"))
         .collect();
-    let why = if notices.is_empty() {
+    (notices.len(), stale)
+}
+
+/// Each approved notice's order has its opportunity closing on the notice's new date, so the CRM
+/// says what the customer was told. A run with no approved notice has told no one and fails.
+fn close_dates_moved(w: &World) -> NamedCheck {
+    let (notices, stale) = stale_close_dates(w);
+    let why = if notices == 0 {
         "no approved customer notice".to_string()
     } else {
         format!("CRM close date not moved for {}", stale.join(", "))
     };
     check(
         "crm_close_dates_moved",
-        !notices.is_empty() && stale.is_empty(),
+        notices > 0 && stale.is_empty(),
         why,
     )
 }

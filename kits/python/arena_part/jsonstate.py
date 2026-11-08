@@ -106,19 +106,19 @@ class JsonStatePart(Part):
         try:
             done = tool.run(inst.config, work, normalize(name, tool.params, args))
         except (Refusal, ValueError) as e:
-            return _with(refused(str(e)), before)
+            return disruptions.merged(refused(str(e)), before)
         inst.state = work
         out = {"result": done.result, "reads": done.reads, "writes": done.writes}
         if done.events:
             out["events"] = done.events
-        return _with(out, before)
+        return disruptions.merged(out, before)
 
     def _scheduled(self, inst, name) -> disruptions.Fired:
         """Fires and counts the disruptions an agent's call of `name` sets off, on the state itself."""
         if name in self.WORLD_TOOLS or not disruptions.pending(inst.state, name):
             return disruptions.Fired()
         state = copy.deepcopy(inst.state)
-        fired = disruptions.before_call(inst.config, state, self.DISRUPTIONS, name)
+        fired = disruptions.on_call(inst.config, state, self.DISRUPTIONS, name)
         inst.state = state
         return fired
 
@@ -173,16 +173,6 @@ def set_scenario(config, state, args, known, overlay, kinds, tools) -> Done:
     result = {"scenario": args["name"], "disruptions": [d["id"] for d in given]}
     return Done(result, writes=["scenario/current", *fired.writes], events=fired.events)
 
-
-def _with(out: dict, before: disruptions.Fired) -> dict:
-    """A call's answer with what its disruptions wrote and gave put first."""
-    if not before.writes and not before.events:
-        return out
-    out["writes"] = before.writes + [k for k in out["writes"] if k not in before.writes]
-    events = before.events + out.get("events", [])
-    if events:
-        out["events"] = events
-    return out
 
 
 def _read(save_dir) -> dict:

@@ -1,0 +1,19 @@
+kind = "integration"
+name = "utility"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "utility_part"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { meter = { type = "string" }, site = { type = "string" }, plant_start = { type = "string" }, initial_kw = { type = "number" }, tariff = { type = "object" }, scenarios = { type = "object" } } }
+
+[[example]]
+tool = "utility_meter"
+args = {}
+
+[[example]]
+tool = "demand_response_events"
+args = {}
+
+[[example]]
+tool = "meter_load"
+args = { kw = 1210.5, cause = "Press Line C stopped" }

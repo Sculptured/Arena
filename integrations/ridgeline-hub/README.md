@@ -22,6 +22,7 @@ customers) as an `arena-part/1` integration, running on the arena clock. It wrap
 | `hub_path` | `Sculptured-Examples/factory/hub`, next to the arena checkout |
 | `data_path` | `<hub_path>/../data/ridgeline.json` (its `suppliers` list) |
 | `plant_start` | `2026-03-10T06:00:00` (the plant clock at arena time 0) |
+| `inbound` | none. Raw-material trucks on their way: `[{id, material, supplier, carrier, eta_hours, line?, line_stock_hours?, ...}]` (see below) |
 
 Only `ridgeline_hub.market` is imported (through `hub_path` on `sys.path`). A missing path or module makes
 `start` fail with `-32602` naming the path. The factory folder is read only and never modified. `hub_path` is process-global (`sys.path` and
@@ -53,6 +54,24 @@ imports anything.
   unused; the replay contract holds for any seed (`describe` says so in its fingerprint).
 - `usage` is 0 (everything is under `ARENA_SAVES`). `gc` removes save folders not kept.
 
+## Inbound deliveries and their delay
+
+The Market has no raw-material trucks; the arena adds them beside it (`ridgeline_hub_part/inbound.py`), for the factory
+benchmark's shift task. A world without `inbound` sees the hub as before, except for the two tools below.
+
+| tool | effect | what |
+|---|---|---|
+| `inbound_deliveries {}` | read | each truck: material, supplier, carrier, line, `eta` (plant time: `plant_start` plus `eta_hours` plus any delay), `status` (`in transit` or `arrived`, from the hub's clock), `line_runs_out` (plant start plus `line_stock_hours`) and `line_short_hours` |
+| `hub_scenario {name, disruptions?}` | write | sets the scenario (`base`) and schedules disruptions; a task's setup calls it, so agents don't get it |
+
+- Keys: `inbound/<id>`, `scenario/inbound`, `_disruption/<id>` (internal).
+- **Scheduled disruption** (`arena_part.disruptions`, docs/protocol.md "Scheduled disruptions"): `delivery_delay
+  {delivery, extra_hours}`: the truck arrives `extra_hours` later. It fires before the agent's call (of any hub tool,
+  or of `when.tool`) that crosses its count, and stays when that call is refused; `hub_scenario` counts for nothing.
+  The schedule is saved with the rest of the state.
+- Nothing is linked to the plant: the plant doesn't model material, so a late coil doesn't stop a line by itself.
+  `line_runs_out` says when it would.
+
 ## Tests
 
 ```
@@ -60,4 +79,5 @@ uv run --with pytest pytest -q
 ```
 
 The conformance test runs `arena-part-check` and is skipped when the binary is not built
-(`cargo build -p parts --bin arena-part-check`).
+(`cargo build -p parts --bin arena-part-check`; `ARENA_BIN_DIR` names where it is). Verified on Linux, 2026-11-07:
+all 23 pass (`tests/test_inbound.py` included), the conformance check included.

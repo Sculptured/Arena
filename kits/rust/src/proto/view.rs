@@ -65,6 +65,35 @@ pub struct TwinItem {
     pub link: Option<String>,
 }
 
+impl TwinArea {
+    pub fn new(id: &str, label: &str, kind: &str, items: Vec<TwinItem>) -> TwinArea {
+        TwinArea {
+            id: id.into(),
+            label: label.into(),
+            kind: kind.into(),
+            items,
+        }
+    }
+}
+
+impl TwinItem {
+    /// An item with its id, label, status and whether it is abnormal; the rest unset.
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        status: &str,
+        abnormal: bool,
+    ) -> TwinItem {
+        TwinItem {
+            id: id.into(),
+            label: label.into(),
+            status: status.into(),
+            abnormal,
+            ..TwinItem::default()
+        }
+    }
+}
+
 /// Something moving from one item to another (a booked shipment, lot to customer).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TwinFlow {
@@ -82,4 +111,15 @@ pub struct TwinKpi {
     pub label: String,
     pub value: String,
     pub abnormal: bool,
+}
+
+impl TwinKpi {
+    pub fn new(id: &str, label: &str, value: String, abnormal: bool) -> TwinKpi {
+        TwinKpi {
+            id: id.into(),
+            label: label.into(),
+            value,
+            abnormal,
+        }
+    }
 }

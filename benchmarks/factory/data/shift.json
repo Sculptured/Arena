@@ -1,0 +1,104 @@
+{
+  "note": "Fictional. Ridgeline Components' Plant 2 on one shift: what the factory benchmark's shift task adds to the plant (a robot cell, the plant's power model) and the simulated systems around it (the utility, the OT network, the shift roster, the hub's raw-material truck). Every name and number here is invented.",
+  "plant_start": "2026-03-10T06:00:00",
+  "plant": {
+    "cells": [
+      {"id": "CELL-R1", "name": "Robot welding cell R1", "line": "LINE-B", "zone": "CELL-R1",
+       "robot": "6-axis welding robot with a safety PLC", "rate_per_hour": 48, "running_kw": 85, "idle_kw": 8}
+    ],
+    "power": {
+      "meter": "Plant 2 main meter",
+      "base_kw": 430,
+      "lines": {
+        "LINE-A": {"running_kw": 420, "idle_kw": 55},
+        "LINE-B": {"running_kw": 330, "idle_kw": 45},
+        "LINE-C": {"running_kw": 260, "idle_kw": 35}
+      }
+    }
+  },
+  "utility": {
+    "utility": "Lakeshore Power & Light",
+    "meter": "Plant 2 main meter",
+    "site": "Plant 2 (Stamping)",
+    "initial_kw": 1525,
+    "tariff": {"standard_per_kwh": 0.11, "peak_per_kwh": 0.46}
+  },
+  "ot_network": {
+    "site": "Plant 2 (Stamping)",
+    "gateway": {"id": "GW-1", "name": "IT/OT remote-access gateway", "zone": "DMZ"},
+    "zones": [
+      {"id": "ENTERPRISE", "name": "Enterprise IT", "level": "4", "isolatable": false,
+       "assets": ["ERP", "email", "office network"]},
+      {"id": "DMZ", "name": "Industrial DMZ", "level": "3.5", "isolatable": false,
+       "assets": ["GW-1 remote-access gateway", "patch server"]},
+      {"id": "SUPERVISORY", "name": "Site operations", "level": "3", "isolatable": false,
+       "assets": ["SCADA server", "MES", "historian"]},
+      {"id": "PRESS-LINES", "name": "Press lines A to C", "level": "1-2", "isolatable": false,
+       "assets": ["PR-A1 PLC and HMI", "PR-B1 PLC and HMI", "PR-C1 PLC and HMI"]},
+      {"id": "CELL-R1", "name": "Robot welding cell R1", "level": "0-2", "isolatable": true,
+       "assets": ["R1 robot controller", "R1 safety PLC", "R1 cell HMI"]}
+    ],
+    "conduits": [
+      {"id": "C-1", "from": "ENTERPRISE", "to": "DMZ", "via": "FW-1 firewall"},
+      {"id": "C-2", "from": "DMZ", "to": "SUPERVISORY", "via": "GW-1 remote-access gateway"},
+      {"id": "C-3", "from": "SUPERVISORY", "to": "PRESS-LINES", "via": "OT switch"},
+      {"id": "C-4", "from": "SUPERVISORY", "to": "CELL-R1", "via": "cell firewall"}
+    ],
+    "access_list": [
+      {"user": "m.chen", "vendor": "Ridgeline controls engineering", "target": "PRESS-LINES", "ticket": "STANDING-07"},
+      {"user": "weldtech.support", "vendor": "Robot vendor support", "target": "CELL-R1", "ticket": "CHG-2290",
+       "note": "Scheduled on Thursdays only"}
+    ],
+    "sessions": [
+      {"id": "RS-1180", "user": "m.chen", "source": "10.20.4.17 (controls engineering workstation)",
+       "target": "PRESS-LINES", "via": "GW-1", "activity": "reading press PLC diagnostics"}
+    ],
+    "playbook": {
+      "id": "OT-IR-01",
+      "title": "Unknown remote session in the OT network",
+      "basis": "IEC 62443 zones and conduits, kept plain",
+      "steps": [
+        "1. Confirm. A session on the gateway whose user the access list doesn't have for the zone it reaches is unknown. Don't wait for it to act.",
+        "2. Make it safe first. Safe-stop every running machine in the zone it reaches (safe_stop_cell for a robot cell). Never isolate a zone whose equipment is running.",
+        "3. Contain. Isolate the zone (isolate_zone), so the session no longer reaches it.",
+        "4. Eradicate. Revoke the session (revoke_session).",
+        "5. Report. report_security_incident with the session, the zone and what was done, and put it in the shift report.",
+        "6. Recover. Propose a zone_restore change naming the zone; another role decides it. Restore the zone only once it is approved and the session is revoked. Restart the cell (start_cell) only once its station is staffed by a certified operator."
+      ]
+    }
+  },
+  "roster": {
+    "shift": {"name": "Day shift", "starts": "2026-03-10T06:00:00", "ends": "2026-03-10T14:00:00"},
+    "stations": [
+      {"id": "LINE-A", "name": "Press Line A", "kind": "press-line", "needs": "press"},
+      {"id": "LINE-B", "name": "Press Line B", "kind": "press-line", "needs": "press"},
+      {"id": "LINE-C", "name": "Press Line C", "kind": "press-line", "needs": "press"},
+      {"id": "CELL-R1", "name": "Robot welding cell R1", "kind": "robot-cell", "needs": "robot-cell"}
+    ],
+    "operators": [
+      {"id": "OP-11", "name": "Jordan Marsh", "certifications": ["press"], "station": "LINE-A"},
+      {"id": "OP-12", "name": "Priya Shah", "certifications": ["press", "robot-cell"], "station": "LINE-B"},
+      {"id": "OP-13", "name": "Tom Ellery", "certifications": ["press"], "station": "LINE-C"},
+      {"id": "OP-14", "name": "Mei Tanaka", "certifications": ["robot-cell", "press"], "station": "CELL-R1"},
+      {"id": "OP-15", "name": "Kim Adair", "certifications": ["press"], "station": null},
+      {"id": "OP-16", "name": "Luis Ortega", "certifications": ["press", "robot-cell"], "station": null,
+       "on_shift": false, "on_call": true},
+      {"id": "OP-17", "name": "Dev Patel", "certifications": ["press"], "station": null,
+       "on_shift": false, "on_call": true}
+    ],
+    "overtime": {"rate_per_hour": 64.5, "hours": 6}
+  },
+  "inbound": [
+    {"id": "INB-0310-1", "material": "STL-DP780", "description": "Steel coil DP780, 1.6 mm, 12 t",
+     "qty_kg": 12000, "supplier": "Great Lakes Coil Co.", "carrier": "Lakeshore Freight", "line": "LINE-B",
+     "eta_hours": 2.5, "line_stock_hours": 3.0}
+  ],
+  "fronts": {
+    "demand_response": {"event": "LPL-DR-0310", "target_kw": 1200, "lead_min": 15, "minutes": 90},
+    "remote_session": {"session": "RS-7731", "user": "r.vendor", "source": "185.220.101.47 (unknown, outside the company)",
+                       "target": "CELL-R1", "activity": "browsing the robot controller's programs"},
+    "callout": {"operators": ["OP-14", "OP-12"]},
+    "truck_late": {"delivery": "INB-0310-1", "extra_hours": 6},
+    "priority_days": 1
+  }
+}

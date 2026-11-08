@@ -4,6 +4,7 @@ from pathlib import Path
 
 from arena_part import errors
 
+from . import inbound
 from .world import World
 
 FILE = "state.json"
@@ -23,7 +24,7 @@ def snapshot(world: World) -> dict:
     market = world.market
     state = {f: getattr(market, f) for f in MARKET_FIELDS}
     state.update(announced=_announced(market.announced), shipments=world.factory.shipments,
-                 events=world.factory.events, clock_ms=world.elapsed_ms())
+                 events=world.factory.events, clock_ms=world.elapsed_ms(), inbound=world.inbound)
     return json.loads(json.dumps(state))
 
 
@@ -35,11 +36,13 @@ def restore(world: World, state: dict) -> None:
     world.factory.shipments = state["shipments"]
     world.factory.events = state["events"]
     world.stepper.done_ms = state["clock_ms"]
+    world.inbound = state["inbound"]
 
 
 def docs_of(state: dict) -> dict:
     """Every inspectable key of a snapshot, `<kind>/<id>`, with its document."""
-    return {f"{kind}/{id_}": doc for kind, field in KEY_KINDS.items() for id_, doc in state[field].items()}
+    out = {f"{kind}/{id_}": doc for kind, field in KEY_KINDS.items() for id_, doc in state[field].items()}
+    return {**out, **inbound.docs(state["inbound"], state["clock_ms"])}
 
 
 def write(dir, state: dict) -> int:

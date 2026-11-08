@@ -226,7 +226,10 @@ may list more). The Python kit implements this convention (`arena_part.disruptio
 - `do.kind` is the part's own. pharma-logistics: `lane_capacity {carrier, origin, destination, capacity}`,
   `lane_unavailable {carrier, origin, destination}`, `transit_delay {carrier, origin, destination, extra_days}`,
   `reject_next {action, note?}` (the director rejects the next decision on that action). pharma-lims: `result_fails
-  {lot, test}` (the lot's test fails, so it can't be released).
+  {lot, test}` (the lot's test fails, so it can't be released). utility: `demand_response {event, target_kw, lead_min,
+  minutes}`. ot-network: `remote_session {session, user, source, target, activity?}`. shift-roster: `callout
+  {operators}`. ridgeline-hub (not on `jsonstate`; it uses the kit's `disruptions.on_call`): `delivery_delay {delivery,
+  extra_hours}`.
 
 ### The world's view
 

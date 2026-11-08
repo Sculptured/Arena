@@ -8,7 +8,8 @@ from arena_part import errors
 DOCS_FILE = "docs.json"
 # key kind -> the /state collection it comes from; each item has an `id`
 COLLECTIONS = {"machine": "machines", "line": "lines", "order": "orders", "technician": "technicians",
-               "operator": "operators", "shipment": "shipments", "robot": "robots", "incident": "incidents"}
+               "operator": "operators", "shipment": "shipments", "robot": "robots", "incident": "incidents",
+               "cell": "cells"}
 CLOCK_FIELDS = ("t", "clock", "speed", "scenario", "log_seq")
 # Inside these subtrees (sensor readings, poses), floats compare equal within ABS_TOL + REL_TOL * the larger:
 # physics readings drift after an approximate restore, and the protocol has no "not compared" mark. Everything
@@ -26,6 +27,8 @@ def docs_of(state: dict) -> dict:
     docs = {f"{kind}/{d['id']}": d for kind, field in COLLECTIONS.items() for d in state.get(field) or []}
     docs["plant/clock"] = {k: state.get(k) for k in CLOCK_FIELDS}
     docs["plant/sim"] = state.get("sim")
+    if "power" in state:
+        docs["plant/power"] = state["power"]
     return plain(docs)
 
 

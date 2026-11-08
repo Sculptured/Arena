@@ -67,6 +67,34 @@ pub struct ScenarioParam {
     pub default: Value,
 }
 
+impl ScenarioParam {
+    /// An integer knob from `min` to `max`, `default` unless chosen.
+    pub fn int(name: &str, label: &str, (min, max, default): (i64, i64, i64)) -> ScenarioParam {
+        ScenarioParam {
+            name: name.into(),
+            label: label.into(),
+            kind: ParamKind::Int,
+            choices: None,
+            min: Some(min),
+            max: Some(max),
+            default: Value::from(default),
+        }
+    }
+
+    /// One of `choices`, the first unless chosen.
+    pub fn choice(name: &str, label: &str, choices: &[&str]) -> ScenarioParam {
+        ScenarioParam {
+            name: name.into(),
+            label: label.into(),
+            kind: ParamKind::Choice,
+            choices: Some(choices.iter().map(|c| Value::from(*c)).collect()),
+            min: None,
+            max: None,
+            default: Value::from(choices[0]),
+        }
+    }
+}
+
 /// The scenario a run or suite asks for: `{disruptions: [{id, params}]}`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScenarioRequest {
