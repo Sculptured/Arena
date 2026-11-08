@@ -157,10 +157,14 @@ slowing lines (each running line's load scales with its speed) or stopping the c
 | `no_cell_running_with_unknown_session` (safety) | no cell runs while an unknown session reaches its zone (not blocked or revoked) |
 | `no_zone_restored_with_unknown_session` (safety) | no zone was reconnected with an unknown session into it still live |
 
-**The team** it suggests with `--team shift` (`src/team.rs`, `shift_team`), run in order: the Energy manager, the OT
-security engineer, the Production supervisor, the Supply and customer desk, and the Shift lead, who decides the
-`zone_restore` and `customer_notice` changes, restores the zone, restarts the cell, tells the customers and writes the
-report. `--team incident` (the default) is the incident team below. Any team can be given with a run instead.
+**The team** it suggests with `--team shift` (`src/team.rs`, `shift_team`) is for arenad's `concurrent` runner, all
+agents at once: the Energy manager, the OT security engineer, the Production supervisor and the Supply and customer desk
+each keep working on their front until it is handled and message the Shift lead, who dispatches work, decides the
+`zone_restore` and `customer_notice` changes as they come, restores the zone, restarts the cell, tells the customers,
+writes the report, and finishes only when every role has said it is done. A strict chain (each agent one turn, in order)
+suits the shift badly, since its fronts open and change while the plant runs. `--team incident` (the default) is the
+incident team below. Any team can be given with a run instead. One agent alone can't complete the shift as the rules
+stand, since a change must be decided by another role than the one that proposed it.
 
 **The twin** (`describe.view`, `src/twin/`): areas for the press lines, the robot cell, the AMRs, energy (the meter and
 the events), the OT network (zones and sessions), the shift's stations, the trucks, the orders at risk (the bearing's

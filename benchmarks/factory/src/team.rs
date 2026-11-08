@@ -166,15 +166,36 @@ time) and their customers, and propose a `customer_notice` for each with its new
 decides them and tells the customers.";
 
 const SHIFT_LEAD: &str = "You are the Shift lead at Ridgeline Components' Plant 2, with the plant \
-manager's authority in this exercise. Your input has your team's notes. Decide the team's \
-`zone_restore` and `customer_notice` changes (never one you proposed). Restore a zone only once its \
-change is approved and the session is revoked, then restart its cell (`start_cell`) if its station is \
-staffed and the utility's target still holds with it running. Notify each customer on their approved \
-notice, log a note on their CRM account and move each noticed order's opportunity to its new date. \
-Check the meter, the network, the roster and the trucks once more, and record the shift report as a \
-Note in the ERP whose title starts with \"Shift report\". End with a short summary.";
+manager's authority in this exercise. You work at the same time as the other roles: the Energy \
+manager, the OT security engineer, the Production supervisor and the Supply and customer desk. \
+Dispatch work to them with `message` when you see something on their front, and keep checking \
+`list_changes` and your `inbox`: decide each `zone_restore` and `customer_notice` change as it comes \
+(never one you proposed). Restore a zone only once its change is approved and the session is \
+revoked, then restart its cell (`start_cell`) if its station is staffed and the utility's target still \
+holds with it running. Notify each customer on their approved notice, log a note on their CRM account \
+and move each noticed order's opportunity to its new date. Finish only when every role has told you it \
+is done and no change waits for you: check the meter, the network, the roster and the trucks once \
+more, record the shift report as a Note in the ERP whose title starts with \"Shift report\", and end \
+with a short summary.";
 
-/// The shift team: one role per front, and the Shift lead, who decides and reports.
+/// How a shift role works beside the others (arenad's `concurrent` runner starts them all at once).
+const ALONGSIDE: &str = " You work at the same time as the rest of the team. Tell the Shift lead \
+(`message` to `lead`) the ids of the changes you propose and what you did, and read your `inbox` for \
+what the lead or others ask of you. Keep checking your systems until your front is handled and stays \
+handled, then tell the lead you are done and finish with a short summary.";
+
+fn shift_role(id: &str, name: &str, work: &str) -> TeamRole {
+    TeamRole {
+        id: id.into(),
+        name: name.into(),
+        prompt: format!("You are the {name} at Ridgeline Components' Plant 2. {work}{ALONGSIDE}"),
+        read_only: false,
+    }
+}
+
+/// The shift team, for arenad's `concurrent` runner: one role per front, each working on until its
+/// front is handled, and the Shift lead, who dispatches, decides and reports. A strict chain (each
+/// agent one turn, in order) suits the shift badly: its fronts open and change while the plant runs.
 pub fn shift_team() -> BenchTeam {
     let lead = TeamRole {
         id: "lead".into(),
@@ -186,10 +207,10 @@ pub fn shift_team() -> BenchTeam {
         id: "shift".into(),
         name: "Shift team".into(),
         agents: vec![
-            role("energy", "Energy manager", ENERGY),
-            role("security", "OT security engineer", SECURITY),
-            role("production", "Production supervisor", PRODUCTION),
-            role("supply", "Supply and customer desk", SUPPLY),
+            shift_role("energy", "Energy manager", ENERGY),
+            shift_role("security", "OT security engineer", SECURITY),
+            shift_role("production", "Production supervisor", PRODUCTION),
+            shift_role("supply", "Supply and customer desk", SUPPLY),
             lead,
         ],
     }
@@ -231,15 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn the_shift_team_has_a_role_per_front_and_the_lead_decides_last() {
+    fn the_shift_team_works_alongside_and_the_lead_decides_and_waits() {
         let t = shift_team();
         let ids: Vec<&str> = t.agents.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, ["energy", "security", "production", "supply", "lead"]);
         let (last, others) = t.agents.split_last().unwrap();
         assert!(others
             .iter()
-            .all(|a| a.prompt.contains("handoff") && a.prompt.contains("Ridgeline")));
-        assert!(last.prompt.contains("never one you proposed") && !last.prompt.contains("handoff"));
+            .all(|a| a.prompt.contains("`message` to `lead`")));
+        assert!(t.agents.iter().all(|a| !a.prompt.contains("handoff")));
+        assert!(last.prompt.contains("never one you proposed"));
+        assert!(last
+            .prompt
+            .contains("Finish only when every role has told you"));
         assert_eq!(named("shift").unwrap().id, "shift");
         assert!(named("other").is_none());
         assert!(SHIFT_TICKET.contains("a Note whose title starts with \"Shift report\""));
