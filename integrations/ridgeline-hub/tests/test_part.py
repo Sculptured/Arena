@@ -293,14 +293,15 @@ def test_describe_declares_clock_restore_and_seed():
     assert "seed" in str(d["fingerprint"])
     names = {t["name"] for t in d["tools"]}
     assert names == {"request_quotes", "get_quotes", "award_order", "freight_quotes", "get_freight_quotes",
-                     "book_freight", "submit_claim", "answer_claim", "notify_customer", "customer_replies"}
+                     "book_freight", "submit_claim", "answer_claim", "notify_customer", "customer_replies",
+                     "inbound_deliveries", "hub_scenario"}
 
 
 def checker():
-    for profile in ("debug", "release"):
-        p = ARENA / "core" / "target" / profile / "arena-part-check"
-        if p.is_file():
-            return p
+    dirs = [Path(os.environ["ARENA_BIN_DIR"])] if os.environ.get("ARENA_BIN_DIR") else []
+    for d in dirs + [ARENA / "core" / "target" / profile for profile in ("debug", "release")]:
+        if (d / "arena-part-check").is_file():
+            return d / "arena-part-check"
     return None
 
 

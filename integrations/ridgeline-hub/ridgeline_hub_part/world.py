@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from arena_part import FixedStep
 
+from . import inbound
 from .config import Config, load_market
 
 TICK_MS = 500  # the hub ticks the market every 0.5 s
@@ -60,6 +61,8 @@ class World:
         self.stepper.done_ms = clock_ms - clock_ms % TICK_MS
         self.factory = ArenaFactory(cfg.plant_start, self.elapsed_ms)
         self.market = arena_market_class(module.Market)(self.factory, suppliers, self.elapsed_ms)
+        self.cfg = cfg
+        self.inbound = inbound.new_state(cfg.inbound, cfg.plant_start)
 
     def elapsed_ms(self) -> int:
         return self.stepper.done_ms

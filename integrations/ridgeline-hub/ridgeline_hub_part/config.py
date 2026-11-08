@@ -6,6 +6,8 @@ from pathlib import Path
 
 from arena_part import errors, params, sources
 
+from . import inbound
+
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_HUB = (PACKAGE_DIR / ".." / ".." / ".." / "Sculptured-Examples" / "factory" / "hub").resolve()
 DEFAULT_PLANT_START = "2026-03-10T06:00:00"
@@ -16,13 +18,19 @@ class Config:
     hub_path: Path
     data_path: Path
     plant_start: datetime
+    inbound: tuple = ()  # raw-material trucks on their way (inbound.py)
 
 
 def parse_config(config) -> Config:
     config = config or {}
     hub = Path(config.get("hub_path") or DEFAULT_HUB).resolve()
     data = Path(config.get("data_path") or hub / ".." / "data" / "ridgeline.json").resolve()
-    return Config(hub, data, params.config_datetime(config, "plant_start", DEFAULT_PLANT_START))
+    deliveries = config.get("inbound", [])
+    try:
+        inbound.check_config(deliveries)
+    except ValueError as e:
+        raise errors.invalid(str(e)) from None
+    return Config(hub, data, params.config_datetime(config, "plant_start", DEFAULT_PLANT_START), tuple(deliveries))
 
 
 def load_market(cfg: Config):

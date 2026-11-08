@@ -384,5 +384,5 @@ Without `asyncssh`, the tests of `remote/sshd.py` are skipped.
 All tests run on `standin`. The conformance test runs `arena-part-check` on a copy of the manifest that uses
 `--backend standin`, as it is and with the factory benchmark's cells and load model; it is skipped when the binary
 is not built (`cargo build -p parts --bin arena-part-check`; `ARENA_BIN_DIR` names where it is). Verified on Linux,
-2026-11-07: 60 passed, 1 skipped (`asyncssh` not installed), the conformance runs included. A restore in a fresh process is tested by running the part over stdio. The suite takes
+2026-11-07: 61 passed, 1 skipped (`asyncssh` not installed), the conformance runs included. A restore in a fresh process is tested by running the part over stdio. The suite takes
 about 3 s.

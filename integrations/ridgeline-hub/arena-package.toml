@@ -4,7 +4,7 @@ version = "0.1.0"
 protocol = 1
 run = { command = ["uv", "run", "--project", ".", "python", "-m", "ridgeline_hub_part"] }
 needs = { gpu_vram_gb = 0, services = [] }
-config_schema = { type = "object", properties = { hub_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" } } }
+config_schema = { type = "object", properties = { hub_path = { type = "string" }, data_path = { type = "string" }, plant_start = { type = "string" }, inbound = { type = "array" } } }
 
 [[example]]
 tool = "request_quotes"
@@ -20,4 +20,8 @@ args = { origin = "Hartwell warehouse, Columbus OH", weight_kg = 120 }
 
 [[example]]
 tool = "customer_replies"
+args = {}
+
+[[example]]
+tool = "inbound_deliveries"
 args = {}
