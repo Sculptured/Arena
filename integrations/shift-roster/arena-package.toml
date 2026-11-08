@@ -1,0 +1,15 @@
+kind = "integration"
+name = "shift-roster"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "shift_roster_part"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", required = ["stations", "operators"], properties = { shift = { type = "object" }, stations = { type = "array" }, operators = { type = "array" }, overtime = { type = "object" }, scenarios = { type = "object" } } }
+
+[[example]]
+tool = "shift_roster"
+args = {}
+
+[[example]]
+tool = "assign_operator"
+args = { operator = "Kim Adair", station = "LINE-C" }
