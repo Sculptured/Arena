@@ -3,13 +3,16 @@
 Puts Sculptured's approvals in the world: one `sculptured serve` per instance, with changes proposed and decided
 through tools. Restore: exact from a save (SQLite backups plus a data folder); approximate: no. `uses_clock`:
 false. **The Sculptured program is not published yet**, so outside contributors cannot run this integration
-or its live test; the rest of the repository does not need it. Verified live: `live_sculptured_roundtrip` ran
-against a local build of `sculptured` on the maintainer's machine (propose, save, decide, restore, diff).
-`arena-part-check` passed on it once, run by hand (no test runs it). The test is skipped, and says so, when no
+or its live test; the rest of the repository does not need it. It needs a Sculptured with the
+route for outside proposers (`POST /api/teams/{id}/changes`, Sculptured `platform` from 2026-11-07).
+Verified live on 2026-11-07: `live_sculptured_roundtrip` (propose, save, decide, restore, re-raise, diff)
+and `arena-part-check` (passed) ran against a local build of `sculptured` on the maintainer's machine,
+by hand (no routine test runs them). The test is skipped, and says so, when no
 Sculptured program is found. A save restores only with the same Sculptured build.
 
 Sculptured's approvals in the arena world: changes proposed to a business system and the decisions on
-them. Each instance is a `sculptured serve` of its own; the tools reach it only through Sculptured's HTTP
+them. No agent of Sculptured's runs for it: the tools propose through Sculptured's route for outside
+systems. Each instance is a `sculptured serve` of its own; the tools reach it only through Sculptured's HTTP
 API.
 
 - **Config:** `{binary?, team?}`. `binary` is the sculptured program (default: the
@@ -20,29 +23,26 @@ API.
   short scratch folder `/tmp/arena-sc-<pid>-<n>` for the runner's socket, `RUST_LOG=warn`, `PATH`). The
   system picks the loopback port (never 4410); it is read from `data/host-local/controld.url`. The start
   waits until serve's runner (`sculptured hostd`) is connected (`GET /api/hosts`), then makes sure the team
-  exists and runs. `.live/<instance>/run.json` records the config, the absolute program path, its
+  exists. `.live/<instance>/run.json` records the config, the absolute program path, its
   build (`--version`), the port, the scratch folder (a fresh `/tmp/arena-sc-<16 hex>`) and the processes:
   serve's pid and group, and the runner's pid from `host-local/hostd.pid`. A restarted program still
   reaches, saves and stops the instance from that record. `.live` is a dot folder: `gc` and
   arenad's sweep leave it alone (a `live` folder would look like a save id).
-- **Team:** made on the first start of a fresh server: `POST /api/teams` `{template: "blank", practice:
-  true, name}` (its id is its name), `PUT /api/teams/{team}` with 8 Practice agents `p1`..`p8` (the stub
-  driver, no model), and `PUT /api/teams/{team}/settings` with `question_timeout_min: 1440`. Then `POST
-  /api/teams/{team}/start`, and the start waits until every agent runs (`GET /api/rigs/{team}`). A
-  restored server lost its agents' processes, so its start starts the team again. The team has no rules,
-  so every change waits for a person's decision. After a day (wall clock) unanswered, Sculptured records
-  the change not approved, by `nobody-in-time`.
-- **Where changes come from:** Sculptured has no HTTP route that proposes or decides a change. A change
-  is made only by its agent tool `propose_change` (`crates/controld/src/seat_tools/propose.rs`). The tool
-  records `ChangeProposed` and `ChangeChecked` on the team, then asks a person (an `approval` question
-  whose waiter is the agent's call), and records `ChangeDecided` when the answer comes. So:
-  - `propose_change {action, summary, payload, system?, reason?}` (write): finds an agent with no question
-    open, sends it `propose_change:<args>` (`POST /api/seats/{seat}/send`, intent `instruct`), and reads its
-    events (`GET /api/seats/{seat}/events?after=<seq>`) until Sculptured asks about the change (the
-    `question-raised` event gives the change's id) or refuses the arguments (the reply of the turn that
-    took the message). It gives the change and writes `change/<id>`, and gives a world event
-    `change_proposed` whose `data` is the change, so a benchmark's link can hand it to whoever decides it (a
-    simulated person, say). While 8 changes wait, it refuses.
+- **Team:** made on the first start of a fresh server: `POST /api/teams` `{template: "blank", name}` (its id
+  is its name; no agents) and `PUT /api/teams/{team}/settings` with `question_timeout_min: 1440`. A
+  restored server already has it. The team has no rules, so every change waits for a person's decision.
+  After a day (wall clock) unanswered, Sculptured records the change not approved, by `nobody-in-time`.
+  No agent runs in the team: the tools propose as an outside system.
+- **Where changes come from:** Sculptured's route for outside proposers, `POST /api/teams/{team}/changes`
+  (`crates/controld/src/changes.rs`, `seat_tools/propose.rs::propose_external`). It records
+  `ChangeProposed` (proposer `external.arena@<team>`) and `ChangeChecked` on the team, then asks a person
+  (an `approval` question in Needs you), and records `ChangeDecided` when the answer comes, exactly as for
+  an agent's `propose_change`. So:
+  - `propose_change {action, summary, payload, system?, reason?}` (write): `POST /api/teams/{team}/changes`
+    with the arguments and `proposer: "arena"`. Sculptured refusing the arguments (400) is the tool's
+    error. It gives the change and writes `change/<id>`, and gives a world event `change_proposed` whose
+    `data` is the change, so a benchmark's link can hand it to whoever decides it (a simulated person,
+    say). While 8 changes wait, it refuses.
   - `list_changes {}` (read): `GET /api/teams/{team}/changes` (`crates/controld/src/changes.rs`), newest
     first. It reads every change's key.
   - `decide_change {id, approved, note?}` (write): finds the change's open question (`GET
