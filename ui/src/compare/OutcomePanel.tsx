@@ -1,10 +1,10 @@
 import { Link } from 'react-router-dom';
 import { StatusChip } from '../components';
-import { Panel, PanelHeader } from '../components/ui/panel';
+import { Panel } from '../components/ui/panel';
 import { cn } from '@/lib/cn';
 import type { BranchDetail } from '../types';
 import type { TrackMark } from '../world/scrub';
-import { type Strip, divergenceStrip } from './divergence';
+import type { Strip } from './divergence';
 import { type Figure, type OutcomeRow, type SideInput, outcomeRows, verdict } from './outcomes';
 
 function Value({ f, better }: { f: Figure; better: boolean }) {
@@ -15,12 +15,10 @@ function Row({ r }: { r: OutcomeRow }) {
   const v = verdict(r);
   return (
     <tr className="border-t border-line align-baseline">
-      <th scope="row" className="py-1.5 pr-3 pl-3 text-left font-normal">
-        <span className="block text-sm font-medium">{r.label}</span><span className="block text-2xs text-muted">{r.hint}</span>
-      </th>
-      <td className="px-2 py-1.5"><Value f={r.a} better={v === 'a'} /></td>
-      <td className="px-2 py-1.5"><Value f={r.b} better={v === 'b'} /></td>
-      <td className="py-1.5 pr-3 pl-2 text-right text-xs whitespace-nowrap text-muted">{v ? `${v.toUpperCase()} better` : 'same'}</td>
+      <th scope="row" className="py-2 pr-3 pl-4 text-left text-sm font-medium" title={r.hint}>{r.label}</th>
+      <td className="px-2 py-2"><Value f={r.a} better={v === 'a'} /></td>
+      <td className="px-2 py-2"><Value f={r.b} better={v === 'b'} /></td>
+      <td className="py-2 pr-4 pl-2 text-right text-xs whitespace-nowrap text-muted">{v ? `${v.toUpperCase()} better` : 'same'}</td>
     </tr>
   );
 }
@@ -66,19 +64,15 @@ export function DivergenceStrip({ s }: { s: Strip }) {
   );
 }
 
-/** Outcomes, not transcripts: what each branch achieved, side by side, and where they parted. */
-export default function OutcomePanel({ a, b, first }: { a: SideInput; b: SideInput; first: number | null }) {
+/** Outcomes, not transcripts: what each branch achieved, side by side. */
+export default function OutcomePanel({ a, b }: { a: SideInput; b: SideInput }) {
   const rows = outcomeRows(a, b);
   return (
-    <Panel>
-      <PanelHeader title="Outcomes" meta="from the checks, the metrics and the twin at the end" />
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[340px] border-collapse">
-          <thead><tr><th scope="col" className="w-[34%]" /><SideHead label="A" d={a.detail} /><SideHead label="B" d={b.detail} /><th scope="col" /></tr></thead>
-          <tbody>{rows.map((r) => <Row key={r.id} r={r} />)}</tbody>
-        </table>
-      </div>
-      <div className="border-t border-line"><DivergenceStrip s={divergenceStrip(a.detail, b.detail, first)} /></div>
+    <Panel className="overflow-x-auto py-1">
+      <table className="w-full min-w-[340px] border-collapse">
+        <thead><tr><th scope="col" className="w-[34%]" /><SideHead label="A" d={a.detail} /><SideHead label="B" d={b.detail} /><th scope="col" /></tr></thead>
+        <tbody>{rows.map((r) => <Row key={r.id} r={r} />)}</tbody>
+      </table>
     </Panel>
   );
 }

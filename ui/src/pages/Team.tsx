@@ -79,8 +79,7 @@ function AgentCard({ a, i, count, openOk, list, ed }: {
     <Panel className="flex flex-col gap-3 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-line bg-raised font-mono text-xs text-muted">{i + 1}</span>
-        <Input className="h-8 min-w-40 flex-1 text-base font-medium" value={a.name} onChange={(e) => ed.patch(i, { name: e.target.value })} placeholder="Name" aria-label="Agent name" />
-        <span className="font-mono text-2xs text-faint" title="Agent id">{a.id}</span>
+        <Input className="h-8 min-w-40 flex-1 text-base font-medium" value={a.name} onChange={(e) => ed.patch(i, { name: e.target.value })} placeholder="Name" aria-label="Agent name" title={`Agent id: ${a.id}`} />
         <label className="flex items-center gap-1.5 text-xs" title="Give this agent only the world's read tools">
           <Checkbox checked={!!a.read_only} onChange={(e) => ed.patch(i, { read_only: e.target.checked })} />Read-only
         </label>
@@ -100,8 +99,8 @@ export default function Team() {
   const openOk = list.some((s) => s.available || (s.kind === 'local' && !s.checked));
   return (
     <>
-      <PageHeader title="Team" meta="Agents run in order, each handing off to the next; any agent may write unless you make it read-only. New runs and suites use this team. Edits are saved in this browser."
-        actions={<><Button onClick={ed.reset}><RotateCcw />Reset to default</Button><Button variant="primary" onClick={ed.add} disabled={!ed.team}><Plus />Add agent</Button></>} />
+      <PageHeader title={<span title="Agents run in order, each handing off to the next; any agent may write unless you make it read-only. New runs and suites use this team. Edits are saved in this browser.">Team</span>}
+        actions={<><Button variant="ghost" className="text-muted" onClick={ed.reset}><RotateCcw />Reset</Button><Button variant="primary" onClick={ed.add} disabled={!ed.team}><Plus />Add agent</Button></>} />
       <PageBody className="mx-auto w-full max-w-5xl">
         {ed.error && <ErrorState error={ed.error} />}
         {!ed.team && !ed.error && <Panel><LoadingState label="Loading your team…" /></Panel>}

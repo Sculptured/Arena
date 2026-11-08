@@ -69,20 +69,19 @@ export default function SuitesPage() {
   );
   return (
     <>
-      <PageHeader title="Suites" meta="Each suite runs one team over every scenario, repeated, on the same seeded world."
-        actions={<>{compare}<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button></>} />
+      <PageHeader title={<span title="Each suite runs one team over every scenario, repeated, on the same seeded world.">Suites</span>}
+        actions={<>{picked.length > 0 && compare}<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button></>} />
       <PageBody>
         {error && list && <ErrorState error={error} onRetry={load} />}
         <Panel>
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+          {!!list?.length && <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
             <FilterChips label="Status" options={SUITE_FILTERS} value={filter.status} counts={suiteCounts(list ?? [])} onChange={(status) => setFilter({ ...filter, status })} />
             <Input className="ml-auto w-full sm:w-64" placeholder="Filter by name, team or scenario" value={filter.text} onChange={(e) => setFilter({ ...filter, text: e.target.value })} aria-label="Filter suites" />
-          </div>
+          </div>}
           <DataTable label="Suites" columns={cols} data={list} getRowId={(s) => s.id} loadingLabel="Loading suites…" error={error} onRetry={load}
             filter={filter} filterFn={(s, f) => suiteMatches(s, f as ListFilter)} onOpen={(s) => nav(`/suites/${s.id}`)} noMatch="No suite matches the filter."
             sorting={[{ id: 'created', desc: true }]}
-            empty={<EmptyState title="No suites yet" hint="A suite runs your team over each scenario, several times, so you can compare teams fairly."
-              action={<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button>} />} />
+            empty={<EmptyState title="No suites yet" />} />
         </Panel>
       </PageBody>
       <NewSuiteDialog open={newSuite} onOpenChange={setNewSuite} />

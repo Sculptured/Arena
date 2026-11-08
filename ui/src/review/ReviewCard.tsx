@@ -23,7 +23,7 @@ export function StepChip({ seq, onStep, label }: { seq: number | string; onStep?
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="text-2xs font-semibold tracking-wide text-muted uppercase">{title}</h3>
+      <h3 className="text-xs font-semibold text-muted">{title}</h3>
       {children}
     </section>
   );

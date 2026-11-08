@@ -3,7 +3,6 @@ import { rows } from '../api';
 import { Button } from '../components/ui/button';
 import { StatusMark, Tag } from '../components/ui/status';
 import { EmptyState, ErrorState } from '../components/ui/state';
-import { Kbd } from '../components/ui/kbd';
 import { actionWord, classify, systemLine, worldInfo } from '../control/actions';
 import { wakeWord } from '../control/lanes';
 import { missingPermit, permitOf } from '../control/permit';
@@ -261,7 +260,7 @@ function Head({ event, events = [] }: { event: Event; events?: Event[] }) {
 export default function Inspector(props: InspectorProps) {
   const { event } = props;
   if (!event) {
-    return <EmptyState title="No step selected" hint={<>Click a mark on the timeline or a row of the log. Move with <Kbd>←</Kbd> <Kbd>→</Kbd> or <Kbd>j</Kbd> <Kbd>k</Kbd>.</>} />;
+    return <EmptyState title="Pick a step on the timeline" />;
   }
   return (
     <div className="min-w-0">
