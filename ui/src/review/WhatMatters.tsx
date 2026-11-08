@@ -51,7 +51,7 @@ function Diff({ d, hrefOf }: { d: Difference; hrefOf: HrefOf }) {
 
 export function CompareBody({ r, hrefOf }: { r: CompareReview; hrefOf: HrefOf }) {
   return (
-    <div className="flex flex-col gap-3 px-3 py-3">
+    <div className="flex flex-col gap-3 px-4 pb-3">
       <div className="flex flex-wrap items-baseline gap-2">
         <Tag>{BETTER[r.which_is_better] ?? r.which_is_better}</Tag>
         <p className="min-w-0 flex-1 text-base leading-6 font-medium">{r.headline}</p>
@@ -72,8 +72,8 @@ export default function WhatMatters({ target, hrefOf, what }: { target: Target; 
   const h = useReview<CompareReview>(target, enabled, true);
   if (!enabled || !h.loaded) return null;
   return (
-    <ReviewFrame title="What matters" meta="an AI review of the comparison" label="What matters" h={h} what={what} retryHint="The comparison below is unchanged."
-      headline={(r) => r.headline} done={(r) => <CompareBody r={r} hrefOf={hrefOf} />} footer={(s) => <p className="border-t border-line px-3 py-1.5 text-2xs text-faint">{smallPrint(s)}</p>} />
+    <ReviewFrame title="What matters" label="What matters" h={h} what={what} retryHint="The comparison below is unchanged."
+      headline={(r) => r.headline} done={(r) => <CompareBody r={r} hrefOf={hrefOf} />} footer={(s) => <p className="px-4 pb-3 text-2xs text-faint">{smallPrint(s)}</p>} />
   );
 }
 
