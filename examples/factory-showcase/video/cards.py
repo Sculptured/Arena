@@ -53,14 +53,14 @@ def code_card(title, lines, out):
     return out
 
 
-def image_canvas(src, out, margin=60):
+def image_canvas(src, out, margin=60, bottom_reserved=0):
     """Fit a screenshot inside the frame on the dark backdrop with a thin border."""
     shot = Image.open(src).convert("RGB")
-    box = ((W - 2 * margin) * S, (H - 2 * margin) * S)
+    box = ((W - 2 * margin) * S, (H - bottom_reserved - 2 * margin) * S)
     k = min(box[0] / shot.width, box[1] / shot.height)
     shot = shot.resize((int(shot.width * k), int(shot.height * k)), Image.LANCZOS)
     img = gradient()
-    pos = ((img.width - shot.width) // 2, (img.height - shot.height) // 2)
+    pos = ((img.width - shot.width) // 2, ((H - bottom_reserved) * S - shot.height) // 2)
     d = ImageDraw.Draw(img)
     if margin:
         d.rectangle([pos[0] - 3, pos[1] - 3, pos[0] + shot.width + 3, pos[1] + shot.height + 3],

@@ -25,7 +25,9 @@ def say_tokens(n: float) -> str:
 
 
 def say_money(usd: float) -> str:
-    return f"{int(usd)} dollars {round((usd - int(usd)) * 100):02d}"
+    cents = round(usd * 100)
+    dollars, remainder = divmod(cents, 100)
+    return f"{dollars} dollar{'s' if dollars != 1 else ''} and {remainder} cent{'s' if remainder != 1 else ''}"
 
 
 def say_minutes(s: float) -> str:
@@ -193,10 +195,12 @@ class Story:
         k = self.keys[0]
         r = self.runs(k)[0]
         costs = ", ".join(f"{self.name(k)} {say_money(self.cost(k))}" for k in self.keys)
-        return (f"Arena times its own work, such as saving and restoring the world, and takes it out: "
-                f"{cap(self.name(k))}'s first run took {r['measured_s']:.0f} seconds, {r['overhead_s']:.0f} "
-                f"of them Arena's, so about {r['estimated_s']:.0f} in production. Per run, at the A P I "
-                f"prices Claude Code reports: {costs}.")
+        return (f"Arena records the time spent saving, restoring, and recording the world. "
+                f"{cap(self.name(k))}'s first run took {r['measured_s']:.0f} seconds. "
+                f"Arena accounted for {r['overhead_s']:.0f} seconds of that. "
+                f"Subtracting that overhead gives an estimate of {r['estimated_s']:.0f} seconds. "
+                f"It is an estimate, not a production measurement. "
+                f"Mean API-equivalent cost per run, using the estimates reported by Claude Code: {costs}.")
 
     def outro(self):
         return ("Arena didn't choose the design. It ran each one as it was built, recorded every call, "

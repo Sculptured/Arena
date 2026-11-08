@@ -2,7 +2,7 @@ import { savedParts } from '../restore';
 import { LOCAL_COST_SOURCE, providerId } from '../providers';
 import type { AgentKind, AgentSpec, Branch, Change, Event, Team } from '../types';
 
-export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check';
+export type StepKind = 'start' | 'model' | 'tool' | 'handoff' | 'end' | 'check' | 'world';
 
 export interface Step {
   seq: number;
@@ -19,6 +19,7 @@ export interface Lane {
 }
 
 export const CHECK_LANE = 'check';
+export const WORLD_LANE = 'world';
 
 const nonEmpty = (v: unknown) => Array.isArray(v) && v.length > 0;
 
@@ -26,6 +27,7 @@ const nonEmpty = (v: unknown) => Array.isArray(v) && v.length > 0;
 export function lanes(events: Event[], team: Team, startSeq: number | null = null): Lane[] {
   const byAgent = new Map<string, Step[]>(team.agents.map((a) => [a.id, []]));
   const checks: Step[] = [];
+  const world: Step[] = [];
   for (const e of [...events].sort((a, b) => a.seq - b.seq)) {
     if (e.kind === 'run_start') continue;
     const p = (e.payload ?? {}) as Record<string, unknown>;
@@ -46,7 +48,9 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
         step.snapshot = savedParts(p).length > 0;
         break;
       case 'check': step.kind = 'check'; step.label = p.passed ? 'check passed' : 'check failed'; break;
+      case 'world_event': step.kind = 'world'; step.label = typeof p.text === 'string' ? p.text : String(p.part ?? 'world event'); break;
     }
+    if (e.kind === 'world_event') { world.push(step); continue; }
     if (e.kind === 'check' || e.agent == null) {
       checks.push(step);
       continue;
@@ -55,6 +59,7 @@ export function lanes(events: Event[], team: Team, startSeq: number | null = nul
     byAgent.get(e.agent)!.push(step);
   }
   const out: Lane[] = [...byAgent].map(([agent, steps]) => ({ agent, steps }));
+  if (world.length) out.push({ agent: WORLD_LANE, steps: world });
   if (checks.length) out.push({ agent: CHECK_LANE, steps: checks });
   return out;
 }

@@ -1,8 +1,9 @@
 import { agentModelLine } from '../providers';
 import type { Team } from '../types';
 import { CHECK_LANE, type Lane, type Step } from './timeline';
+import ActivityOverview from './ActivityOverview';
 
-const GLYPH: Record<Step['kind'], string> = { start: '▸', model: '◇', tool: '⚙', handoff: '⇢', end: '■', check: '✓' };
+const GLYPH: Record<Step['kind'], string> = { start: '▸', model: '◇', tool: '⚙', handoff: '⇢', end: '■', check: '✓', world: '◌' };
 
 export default function Timeline({ lanes, team, selected, onSelect }: {
   lanes: Lane[];
@@ -11,6 +12,9 @@ export default function Timeline({ lanes, team, selected, onSelect }: {
   onSelect: (seq: number) => void;
 }) {
   return (
+    <div>
+      <ActivityOverview lanes={lanes} selected={selected} onSelect={onSelect} />
+      <div className="activity-heading"><strong>Recorded steps</strong><span className="muted small">Select a call to inspect arguments, results and saved state</span></div>
     <div className="timeline">
       {lanes.map((l) => {
         const agent = l.agent === CHECK_LANE ? undefined : team.agents.find((a) => a.id === l.agent);
@@ -40,6 +44,6 @@ export default function Timeline({ lanes, team, selected, onSelect }: {
           </div>
         );
       })}
-    </div>
+    </div></div>
   );
 }

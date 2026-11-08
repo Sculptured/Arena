@@ -20,6 +20,17 @@ function keysOf(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : [];
 }
 
+function RecordKeys({ label, values }: { label: string; values: string[] }) {
+  return <div className="small record-keys">
+    <span className="muted">{label} ({values.length}): </span>
+    {values.slice(0, 4).map(k => <span className="chip mono" key={k}>{k}</span>)}
+    {!values.length && <span className="muted">none</span>}
+    {values.length > 4 && <details><summary>Show {values.length - 4} more records</summary>
+      <div className="record-key-list">{values.slice(4).map(k => <span className="chip mono" key={k}>{k}</span>)}</div>
+    </details>}
+  </div>;
+}
+
 function RowsAtStep({ branchId, seq, keys, more, auto }: { branchId: string; seq: number; keys: string[]; more: number; auto?: boolean }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -80,8 +91,8 @@ export default function Inspector({ branchId, event, team, autoRows }: { branchI
           <Block title="Arguments" value={p.args} />
           <div className="block">
             <div className="label">Reads / writes</div>
-            <div className="small">reads: {reads.length ? reads.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
-            <div className="small">writes: {writes.length ? writes.map((k) => <span className="chip mono" key={k}>{k}</span>) : <span className="muted">none</span>}</div>
+            <RecordKeys label="Reads" values={reads} />
+            <RecordKeys label="Writes" values={writes} />
             {p.snapshot_error && <div className="notice error">Saving after this step failed: {p.snapshot_error}</div>}
             {savedLine(p) && <div className="muted small">{savedLine(p)}</div>}
           </div>

@@ -1,4 +1,5 @@
 import type { Cost, Metrics, Overhead } from '../types';
+import UsageChart from './UsageChart';
 
 /** What each kind of arena overhead is, in the order they are shown. */
 export const OVERHEAD_KINDS: [keyof Overhead, string][] = [
@@ -40,8 +41,10 @@ export function estimateText(m: Metrics): string {
 export default function MetricsPanel({ m }: { m: Metrics }) {
   const lines = overheadLines(m.overhead_ms);
   return (
-    <details className="panel pane metrics">
+    <details className="panel pane metrics" open>
       <summary><span className="label">Estimated in production</span> {estimateText(m)}</summary>
+      <p className="muted small">Deployment estimate from this test run, not a production measurement.</p>
+      <UsageChart metrics={m} />
       {lines.length > 0 && (
         <table className="small"><tbody>
           {lines.map(([label, v]) => <tr key={label}><td>{label}</td><td className="mono">{v}</td></tr>)}

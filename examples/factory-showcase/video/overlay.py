@@ -13,7 +13,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Caption,Inter,44,&H00FFFFFF,&H00FFFFFF,&HB0140D0D,&H00000000,-1,0,0,0,100,100,0,0,3,14,0,2,200,200,70,1
+Style: Caption,Inter,44,&H00FFFFFF,&H00FFFFFF,&HB0140D0D,&H00000000,-1,0,0,0,100,100,0,0,3,14,0,2,200,200,35,1
 Style: LTitle,Inter,44,&H00FFFFFF,&H00FFFFFF,&HC0140D0D,&H00000000,-1,0,0,0,100,100,0,0,3,16,0,1,0,0,0,1
 Style: LSub,Inter,30,&H00C9B8A8,&H00FFFFFF,&HC0140D0D,&H00000000,0,0,0,0,100,100,0,0,3,16,0,1,0,0,0,1
 Style: Note,Inter,30,&H0000D2FF,&H00FFFFFF,&HC0140D0D,&H00000000,-1,0,0,0,100,100,0,0,3,12,0,7,60,0,56,1

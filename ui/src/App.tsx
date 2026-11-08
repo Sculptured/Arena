@@ -6,6 +6,7 @@ import Compare from './pages/Compare';
 import Run from './pages/Run';
 import Runs from './pages/Runs';
 import Team from './pages/Team';
+import Experiment from './pages/Experiment';
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -23,10 +24,12 @@ export default function App() {
   return (
     <div className="app">
       <div className="topbar">
-        <span className="wordmark">Arena</span>
+        <span className="wordmark">Sculptured Arena</span>
+        <span className="muted small">Agent testing & comparison</span>
         <nav className="nav">
           <NavLink to="/" end>Runs</NavLink>
           <NavLink to="/team">Team</NavLink>
+          <NavLink to="/experiment">Experiments</NavLink>
         </nav>
         <span className="spacer" />
         <span
@@ -51,6 +54,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Runs />} />
         <Route path="/team" element={<Team />} />
+        <Route path="/experiment" element={<Experiment />} />
         <Route path="/runs/:runId/:branchId" element={<Run />} />
         <Route path="/compare/:a/:b" element={<Compare />} />
         <Route path="*" element={<Placeholder title="Not found" />} />

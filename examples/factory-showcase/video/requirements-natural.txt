@@ -1,0 +1,6 @@
+# Install in a Python 3.12 environment; keep the existing Piper environment intact.
+kokoro>=0.9.4,<1
+soundfile
+numpy
+pyyaml
+pillow

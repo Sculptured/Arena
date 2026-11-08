@@ -1,5 +1,49 @@
 # Factory showcase: video toolkit
 
+## Revision: experimental setup and natural narration
+
+The opening now identifies the fictional experimental world before explaining the results.
+Technical detail stays in the script. New showcase scripts select Kokoro (`af_heart`, speed
+0.96) rather than the original Piper draft voice. The revised narration was synthesized on this machine; automated transcription checks recovered the
+opening, plant, ERPNext and cost passages. This is not a claim of human listening review.
+The engine follows [Kokoro's documented Python API](https://github.com/hexgrad/kokoro).
+
+Use Python 3.12 and `requirements-natural.txt` in a separate environment. Kokoro needs its model,
+voice assets and English phonemizer dependencies; cache them while network access is available.
+Missing dependencies stop narration with an explicit error. There is no automatic voice fallback.
+Legacy scripts without `backend` continue to use Piper.
+
+Each scene may contain `beats: [{text, spoken, pause_after}]`. `spoken` is optional pronunciation
+text; captions use `text`. Beat durations come from the generated WAVs. Default inter-beat silence
+is 0.5 seconds, with 0.8 seconds before the scene narration and 1.2 seconds after it. Captions
+within a beat are estimated, not word-aligned. The editor never speeds up narration.
+
+Final showcase generation requires all storyboard footage. Only `--draft` allows missing shots,
+and it reports every omission. New required captures:
+
+- `ui/erpnext-records.webm`: ERPNext's actual interface, showing an affected seeded order and the
+  purchase order from the selected run. Keep document identifiers visible so viewers can match
+  them to the Arena inspector. Capture a disposable restored experimental world; do not modify records.
+- `ui/arena-metrics.webm`: Arena's open deployment estimate, token bars and per-agent table.
+  `capture/shots.py` now generates this shot and supplies a selected step for the fork panel.
+
+Editorial sequence: experimental setup → failure scenario → Arena overview → ERPNext records →
+designs and inspected calls → comparisons and charts → corresponding Arena measurements → fork.
+Keep the UI still while explaining a record. Show the selected agent, arguments, result and saved
+state together. The Experiments page imports the metrics export and provides Outcomes, Timing, Context, Coordination
+and Deployment views, with links back to each recorded run. Captures use those actual report views.
+
+Verified in this revision: frontend production build and offline unit tests; narration pause and
+caption-bound tests with synthetic PCM; actual Arena and restored ERPNext browser captures; Kokoro
+synthesis and automated transcription checks. UI scenes reserve 180 pixels for captions. The final
+audio is normalized to -16 LUFS with a -1.5 dB true-peak target.
+
+The machine-local revision lives at `/home/alexsky2/sculptured-work-local/video/revision/`.
+Its `out/edit.yaml` records the exact source clips, trims and framing used in the final render.
+For the orchestration script, set `SHOWCASE_PY` to the natural-voice environment's Python and pass
+`--erpnext-capture /path/to/erpnext-records.webm` (or place that recording in the output's `ui/`
+directory first). Report shots import the actual metrics export through Arena's file control.
+
 Tools for step 6 of the showcase (narrated video). They contain no results: the real content
 comes from recorded runs. Verified so far: the sample under `sample/` (made-up data, stamped
 "SAMPLE — NOT RESULTS") builds a 30 s 1920x1080 MP4 on this machine (ffmpeg 6.1, Python 3.14).

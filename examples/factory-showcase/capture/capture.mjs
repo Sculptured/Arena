@@ -31,6 +31,21 @@ async function scrollSlowly(page, pixels, seconds) {
   }
 }
 
+// Deliberate inspection beats keep the relevant UI visible while the narrator explains it.
+// Actions are explicit selectors, not arbitrary browser code, and are used for read-only shots.
+async function inspectBeats(page, actions) {
+  for (const action of actions) {
+    if (action.activate) {
+      await page.locator(action.activate).focus();
+      await page.locator(action.activate).press('Enter');
+    }
+    if (action.click) await page.locator(action.click).click();
+    if (action.focus) await page.locator(action.focus).scrollIntoViewIfNeeded();
+    if (action.hover) await page.locator(action.hover).hover();
+    await page.waitForTimeout((action.hold_s ?? 4) * 1000);
+  }
+}
+
 // A slow page's API answer is asked for once first (`warm`: an API path), so a recording shows
 // the page, not its loading: Arena's integrations keep what they read from saves.
 async function warm(cfg, shot) {
@@ -79,10 +94,13 @@ async function shoot(ctx, cfg, shot, out) {
   // A slow page (Arena's compare reads both worlds' final saves) gets its own `timeout_ms`.
   page.setDefaultTimeout(shot.timeout_ms ?? 60000);
   await page.goto((shot.base ?? cfg.base) + shot.path, { waitUntil: 'networkidle', timeout: shot.timeout_ms ?? 60000 });
+  if (shot.upload) await page.locator(shot.upload.selector).setInputFiles(shot.upload.path);
   await settle(page, shot);
+  if (shot.focus) await page.locator(shot.focus).scrollIntoViewIfNeeded();
   if (shot.hover) await page.hover(shot.hover);
   await page.screenshot({ path: join(out, `${shot.name}.png`) });
-  if (shot.record) await scrollSlowly(page, shot.scroll ?? 800, shot.record_s ?? 6);
+  if (shot.record && shot.actions) await inspectBeats(page, shot.actions);
+  else if (shot.record) await scrollSlowly(page, shot.scroll ?? 800, shot.record_s ?? 6);
 }
 
 const [shotsFile, out] = process.argv.slice(2);

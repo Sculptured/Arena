@@ -21,14 +21,14 @@ import yaml
 from story import Story
 
 DESIGN_TEXT = {
-    "A": "Design A is hierarchical. An incident commander reads the alarm, then delegates to four "
-         "specialists, maintenance, procurement, production planning and customer communications, "
-         "through Arena's message tool, and decides every change itself.",
+    "A": "Design A is hierarchical. An incident commander reads the alarm and delegates to four "
+         "specialists: maintenance, procurement, production planning, and customer communications. "
+         "They coordinate through Arena's message tool. The commander decides every change.",
     "B": "Design B is event-driven. The same four specialists start at once with no manager. Each "
-         "subscribes to topics such as press down, diagnosis ready and purchase order approved, and "
-         "acts when an event arrives.",
-    "C": "Design C is a single agent. One agent gets every role's instructions and every tool, so "
-         "the whole incident, and every tool result, flows through one context.",
+         "subscribes to topics such as press down, diagnosis ready, and purchase order approved. "
+         "Each acts when an event arrives.",
+    "C": "Design C is a single agent. It gets every role's instructions and every tool. "
+         "The whole incident, including every tool result, flows through one context.",
 }
 
 RECREATE = [
@@ -49,22 +49,32 @@ def scene(sid, text, **edit):
 
 def opening(s: Story, f: Path) -> list:
     return [
-        scene("cover", "", type="title", title="One plant failure, three agent designs",
-              subtitle="Measured in Arena", duration=3.5, chapter="Cover"),
-        scene("plant", "Ridgeline Components is a stamping plant. It is fictional, and so is everything "
-              "in it. Early one morning the main bearing of press P R A 1 starts to fail. The plant is "
-              "simulated in NVIDIA Isaac Sim and shown here as it runs: the press shakes harder, trips, "
-              "and its beacon turns red.", type="clip", src=str(f / "plant.mp4"), max_speed=4,
+        scene("cover", "This is an experimental setup for testing agent systems. "
+              "The company, plant and business records are fictional. "
+              "The agent runs are recorded, and their outcomes are measured in Sculptured Arena.",
+              type="title", title="An experiment in agent systems",
+              subtitle="Sculptured Arena · simulated business · recorded runs", chapter="Experimental setup"),
+        scene("plant", "Our test case is a bearing failure at Ridgeline Components, a fictional stamping plant. "
+              "The recorded tests use a deterministic plant stand-in. This Isaac Sim visualization shows the failure scenario. "
+              "The question is how each agent design handles the work that follows: diagnosis, purchasing, "
+              "production planning, and customer communication.", type="clip", src=str(f / "plant.mp4"), max_speed=4,
               chapter="The failure",
               lower_third={"title": "Isaac Sim 6.2, rendered on a rented GPU",
                            "subtitle": "Simulated plant, fictional company", "at": 1.5}),
-        scene("tools", "The incident crosses the company's systems: an E R P and its M E S records in "
-              "E R P Next, a C R M in Twenty, an open-source alternative to Salesforce, an approvals "
-              "system, and the outside suppliers, carriers and customers. Arena runs all of it as one "
-              "world it can save, restore and score.", type="image", src=str(f / "ui" / "runs.png"),
-              motion="zoom_in", chapter="The tools",
+        scene("tools", "Arena is the control dashboard for the experiment. "
+              "It brings the agent runs, recorded actions, saved world states, and comparisons into one place. "
+              "The world includes business records in ERPNext, customer records in Twenty, "
+              "and the plant and approval systems.", type="image", src=str(f / "ui" / "runs.png"),
+              motion="none", chapter="The control dashboard",
               lower_third={"title": "ERPNext, Twenty, approvals, plant",
                            "subtitle": "Open-source systems with made-up data"}),
+        scene("erpnext", "Here is the business system behind those tool calls: ERPNext. "
+              "These are seeded experimental records in the application's own interface. "
+              "Start with an affected order, then open the purchase order created during the run. "
+              "We can inspect the supplier, line items, quantities, and document status, "
+              "then return to Arena to see which agent made the change.", type="clip",
+              src=str(f / "ui" / "erpnext-records.webm"), max_speed=1,
+              chapter="Inside ERPNext"),
     ]
 
 
@@ -84,17 +94,24 @@ def design_scenes(s: Story, f: Path) -> list:
 def comparison(s: Story, f: Path) -> list:
     a, b = s.keys[0], s.keys[-1]
     return [
-        scene("checks", s.verdict(), type="clip", src=str(f / "charts" / "checks.mp4"),
+        scene("checks", s.verdict(), type="clip", src=str(f / "ui" / "checks.webm"),
               chapter="Which design did better"),
-        scene("milestones", s.speed_line(), type="clip", src=str(f / "charts" / "milestones.mp4")),
+        scene("milestones", s.speed_line(), type="clip", src=str(f / "ui" / "milestones.webm")),
         scene("compare", "Arena's compare puts two runs side by side: where they first diverged, and "
-              "every record that ended up different in the E R P, the C R M and the plant.", type="clip",
+              "the saved records that ended up different in the parts Arena can compare.", type="clip",
               src=str(f / "ui" / f"compare-{b}-{a}.webm"), max_speed=2),
-        scene("context", s.context_line(), type="clip", src=str(f / "charts" / "context.mp4"),
+        scene("context", s.context_line(), type="clip", src=str(f / "ui" / "context.webm"),
               chapter="Context and roles"),
-        scene("messages", s.roles_line(), type="clip", src=str(f / "charts" / "messages.mp4")),
-        scene("cost", s.cost_line(), type="clip", src=str(f / "charts" / "cost.mp4"),
+        scene("messages", s.roles_line(), type="clip", src=str(f / "ui" / "messages.webm")),
+        scene("cost", s.cost_line(), type="clip", src=str(f / "ui" / "cost.webm"),
               chapter="Time and cost estimates"),
+        scene("arena-metrics", "These measurements also belong in the run dashboard. "
+              "Open the deployment estimate to inspect the measured duration and Arena's overhead. "
+              "The agent table shows input tokens, output tokens, and the source of each cost figure. "
+              "The bars summarize cumulative token use. They are not the context size of a single call. "
+              "This is evidence for deployment planning, not a production performance guarantee.",
+              type="clip", src=str(f / "ui" / "arena-metrics.webm"), max_speed=1,
+              chapter="Inspect measurements in Arena"),
     ]
 
 
@@ -116,8 +133,19 @@ def closing(s: Story, f: Path) -> list:
 def build(m: dict, footage: Path, out: Path, draft: str | None) -> tuple:
     s = Story(m)
     pairs = opening(s, footage) + design_scenes(s, footage) + comparison(s, footage) + closing(s, footage)
+    for _, edit_scene in pairs:
+        if "src" in edit_scene and Path(edit_scene["src"]).parent.name == "ui":
+            edit_scene.update(safe_ui=True, motion="none", margin=0)
+            # Keep labels from covering the interface; captions have their own bottom band.
+            edit_scene.pop("lower_third", None)
+    missing = [e["src"] for _, e in pairs if "src" in e and not Path(e["src"]).exists()]
+    if missing and not draft:
+        raise FileNotFoundError("Required footage is missing; capture it before a final render: " + ", ".join(missing))
+    if missing:
+        print("Draft omits missing footage: " + ", ".join(missing), file=sys.stderr)
     pairs = [(t, e) for t, e in pairs if "src" not in e or Path(e["src"]).exists()]
-    script = {"scenes": [t for t, _ in pairs if t["text"]]}
+    script = {"backend": "kokoro", "speaker": "af_heart", "language": "a", "speed": 0.96,
+              "pause": 0.5, "scenes": [t for t, _ in pairs if t["text"]]}
     edit = {"title": "One plant failure, three agent designs", "output": str(out / "showcase.mp4"),
             "narration": str(out / "narration" / "timings.json"), "music": None,
             "scenes": [e for _, e in pairs]}

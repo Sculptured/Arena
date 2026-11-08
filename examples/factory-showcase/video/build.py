@@ -17,7 +17,7 @@ import cards
 import overlay
 from common import BG, FPS, H, W, WORK, duration, ffmpeg, load_json, load_yaml
 
-LEAD, TAIL = 0.4, 0.6
+LEAD, TAIL = 0.8, 1.2
 FADE = 0.25
 OUT_ARGS = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
             "-r", FPS, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
@@ -45,7 +45,7 @@ def image_chain(sc, total, tmp):
     elif sc["type"] == "title":
         cards.title_card(sc.get("title", ""), sc.get("subtitle", ""), src)
     else:
-        cards.image_canvas(sc["src"], src, sc.get("margin", 60))
+        cards.image_canvas(sc["src"], src, sc.get("margin", 60), 180 if sc.get("safe_ui") else 0)
     frames = int(total * FPS) + 1
     inp = ["-framerate", FPS, "-loop", "1", "-t", f"{total:.3f}", "-i", src]
     return inp, motion_filter(sc.get("motion", "zoom_in"), frames), 1.0
@@ -53,18 +53,21 @@ def image_chain(sc, total, tmp):
 
 def clip_chain(sc, total):
     src = sc["src"]
-    clip_d = duration(src)
+    start = float(sc.get("start", 0))
+    clip_d = duration(src) - start
     speed = 1.0
     if clip_d > total:
         speed = min(clip_d / total, sc.get("max_speed", 8))
         if clip_d / speed > total + 0.05:
             print(f"  warning: {sc['id']} trimmed, needs more than {speed:g}x")
-    fit = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-           f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={BG},setsar=1,fps={FPS},"
+    fit_h = H - 180 if sc.get("safe_ui") else H
+    y = "0" if sc.get("safe_ui") else "(oh-ih)/2"
+    fit = (f"scale={W}:{fit_h}:force_original_aspect_ratio=decrease,"
+           f"pad={W}:{H}:(ow-iw)/2:{y}:color={BG},setsar=1,fps={FPS},"
            f"setpts=PTS/{speed:.4f}")
     if clip_d / speed < total:
         fit += f",tpad=stop_mode=clone:stop_duration={total - clip_d / speed:.3f}"
-    return ["-i", src], fit, speed
+    return ["-ss", str(start), "-i", src], fit, speed
 
 
 def video_chain(sc, total, tmp):
@@ -126,6 +129,8 @@ def finish(joined, meta, edit, out):
         fc = (f"[2:a]volume={vol},afade=t=in:d=2,afade=t=out:st={d - 3:.2f}:d=3[m];"
               f"[0:a][m]amix=inputs=2:duration=first:normalize=0[a]")
         maps = ["-map_metadata", "1", "-map", "0:v", "-map", "[a]", "-filter_complex", fc]
+    else:
+        maps += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=7"]
     ffmpeg(*args, *maps, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
            "-movflags", "+faststart", "-metadata", f"title={edit.get('title', '')}", out)
 
