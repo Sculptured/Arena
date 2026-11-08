@@ -3,6 +3,7 @@ import { Panel } from '../components/ui/panel';
 import { useStepParam } from '../run/useStepParam';
 import type { BranchDetail } from '../types';
 import KpiStrip from './KpiStrip';
+import PlantVideo from './PlantVideo';
 import { worldState } from './page';
 import { moveStop } from './scrub';
 import Scrubber from './Scrubber';
@@ -20,7 +21,7 @@ export function useWorldView(runId: string, d: BranchDetail, views: BranchView[]
   const { pause } = play;
   const move = useCallback((dir: 'prev' | 'next') => { pause(); setStep((cur) => moveStop(stops, cur, dir)); }, [pause, setStep, stops]);
   useStopKeys(stops, setStep, play.toggle, pause);
-  return { s, step, setStep, play, move };
+  return { s, step, setStep, play, move, branchId: d.id, events: d.events };
 }
 
 /** The twin at the step on screen: its KPIs, the scrubber (when `scrub`), and the overview. */
@@ -37,6 +38,7 @@ export default function TwinView({ w, views, scrub = true }: { w: ReturnType<typ
             playing={play.playing} onPlay={play.toggle} onStep={(seq) => { play.pause(); setStep(seq); }} onMove={move} rewind={s.rewind} />
         </Panel>
       )}
+      <PlantVideo branchId={w.branchId} events={w.events} step={s.current} />
       <Panel className="p-2.5"><TwinCanvas view={s.view} changes={s.changes} all={all} /></Panel>
     </div>
   );
