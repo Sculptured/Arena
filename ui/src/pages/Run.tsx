@@ -31,7 +31,8 @@ import { drivenLine } from '../world/page';
 import { Tag } from '../components/ui/status';
 import Waterfall from '../run/Waterfall';
 import { branchTree } from '../runs/tree';
-import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
+import { RunPageReview, type TryState } from '../review/RunReview';
+import type { Branch, BranchDetail, Change, Event, RunStartPayload } from '../types';
 
 /** How the run's agents ran, from its `run_start` (old runs: a chain with a handoff required). */
 export function runnerLine(events: Event[]): string {
@@ -121,8 +122,9 @@ function Header({ runId, detail, siblings, step }: { runId: string; detail: Bran
   );
 }
 
-function Side({ runId, detail, event, forking, setForking, autoRows, choice }: {
+function Side({ runId, detail, event, forking, setForking, autoRows, choice, prefill }: {
   runId: string; detail: BranchDetail; event: Event | null; forking: boolean; setForking: (f: boolean) => void; autoRows: boolean; choice: ForkChoice;
+  prefill?: Record<string, Change>;
 }) {
   const nav = useNavigate();
   const canFork = !!event && event.kind !== 'check' && event.kind !== 'run_start';
@@ -134,7 +136,7 @@ function Side({ runId, detail, event, forking, setForking, autoRows, choice }: {
       </PanelHeader>
       {forking && event && (
         <div className="border-b border-line bg-raised">
-          <ForkPanel key={`${detail.id}:${event.seq}`} branch={detail} seq={event.seq} choice={choice} onClose={() => setForking(false)}
+          <ForkPanel key={`${detail.id}:${event.seq}:${prefill ? JSON.stringify(prefill) : ''}`} branch={detail} seq={event.seq} choice={choice} prefill={prefill} onClose={() => setForking(false)}
             onForked={(r) => nav(`/runs/${runId}/${r.branch_id}`, { state: { notice: r.moved_from != null ? `Restarted from step ${r.start_seq} instead of ${r.moved_from}: ${r.reason ?? ''}` : null } })} />
         </div>
       )}
@@ -175,12 +177,14 @@ function useRunView(branchId: string, order: number[]) {
   const [selected, setSelected] = useStepParam();
   const [forking, setForking] = useState(sp.get('fork') === '1');
   const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
+  const [prefill, setPrefill] = useState<Record<string, Change> | undefined>((loc.state as TryState | null)?.prefill);
   useEffect(() => {
     setForking(sp.get('fork') === '1');
     setNotice((loc.state as { notice?: string } | null)?.notice ?? null);
+    setPrefill((loc.state as TryState | null)?.prefill);
   }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
   useStepKeys(order, setSelected);
-  return { selected, setSelected, forking, setForking, notice, setNotice, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
+  return { selected, setSelected, forking, setForking, notice, setNotice, prefill, setPrefill, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
 }
 
 export default function Run() {
@@ -200,8 +204,9 @@ export default function Run() {
         {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
         {error && <ErrorState error={error} onRetry={reload} />}
         {detail.error && <ErrorState error={detail.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
+        <RunPageReview d={detail} onStep={v.setSelected} onTry={(seq, p) => { v.setPrefill(p); v.setSelected(seq); v.setForking(true); }} />
         <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
-          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} />} />
+          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} prefill={v.prefill} />} />
         {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
       </PageBody>
     </>

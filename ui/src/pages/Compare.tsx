@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { branch as fetchBranch, compare, views as fetchViews } from '../api';
 import OutcomePanel from '../compare/OutcomePanel';
+import WhatMatters from '../review/WhatMatters';
+import { stepHref } from '../review/present';
 import { normalizeViews } from '../world/twin';
 import type { BranchView, TwinView } from '../world/types';
 import { ApproximateMark, StatusChip } from '../components';
@@ -148,6 +150,8 @@ export default function Compare() {
         {!got && !error && <Panel><LoadingState label="Comparing the two final worlds… The first comparison of a pair can take up to a minute while the saves are read." rows={4} /></Panel>}
         {got && (
           <>
+            <WhatMatters target={{ kind: 'compare', a, b }} what="both runs and their comparison"
+              hrefOf={(side, seq) => (typeof seq === 'number' ? stepHref(side === 'a' ? got.a.run_id : got.b.run_id, side === 'a' ? a : b, seq) : null)} />
             <OutcomePanel a={{ detail: got.a, side: got.data.a, view: got.va }} b={{ detail: got.b, side: got.data.b, view: got.vb }} first={got.data.first_divergent_seq} />
             <div className="grid gap-3 lg:grid-cols-2"><Side label="A" id={a} s={got.data.a} team={got.a.team} /><Side label="B" id={b} s={got.data.b} team={got.b.team} /></div>
             {(isApproximate(got.data.a) || isApproximate(got.data.b)) && <Notice>{APPROXIMATE_NOTE}</Notice>}

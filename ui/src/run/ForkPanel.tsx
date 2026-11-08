@@ -126,10 +126,10 @@ function useArchitecture() {
 }
 
 /** Edits to the team, the restore and the start button, kept for one step. */
-function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void, initial: ForkChoice) {
-  const [choice, setChoice] = useState<ForkChoice>(initial);
+function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void, initial: ForkChoice, prefill?: Record<string, Change>) {
+  const [choice, setChoice] = useState<ForkChoice>(prefill ? 'agents' : initial);
   const architecture = useArchitecture();
-  const [edits, setEdits] = useState<Record<string, Change>>({});
+  const [edits, setEdits] = useState<Record<string, Change>>(prefill ?? {});
   const [restore, setRestore] = useState<RestoreMode>('exact');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -148,15 +148,17 @@ function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) 
   return { choice, setChoice, architecture, edits, set, restore, setRestore, plan, list, changes, team, go, busy, err, blocked };
 }
 
-export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents' }: {
+export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents', prefill }: {
   branch: BranchDetail;
   seq: number;
   onForked: (r: ForkResponse) => void;
   onClose?: () => void;
   /** Which change the panel opens with ("Rewind here" in the world view opens "Swap architecture"). */
   choice?: ForkChoice;
+  /** Changes to start with (an AI review's "Rewind and try this"). */
+  prefill?: Record<string, Change>;
 }) {
-  const f = useFork(branch, seq, onForked, choice);
+  const f = useFork(branch, seq, onForked, choice, prefill);
   const a = f.architecture;
   return (
     <div className="flex flex-col">
