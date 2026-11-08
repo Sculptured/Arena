@@ -9,7 +9,7 @@ import ScenarioBuilder, { useScenario } from '../scenario/ScenarioBuilder';
 import { loadTeam, teamForRun } from '../team';
 import type { Runner, TaskSummary } from '../types';
 
-export const RUNNERS: Record<Runner, string> = { chain: 'one after another', concurrent: 'all at once', external: 'external system' };
+export const RUNNERS: Record<Runner, string> = { chain: 'one after another', dispatch: 'a lead dispatching', concurrent: 'all at once', external: 'external system' };
 
 function Scenarios({ tasks, picked, toggle, busy }: { tasks: TaskSummary[] | null; picked: string[]; toggle: (id: string) => void; busy: boolean }) {
   return (
@@ -35,6 +35,8 @@ function useNewSuite(tasks: TaskSummary[] | null, open: boolean) {
   const scenario = useScenario(open, picked.length ? picked : all);
   const [repeats, setRepeats] = useState(2);
   const [runner, setRunner] = useState<Runner>('chain');
+  // Your team's own runner (a suggested team's), each time the dialog opens.
+  useEffect(() => { if (open) loadTeam().then((t) => setRunner(t.runner ?? 'chain')).catch(() => {}); }, [open]);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

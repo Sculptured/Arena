@@ -39,6 +39,8 @@ export const health = () => call<Health>('/api/health');
 export const providers = () => call<ProviderStatus[]>('/api/providers');
 export const tasks = () => call<TaskSummary[]>('/api/tasks');
 export const defaultTeam = () => call<Team>('/api/team/default');
+/** Every team the benchmark suggests, the default first, each with the runner it is written for. */
+export const suggestedTeams = () => call<Team[]>('/api/teams');
 export const startRun = (task_id: string, team: Team, runner: Runner = 'chain', scenario?: ScenarioChoice) =>
   post<NewRunResponse>('/api/runs', scenario ? { task_id, team, runner, scenario } : { task_id, team, runner });
 export const runs = () => call<RunSummary[]>('/api/runs');

@@ -13,6 +13,7 @@ pub mod scale;
 pub mod seed;
 pub mod shift;
 pub mod shift_checks;
+pub mod single;
 pub mod tasks;
 pub mod team;
 pub mod twin;
@@ -51,12 +52,12 @@ impl Factory {
             backend,
             data,
             plant_config: json!({}),
-            team: "incident".into(),
+            team: "single".into(),
             scaled: OnceLock::new(),
         }
     }
 
-    /// The team offered as arenad's default (`team::named`: `incident` or `shift`).
+    /// The team offered as arenad's default (`team::named`: `single`, `incident` or `shift`).
     pub fn with_team(mut self, team: &str) -> Factory {
         self.team = team.into();
         self
@@ -98,6 +99,7 @@ impl Benchmark for Factory {
             instructions: team::INSTRUCTIONS.into(),
             instructions_title: Some(team::INSTRUCTIONS_TITLE.into()),
             team: team::named(&self.team),
+            teams: vec![team::team(), team::shift_team()],
             tools: vec![],
             links: world::links(),
             gates: world::gates(),

@@ -53,7 +53,7 @@ function stepLabel(e: Event, info: WorldInfo): { label: string; detail: string; 
   if (a) return { label: `${actionWord(a)} · ${a.tool}`, detail: a.error ?? '', abnormal: a.outcome !== 'ok', write: a.effect === 'write' };
   const p = obj(e.payload);
   if (e.kind === 'model_call') return { label: 'Model call', detail: typeof p.model === 'string' ? p.model : '', abnormal: false, write: false };
-  if (e.kind === 'message' || e.kind === 'handoff') return { label: `${e.kind} → ${String(p.to ?? 'next')}`, detail: '', abnormal: false, write: false };
+  if (['message', 'handoff', 'delegation', 'report'].includes(e.kind)) return { label: `${e.kind} → ${String(p.to ?? 'next')}`, detail: '', abnormal: false, write: false };
   if (e.kind === 'agent_end') return { label: p.ok === false ? 'Ended: failed' : 'Ended', detail: String(p.error ?? ''), abnormal: p.ok === false, write: false };
   return { label: e.kind.replace('_', ' '), detail: '', abnormal: false, write: false };
 }

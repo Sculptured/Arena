@@ -130,6 +130,7 @@ pub fn team() -> BenchTeam {
         read_only: false,
     };
     BenchTeam {
+        runner: Some("chain".into()),
         id: "incident".into(),
         name: "Incident team".into(),
         agents: vec![
@@ -207,6 +208,7 @@ pub fn shift_team() -> BenchTeam {
     BenchTeam {
         id: "shift".into(),
         name: "Shift team".into(),
+        runner: Some("concurrent".into()),
         agents: vec![
             shift_role("energy", "Energy manager", ENERGY),
             shift_role("security", "OT security engineer", SECURITY),
@@ -217,9 +219,10 @@ pub fn shift_team() -> BenchTeam {
     }
 }
 
-/// The team `name` (`incident` or `shift`), offered as arenad's default team.
+/// The team `name` (`single`, `incident` or `shift`), offered as arenad's default team.
 pub fn named(name: &str) -> Option<BenchTeam> {
     match name {
+        "single" => Some(crate::single::team()),
         "incident" => Some(team()),
         "shift" => Some(shift_team()),
         _ => None,

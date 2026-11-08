@@ -362,12 +362,16 @@ pub struct Gate {
     pub require: Map<String, Value>,
 }
 
-/// The team a benchmark suggests: its agents in the order they run (the last one writes).
+/// A team a benchmark suggests: its agents in the order they run, and the arenad runner its
+/// prompts are written for (`chain`, `concurrent` or `dispatch`; absent: any). In a `dispatch`
+/// run the first agent leads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchTeam {
     pub id: String,
     pub name: String,
     pub agents: Vec<TeamRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -384,6 +388,10 @@ pub struct BenchDescribe {
     /// The team the benchmark suggests; arenad suggests a generic one if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<BenchTeam>,
+    /// Other teams it suggests beside `team` (a dispatching team, a chain), offered one click
+    /// away.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<BenchTeam>,
     pub tools: Vec<ToolSchema>,
     /// Calls between the parts of the world.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

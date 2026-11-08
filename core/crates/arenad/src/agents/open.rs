@@ -7,11 +7,14 @@ use std::{
 
 use serde_json::{json, Value};
 
-use super::{AgentResult, AgentRun, Driver, FailureKind};
+use super::{
+    session::{end_error, BoxFuture, Session, SessionStart, Turn},
+    AgentResult, AgentRun, Driver, FailureKind,
+};
 use crate::{
     app::AppState,
-    exec::{tool_schemas, BranchCtx, ToolExec},
-    model::add_cost,
+    exec::{tool_schemas, BranchCtx, ToolExec, FINISH, HANDOFF},
+    model::{add_cost, AgentSpec},
     providers::Provider,
 };
 
@@ -80,6 +83,78 @@ fn initial_messages(run: &AgentRun) -> Vec<Value> {
 impl Driver for OpenDriver {
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(self.run_inner(run))
+    }
+
+    fn session(&self, start: SessionStart) -> Result<Box<dyn Session>, String> {
+        let state = self.state.upgrade().ok_or("server is shutting down")?;
+        let lp = Loop::new(state, start.branch, &start.spec).map_err(|f| match f {
+            Fault::Model(e) | Fault::Infra(e) => e,
+        })?;
+        let system = json!({"role": "system", "content": start.spec.prompt});
+        Ok(Box::new(OpenSession {
+            lp,
+            messages: vec![system],
+            totals: Totals::new(),
+            busy: Duration::ZERO,
+            error: None,
+        }))
+    }
+}
+
+/// An open agent alive across turns: arenad keeps its conversation, and each turn adds a user
+/// message to it.
+struct OpenSession {
+    lp: Loop,
+    messages: Vec<Value>,
+    totals: Totals,
+    busy: Duration,
+    error: Option<String>,
+}
+
+impl OpenSession {
+    async fn run_turn(&mut self, input: String) -> Turn {
+        let since = Instant::now();
+        self.messages
+            .push(json!({"role": "user", "content": input}));
+        let done = self
+            .lp
+            .until_done(&mut self.messages, &mut self.totals)
+            .await;
+        self.busy += since.elapsed();
+        let turn = match done {
+            Ok(text) => Turn::done(text),
+            Err(Fault::Model(e)) => Turn::failed(e, Some(FailureKind::Model)),
+            Err(Fault::Infra(e)) => Turn::failed(e, None),
+        };
+        if !turn.ok {
+            self.error = turn.error.clone();
+        }
+        turn
+    }
+
+    fn result(self, cut: bool) -> AgentResult {
+        let error = end_error(self.error, cut);
+        let [prompt, completion, total] = self.totals.tokens;
+        AgentResult {
+            ok: error.is_none(),
+            error,
+            failure: None,
+            tokens: super::tokens_json(prompt, completion, total),
+            cost_source: self.totals.cost.and(self.totals.source).map(str::to_string),
+            cost_usd: self.totals.cost,
+            seconds: self.busy.as_secs_f64(),
+        }
+    }
+}
+
+impl Session for OpenSession {
+    fn turn<'a>(&'a mut self, input: String) -> BoxFuture<'a, Turn> {
+        Box::pin(self.run_turn(input))
+    }
+
+    fn end(self: Box<Self>, cut: bool) -> BoxFuture<'static, AgentResult> {
+        let result = self.result(cut);
+        Box::pin(async move { result })
     }
 }
 
@@ -199,14 +274,73 @@ fn failure(status: reqwest::StatusCode, text: &str) -> String {
     format!("model call failed ({}): {detail}", status.as_u16())
 }
 
-/// The recording gateway's address for this agent.
-fn gateway_url(state: &AppState, run: &AgentRun) -> String {
+/// The recording gateway's address for `agent` on `branch`.
+fn gateway_url(state: &AppState, branch: &str, agent: &str) -> String {
     format!(
         "{}/gateway/{}/{}/v1/chat/completions",
         state.config.self_base.trim_end_matches('/'),
-        run.branch.branch_id,
-        run.spec.id
+        branch,
+        agent
     )
+}
+
+/// What an agent's loop talks to: the gateway to its provider and model, and its tools.
+struct Loop {
+    state: Arc<AppState>,
+    provider: Provider,
+    model: String,
+    url: String,
+    tools: Vec<Value>,
+    branch: Arc<BranchCtx>,
+    agent: String,
+}
+
+impl Loop {
+    fn new(state: Arc<AppState>, branch: Arc<BranchCtx>, spec: &AgentSpec) -> Result<Loop, Fault> {
+        let (provider, model) = provider_and_model(&state, spec)?;
+        Ok(Loop {
+            url: gateway_url(&state, &branch.branch_id, &spec.id),
+            tools: openai_tools(&branch, &spec.id),
+            model: model.to_string(),
+            provider,
+            state,
+            branch,
+            agent: spec.id.clone(),
+        })
+    }
+
+    /// Model calls, running the tools each one asks for, until the agent answers without a tool
+    /// call or ends its part (`handoff`, `finish`); what it said last.
+    async fn until_done(
+        &self,
+        messages: &mut Vec<Value>,
+        totals: &mut Totals,
+    ) -> Result<String, Fault> {
+        totals.source = self.provider.cost_source();
+        let exec = ToolExec::new(self.state.store.clone());
+        let base = self.state.config.retry_base;
+        for _ in 0..MAX_MODEL_CALLS {
+            let body = json!({"messages": messages, "tools": self.tools, "model": self.model});
+            let v = model_call(&self.state.http, &self.url, &body, base).await?;
+            totals.add(&self.provider, &v["usage"]);
+            let msg = v["choices"][0]["message"].clone();
+            if !msg.is_object() {
+                return Err("model response has no message".into());
+            }
+            messages.push(msg.clone());
+            let text = msg["content"].as_str().unwrap_or("").to_string();
+            let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
+            if calls.is_empty() {
+                return end_without_calls(&v).map(|()| text);
+            }
+            if run_calls(&exec, &self.branch, &self.agent, calls, messages).await? {
+                return Ok(text);
+            }
+        }
+        Err(Fault::Model(format!(
+            "agent exceeded {MAX_MODEL_CALLS} model calls"
+        )))
+    }
 }
 
 impl OpenDriver {
@@ -233,32 +367,9 @@ impl OpenDriver {
 
     async fn drive(&self, run: &AgentRun, totals: &mut Totals) -> Result<(), Fault> {
         let state = self.state.upgrade().ok_or("server is shutting down")?;
-        let (provider, model) = provider_and_model(&state, run)?;
-        totals.source = provider.cost_source();
-        let url = gateway_url(&state, run);
-        let tools = openai_tools(&run.branch, &run.spec.id);
+        let lp = Loop::new(state, run.branch.clone(), &run.spec)?;
         let mut messages = initial_messages(run);
-        let exec = ToolExec::new(state.store.clone());
-        for _ in 0..MAX_MODEL_CALLS {
-            let body = json!({"messages": messages, "tools": tools, "model": model});
-            let v = model_call(&state.http, &url, &body, state.config.retry_base).await?;
-            totals.add(&provider, &v["usage"]);
-            let msg = v["choices"][0]["message"].clone();
-            if !msg.is_object() {
-                return Err("model response has no message".into());
-            }
-            messages.push(msg.clone());
-            let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
-            if calls.is_empty() {
-                return end_without_calls(&v);
-            }
-            if run_calls(&exec, run, calls, &mut messages).await? {
-                return Ok(());
-            }
-        }
-        Err(Fault::Model(format!(
-            "agent exceeded {MAX_MODEL_CALLS} model calls"
-        )))
+        lp.until_done(&mut messages, totals).await.map(drop)
     }
 }
 
@@ -266,17 +377,14 @@ impl OpenDriver {
 /// provider is unknown or has no default.
 fn provider_and_model<'a>(
     state: &AppState,
-    run: &'a AgentRun,
+    spec: &'a AgentSpec,
 ) -> Result<(Provider, &'a str), Fault> {
-    let provider = state
-        .config
-        .providers
-        .resolve(run.spec.provider.as_deref())?;
-    let named = run.spec.model.as_deref().filter(|m| !m.trim().is_empty());
+    let provider = state.config.providers.resolve(spec.provider.as_deref())?;
+    let named = spec.model.as_deref().filter(|m| !m.trim().is_empty());
     let model = named.or(provider.default_model()).ok_or_else(|| {
         Fault::Infra(format!(
             "agent {} names no model, and provider {} has no default one",
-            run.spec.id, provider.id
+            spec.id, provider.id
         ))
     })?;
     Ok((provider, model))
@@ -300,14 +408,15 @@ fn refusal(details: &Value) -> String {
     }
 }
 
-/// Runs each tool call, appending the tool messages. `Ok(true)` when the agent handed off.
+/// Runs each tool call, appending the tool messages. `Ok(true)` when the agent handed off, or
+/// finished a dispatch run.
 async fn run_calls(
     exec: &ToolExec,
-    run: &AgentRun,
+    branch: &Arc<BranchCtx>,
+    agent: &str,
     calls: Vec<Value>,
     messages: &mut Vec<Value>,
 ) -> Result<bool, Fault> {
-    let agent = run.spec.id.as_str();
     for call in calls {
         let id = call["id"].as_str().unwrap_or("").to_string();
         let name = call["function"]["name"].as_str().unwrap_or("").to_string();
@@ -319,18 +428,18 @@ async fn run_calls(
             continue;
         };
         let res = exec
-            .run_outcome(&run.branch, agent, &name, args, Some(id.clone()))
+            .run_outcome(branch, agent, &name, args, Some(id.clone()))
             .await;
         let content = match &res {
             Ok(v) => v.to_string(),
             Err(e) => json!({"error": e}).to_string(),
         };
         messages.push(tool_message(&id, content));
-        if name == "handoff" && res.is_ok() {
+        if [HANDOFF, FINISH].contains(&name.as_str()) && res.is_ok() {
             return Ok(true);
         }
         // A world program stopped: the branch can't go on.
-        if let Some(f) = run.branch.fatal() {
+        if let Some(f) = branch.fatal() {
             return Err(Fault::Infra(f));
         }
     }

@@ -38,6 +38,7 @@ pub fn team() -> BenchTeam {
             role("triage", "Triage", TRIAGE_PROMPT, true),
             role("resolver", "Resolver", RESOLVER_PROMPT, false),
         ],
+        runner: Some("chain".into()),
     }
 }
 

@@ -162,6 +162,7 @@ impl Live {
             prompt: prompt.into(),
             provider: self.provider().map(str::to_string),
             read_only: false,
+            lead: false,
         }
     }
 

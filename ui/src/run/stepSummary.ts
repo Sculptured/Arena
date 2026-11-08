@@ -63,7 +63,29 @@ function endStep(p: Payload, who: string): StepSummary {
     : { title: `${who} · Done`, text: `${who} finished${took}.`, abnormal: false };
 }
 
+/** Why a dispatch run woke the agent, in a sentence. */
+function wakeStep(p: Payload, who: string): StepSummary {
+  const mail = Array.isArray(p.mail) ? p.mail.length : 0;
+  const why = {
+    start: `${who} started work with the ticket.`,
+    idle: `Every agent was waiting and the run was not finished, so ${who} was woken to follow up (wake ${String(p.idle_wake ?? '')}).`,
+    resume: `${who} carried on from the fork point with its recorded history.`,
+  }[String(p.reason)] ?? `${who} was woken by ${mail > 1 ? `${mail} messages` : 'new work or a message'}.`;
+  return { title: `${who} · Woken`, text: why, abnormal: false };
+}
+
 const WORDS: Partial<Record<Event['kind'], Words>> = {
+  delegation: (p, who, to) => ({ title: `${who} · Delegate`, text: `${who} gave ${to(p.to)} work: ${quote(p.task)}`, abnormal: false }),
+  report: (p, who, to) => ({
+    title: `${who} · Report`,
+    text: p.turn_end ? `${who} ended its turn without reporting; what it said went to ${to(p.to)}: ${quote(p.text)}` : `${who} reported to ${to(p.to)}: ${quote(p.text)}`,
+    abnormal: false,
+  }),
+  wake: wakeStep,
+  idle: (p, who) => (p.ok === false
+    ? { title: `${who} · Turn failed`, text: `${who}'s turn failed: ${clip(String(p.error ?? ''))}`, abnormal: true }
+    : { title: `${who} · Waiting`, text: `${who} ended its turn and waits for work. It said: ${quote(p.text)}`, abnormal: false }),
+  finish: (p, who) => ({ title: `${who} · Finish`, text: `${who} finished the run: every agent was stopped and the world scored. ${quote(p.summary)}`, abnormal: false }),
   tool_call: (_p, who, _to, e, events) => toolStep(e, events, who),
   model_call: (p, who) => modelStep(p, who),
   message: (p, who, to) => ({ title: `${who} · Message`, text: `${who} sent a message to ${to(p.to)}: ${quote(p.text)}`, abnormal: false }),

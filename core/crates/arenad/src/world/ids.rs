@@ -89,6 +89,7 @@ mod tests {
             instructions: String::new(),
             instructions_title: None,
             team: None,
+            teams: vec![],
             tools: vec![],
             links: vec![],
             gates: vec![],

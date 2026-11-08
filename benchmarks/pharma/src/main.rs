@@ -8,10 +8,10 @@ fn arg(name: &str) -> Option<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let team = arg("--team").unwrap_or_else(|| "team".into());
+    let team = arg("--team").unwrap_or_else(|| "single".into());
     anyhow::ensure!(
-        team == "team" || team == "single",
-        "--team must be team or single, not {team}"
+        arena_pharma::team::DEPLOYMENTS.contains(&team.as_str()),
+        "--team must be single, dispatch or team, not {team}"
     );
     arena_part::serve_benchmark(Pharma { team }).await
 }

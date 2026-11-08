@@ -275,7 +275,7 @@ pub async fn finish(state: &AppState, ctx: &BranchCtx) -> Option<Ending> {
 }
 
 /// How a branch someone stopped ends: unscored.
-const STOPPED_ENDING: Ending = (BranchStatus::Stopped, None);
+pub(crate) const STOPPED_ENDING: Ending = (BranchStatus::Stopped, None);
 
 /// Stops a live branch: its agents are dropped where they are, calls that wait are refused, and
 /// it ends `stopped` without being scored. A branch an external system drives ends here; arenad's
@@ -334,10 +334,11 @@ async fn record_ending(state: &AppState, branch_id: &str, (status, error): Endin
 
 /// What every agent's input starts with: the task's ticket and the benchmark's instructions
 /// under their title.
-struct Brief {
-    ticket: String,
-    title: String,
-    instructions: String,
+#[derive(Debug, Clone)]
+pub(crate) struct Brief {
+    pub(crate) ticket: String,
+    pub(crate) title: String,
+    pub(crate) instructions: String,
 }
 
 async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) -> Result<Ending> {
@@ -347,6 +348,7 @@ async fn drive(state: &Arc<AppState>, ctx: &Arc<BranchCtx>, from: StartPoint) ->
         match ctx.rules.runner {
             Runner::Chain => run_chain(state, ctx, &brief, from).await,
             Runner::Concurrent => run_concurrent(state, ctx, &brief, from.agent_index).await,
+            Runner::Dispatch => crate::dispatch::run(state, ctx, &brief).await,
             Runner::External => Err(anyhow!("an external system drives this run, not arenad")),
         }
     };
@@ -539,12 +541,12 @@ async fn record_end(
 
 /// Once the agents are done the world stands still: no tick and no clock while it is scored.
 /// Freezing twice is freezing once.
-async fn freeze(ctx: &BranchCtx) {
+pub(crate) async fn freeze(ctx: &BranchCtx) {
     ctx.stop_ticker().await;
     ctx.clock.freeze();
 }
 
-fn driver_for(state: &AppState, kind: AgentKind) -> Result<Arc<dyn Driver>> {
+pub(crate) fn driver_for(state: &AppState, kind: AgentKind) -> Result<Arc<dyn Driver>> {
     let drivers = state
         .drivers
         .get()
@@ -555,7 +557,7 @@ fn driver_for(state: &AppState, kind: AgentKind) -> Result<Arc<dyn Driver>> {
         .ok_or_else(|| anyhow!("no driver for agent kind {kind:?}"))
 }
 
-fn agent_end(result: &AgentResult) -> AgentEndPayload {
+pub(crate) fn agent_end(result: &AgentResult) -> AgentEndPayload {
     AgentEndPayload {
         ok: result.ok,
         error: result.error.clone(),
@@ -595,7 +597,7 @@ fn agent_ending(ctx: &BranchCtx, agent: &str, result: AgentResult) -> Option<End
 }
 
 /// Scores the world and records the Check.
-async fn check(state: &AppState, ctx: &BranchCtx) -> Result<Ending> {
+pub(crate) async fn check(state: &AppState, ctx: &BranchCtx) -> Result<Ending> {
     let since = Instant::now();
     let check = score(state, ctx).await?;
     overhead::add_since(&ctx.branch_id, Cat::Score, since);

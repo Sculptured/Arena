@@ -9,8 +9,11 @@ use crate::{
 };
 
 pub mod claude;
+mod claude_session;
 pub mod codex;
 pub mod open;
+pub mod session;
+mod usage;
 
 /// One agent's turn in a branch.
 pub struct AgentRun {
@@ -46,6 +49,15 @@ pub struct AgentResult {
 
 pub trait Driver: Send + Sync {
     fn run<'a>(&'a self, ctx: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>>;
+
+    /// Starts the agent as a session that stays alive across turns (for the dispatch runner);
+    /// an error when this kind of agent can't keep one.
+    fn session(&self, start: session::SessionStart) -> Result<Box<dyn session::Session>, String> {
+        Err(format!(
+            "a {:?} agent can't keep a session across turns, which a dispatch run needs",
+            start.spec.kind
+        ))
+    }
 }
 
 pub const CLI_TIMEOUT_SECS: u64 = 900;
@@ -172,14 +184,19 @@ pub struct Mcp {
 impl Mcp {
     /// `run`'s endpoint on the arenad at `self_base`, named after the benchmark.
     pub(crate) fn of(self_base: &str, run: &AgentRun) -> Mcp {
+        Mcp::for_agent(self_base, &run.branch, &run.spec.id)
+    }
+
+    /// `agent`'s endpoint on `branch`, on the arenad at `self_base`.
+    pub(crate) fn for_agent(self_base: &str, branch: &BranchCtx, agent: &str) -> Mcp {
         let url = format!(
             "{}/mcp/{}/{}",
             self_base.trim_end_matches('/'),
-            run.branch.branch_id,
-            run.spec.id
+            branch.branch_id,
+            agent
         );
         Mcp {
-            server: server_name(run.branch.world.bench()),
+            server: server_name(branch.world.bench()),
             url,
         }
     }

@@ -53,6 +53,7 @@ fn idle_team() -> Team {
             prompt: "You are solo.".into(),
             provider: None,
             read_only: false,
+            lead: false,
         }],
     }
 }

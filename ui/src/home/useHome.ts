@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { call, runs as fetchRuns, tasks as fetchTasks, views as fetchViews } from '../api';
+import { call, runs as fetchRuns, suggestedTeams, tasks as fetchTasks, views as fetchViews } from '../api';
 import { loadTeam, saveTeam } from '../team';
 import type { BenchmarkDescription, TaskSummary, Team } from '../types';
 import type { TwinView } from '../world/types';
@@ -23,6 +23,13 @@ export function useTeam() {
   useEffect(() => { loadTeam().then(setTeam).catch((e) => setError(String(e.message ?? e))); }, []);
   const replace = useCallback((t: Team) => { saveTeam(t); setTeam(t); }, []);
   return { team, error, replace };
+}
+
+/** The teams the benchmark suggests, the default first (empty until they load, or when they can't). */
+export function useSuggestedTeams(): Team[] {
+  const [teams, setTeams] = useState<Team[]>([]);
+  useEffect(() => { suggestedTeams().then(setTeams).catch(() => { /* the picker is optional */ }); }, []);
+  return teams;
 }
 
 /**

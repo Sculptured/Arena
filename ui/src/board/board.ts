@@ -1,7 +1,7 @@
 // A team drawn as a Sculptured-style board: agents as cards, grouped by role when the team has
 // groups, with "hands work to" arrows. A team from Sculptured keeps its own places; any other is
 // laid out from how it runs (in order: left to right in rows, with an arrow to the next; at once:
-// one row). Each card says, in a line, what the agent does and what it runs on.
+// one row; a lead dispatching: the lead above its team, an arrow to each). Each card says, in a line, what the agent does and what it runs on.
 import type { AgentSpec, Runner, Team } from '../types';
 
 export const CARD_W = 216;
@@ -60,8 +60,24 @@ export function jobLine(a: Pick<AgentSpec, 'name' | 'prompt'>, max = 96): string
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 }
 
+/** The agent that leads a dispatch run: the one marked `lead`, else the first. */
+export const leadOf = (agents: AgentSpec[]): AgentSpec | undefined => agents.find((a) => a.lead) ?? agents[0];
+
+/** The lead centred above its team in one row, an arrow from the lead to each. */
+function dispatchLayout(agents: AgentSpec[]): BoardLayout {
+  const lead = leadOf(agents)!;
+  const team = agents.filter((a) => a !== lead);
+  const width = Math.max(1, team.length) * (CARD_W + GAP_X) - GAP_X;
+  const cards = [
+    { agent: lead, x: (width - CARD_W) / 2, y: 0 },
+    ...team.map((agent, i) => ({ agent, x: i * (CARD_W + GAP_X), y: CARD_H + GAP_Y })),
+  ];
+  return { cards, groups: [], links: team.map((a) => ({ from: lead.id, to: a.id })) };
+}
+
 /** Positions for a team without a board: rows of three left to right in order, or one row when its agents run at once. */
 function plainLayout(agents: AgentSpec[], runner: Runner): BoardLayout {
+  if (runner === 'dispatch' && agents.length > 1) return dispatchLayout(agents);
   const inOrder = runner === 'chain';
   const perRow = inOrder ? ROW : Math.max(1, agents.length);
   const cards = agents.map((agent, i) => ({ agent, x: (i % perRow) * (CARD_W + GAP_X), y: Math.floor(i / perRow) * (CARD_H + GAP_Y) }));

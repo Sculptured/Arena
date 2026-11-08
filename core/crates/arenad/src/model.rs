@@ -32,6 +32,9 @@ pub struct AgentSpec {
     /// the last agent writes), which [`legacy_read_only`] applies.
     #[serde(default)]
     pub read_only: bool,
+    /// True for the agent that leads a `dispatch` run (absent: the team's first agent leads).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lead: bool,
 }
 
 /// The agents of a run. How they run (in order, at once) is the run's runner, not the team's.
@@ -79,9 +82,20 @@ pub enum Runner {
     Chain,
     /// arenad runs every agent at once.
     Concurrent,
+    /// arenad starts the lead with the ticket; the lead delegates work to the other agents, who
+    /// wake when work or a message arrives, report back and stay available, until the lead
+    /// finishes the run (see `crate::dispatch`).
+    Dispatch,
     /// An external system registers the agents and drives them through their endpoints; arenad
     /// records what they do and scores the world when the system says the run is finished.
     External,
+}
+
+impl Team {
+    /// The index of the agent that leads a `dispatch` run: the one marked `lead`, else the first.
+    pub fn lead_index(&self) -> usize {
+        self.agents.iter().position(|a| a.lead).unwrap_or(0)
+    }
 }
 
 /// The rules a branch runs under, recorded in its run's `RunStart` (`runner`, `handoff`).
@@ -196,6 +210,16 @@ pub enum EventKind {
     Pause,
     /// The branch goes on after a `Pause` (`{paused_ms}`).
     Resume,
+    /// A dispatch run's lead gives an agent work (`{to, task}`).
+    Delegation,
+    /// An agent of a dispatch run reports to its lead (`{to, text, turn_end?}`).
+    Report,
+    /// arenad starts an agent's turn in a dispatch run (`{reason, mail?, input}`).
+    Wake,
+    /// An agent of a dispatch run ended its turn and waits (`{ok, error?, text?}`).
+    Idle,
+    /// The lead of a dispatch run ends it (`{summary}`).
+    Finish,
 }
 
 impl EventKind {
@@ -213,6 +237,11 @@ impl EventKind {
             EventKind::WorldView => "world_view",
             EventKind::Pause => "pause",
             EventKind::Resume => "resume",
+            EventKind::Delegation => "delegation",
+            EventKind::Report => "report",
+            EventKind::Wake => "wake",
+            EventKind::Idle => "idle",
+            EventKind::Finish => "finish",
         }
     }
 
@@ -230,6 +259,11 @@ impl EventKind {
             "world_view" => EventKind::WorldView,
             "pause" => EventKind::Pause,
             "resume" => EventKind::Resume,
+            "delegation" => EventKind::Delegation,
+            "report" => EventKind::Report,
+            "wake" => EventKind::Wake,
+            "idle" => EventKind::Idle,
+            "finish" => EventKind::Finish,
             _ => return None,
         })
     }
@@ -340,6 +374,29 @@ pub struct HandoffPayload {
 pub struct MessagePayload {
     pub to: String,
     pub text: String,
+}
+
+/// Payload of `EventKind::Delegation`: the lead gives agent `to` its `task`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DelegationPayload {
+    pub to: String,
+    pub task: String,
+}
+
+/// Payload of `EventKind::Report`: an agent's report to the lead (`to`). `turn_end` is set when
+/// the agent ended a turn without reporting and arenad passed on what it said last.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportPayload {
+    pub to: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_end: bool,
+}
+
+/// Payload of `EventKind::Finish`: the lead's summary of the run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinishPayload {
+    pub summary: String,
 }
 
 /// `to` of a message for every agent.
