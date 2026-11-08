@@ -1,0 +1,19 @@
+kind = "integration"
+name = "ot-network"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "ot_network_part"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", required = ["zones", "conduits", "gateway", "playbook"], properties = { site = { type = "string" }, gateway = { type = "object" }, zones = { type = "array" }, conduits = { type = "array" }, access_list = { type = "array" }, sessions = { type = "array" }, playbook = { type = "object" }, scenarios = { type = "object" } } }
+
+[[example]]
+tool = "ot_network_status"
+args = {}
+
+[[example]]
+tool = "remote_sessions"
+args = {}
+
+[[example]]
+tool = "report_security_incident"
+args = { summary = "Unknown session on GW-1", session = "RS-1180", zone = "PRESS-LINES" }
