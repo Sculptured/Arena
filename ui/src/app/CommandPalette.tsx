@@ -61,7 +61,7 @@ function Footer({ nested }: { nested: boolean }) {
   );
 }
 
-/** The mode (opened for one thing, such as the Advanced menu's "Compare two runs…", it starts there) and what it lists. */
+/** The mode (opened for one thing, such as the ⋯ menu's "Compare two runs…", it starts there) and what it lists. */
 function useItems(open: boolean, start?: Mode) {
   const [mode, setMode] = useState<Mode>({ kind: 'root' });
   const lists = useLists(open);

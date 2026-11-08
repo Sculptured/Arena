@@ -85,7 +85,7 @@ export function hereItems(here: Here): Item[] {
   }]);
   return [
     ...item('world', 'World view (digital twin)', ['twin', 'world', 'plant']),
-    ...item('runs', 'All details: event log, trace, deployment estimate', ['details', 'log', 'trace', 'estimate', 'branches']),
+    ...item('runs', 'All details', ['details', 'log', 'trace', 'estimate', 'branches']),
     ...item('control', 'Process view', ['process', 'flows', 'equipment']),
   ];
 }

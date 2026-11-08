@@ -3,7 +3,7 @@ import { DropdownMenuItem, DropdownMenuLabel } from '../components/ui/dropdown-m
 import { modelName } from './present';
 import { setReviewOn, useReviewOn, useServerReview } from './setting';
 
-/** Advanced → AI review: on or off in this browser; says why when arenad has it off. */
+/** ⋯ → AI review: on or off in this browser; says why when arenad has it off. */
 export default function ReviewToggle() {
   const on = useReviewOn();
   const server = useServerReview();
