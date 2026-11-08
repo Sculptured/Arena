@@ -23,7 +23,7 @@ export function StepChip({ seq, onStep, label }: { seq: number | string; onStep?
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="text-2xs font-semibold tracking-wide text-muted uppercase">{title}</h3>
+      <h3 className="text-xs font-semibold text-muted">{title}</h3>
       {children}
     </section>
   );
@@ -70,7 +70,7 @@ function Tip({ s, d, onTry }: { s: Suggestion; d: BranchDetail; onTry?: (seq: nu
 
 export function RunReviewBody({ r, d, onStep, onTry }: { r: RunReview; d: BranchDetail; onStep: (seq: number) => void; onTry?: (seq: number, prefill: Record<string, Change>) => void }) {
   return (
-    <div className="flex flex-col gap-4 px-3 py-3">
+    <div className="flex flex-col gap-4 px-4 pb-3">
       <p className="text-base leading-6 font-medium">{r.verdict}</p>
       <div className="grid gap-5 lg:grid-cols-2">
         {r.went_wrong.length > 0 && <Section title="Where it went wrong"><ul className="flex flex-col gap-3">{r.went_wrong.map((w, i) => <Wrong key={i} w={w} onStep={onStep} />)}</ul></Section>}
@@ -89,7 +89,7 @@ export function RunReviewBody({ r, d, onStep, onTry }: { r: RunReview; d: Branch
 function Footer({ s }: { s: StoredReview }) {
   const dropped = s.issues.filter((i) => i.startsWith('dropped citation')).length;
   return (
-    <p className="border-t border-line px-3 py-1.5 text-2xs text-faint">
+    <p className="px-4 pb-3 text-2xs text-faint">
       {smallPrint(s)}{s.review && 'confidence' in s.review ? ` · confidence ${s.review.confidence}` : ''}
       {dropped > 0 && ` · ${dropped} citation${dropped === 1 ? '' : 's'} to steps not in the run left out`}
     </p>
@@ -99,10 +99,9 @@ function Footer({ s }: { s: StoredReview }) {
 /** Before any review: what it is, and the button. */
 function Offer({ onStart }: { onStart: () => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-      <span className="text-sm text-muted">A model can read this run's record and say where it went wrong and what to change.</span>
-      <Button size="sm" variant="primary" onClick={onStart}><Sparkles />Review this run</Button>
-    </div>
+    <Button size="sm" variant="ghost" className="text-muted" onClick={onStart} title="A model reads this run's record and says where it went wrong and what to change">
+      <Sparkles />Review this run
+    </Button>
   );
 }
 
@@ -122,7 +121,7 @@ export default function ReviewCard({ d, auto, onStep, onTry }: {
   const h = useReview<RunReview>(ended ? { kind: 'run', branch: d.id } : null, enabled && ended, auto);
   if (!enabled || !ended || !h.loaded) return null;
   return (
-    <ReviewFrame title="Review" label="AI review" h={h} what="the run's record" retryHint="Nothing else changed. Try again, or turn AI review off under Advanced."
+    <ReviewFrame label="AI review" h={h} what="the run's record" retryHint="Nothing else changed. Try again, or turn AI review off under ⋯."
       empty={<Offer onStart={() => h.start()} />} headline={(r) => r.verdict} done={(r) => <RunReviewBody r={r} d={d} onStep={onStep} onTry={onTry} />} footer={(s) => <Footer s={s} />} />
   );
 }

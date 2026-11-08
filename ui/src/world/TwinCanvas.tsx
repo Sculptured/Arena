@@ -8,13 +8,10 @@ import type { TwinArea, TwinFlow, TwinView } from './types';
 import { useWidth } from './useWorld';
 
 function ZoneHead({ area, className }: { area: TwinArea; className?: string }) {
-  const bad = area.items.filter((i) => i.abnormal).length;
   return (
-    <div className={cn('flex h-[30px] items-center gap-1.5 px-2', className)}>
+    <div className={cn('flex h-[30px] items-center gap-1.5 px-2', className)} title={`${area.label}: ${area.items.length}`}>
       <ZoneGlyph kind={area.kind} />
       <span className="truncate text-2xs font-semibold text-muted">{area.label}</span>
-      <span className="font-mono text-2xs text-faint">{area.items.length}</span>
-      {bad > 0 && <span className="ml-auto font-mono text-2xs font-semibold text-alarm">⚠ {bad}</span>}
     </div>
   );
 }
@@ -23,7 +20,6 @@ function Zone({ z, height }: { z: ZoneBox; height: number }) {
   return (
     <div className={cn('absolute rounded-md border', z.rail ? 'border-dashed border-line-strong bg-surface' : 'border-line bg-sunken')} style={{ left: z.x, top: z.y, width: z.w, height }}>
       <ZoneHead area={z.area} />
-      {z.area.items.length === 0 && <p className="px-2 pt-1 text-2xs text-faint">{z.rail ? 'No changes proposed yet.' : 'Nothing here.'}</p>}
     </div>
   );
 }
@@ -43,9 +39,9 @@ function Arrows({ l, fresh }: { l: TwinLayout; fresh: Set<string> }) {
         <g key={a.flow.id}>
         <path d={a.d} fill="none" stroke={color(a.flow)} strokeWidth={a.flow.abnormal || fresh.has(a.flow.id) ? 2.25 : 1.5}
           strokeDasharray={a.flow.abnormal ? '6 3' : undefined} markerEnd={`url(#twin-head-${a.flow.abnormal ? 'alarm' : fresh.has(a.flow.id) ? 'accent' : 'flow'})`}>
-          <title>{`${a.flow.label}: ${a.flow.status}`}</title>
+          <title>{`${a.flow.label}: ${a.flow.status} (${a.flow.id})`}</title>
         </path>
-        {a.label && <text x={a.label.x} y={a.label.y} className={cn('text-[10px]', a.flow.abnormal ? 'fill-alarm font-semibold' : fresh.has(a.flow.id) ? 'fill-accent font-semibold' : 'fill-muted')}>{a.flow.abnormal ? `⚠ ${a.flow.id} · ${a.flow.status}` : `${a.flow.label} · ${a.flow.id}`}</text>}
+        {a.label && <text x={a.label.x} y={a.label.y} className={cn('text-[10px]', a.flow.abnormal ? 'fill-alarm font-semibold' : fresh.has(a.flow.id) ? 'fill-accent font-semibold' : 'fill-muted')}>{a.flow.abnormal ? `⚠ ${a.flow.label} · ${a.flow.status}` : a.flow.label}</text>}
         </g>
       ))}
     </svg>
@@ -98,7 +94,6 @@ function Stacked({ view, changes }: { view: TwinView; changes: ViewChanges }) {
           <ZoneHead area={a} />
           <div className="grid grid-cols-2 gap-1.5 px-2 pb-2">
             {a.items.map((it) => <TwinTile key={it.id} item={it} change={changed.get(it.id)} />)}
-            {!a.items.length && <p className="col-span-2 text-2xs text-faint">Nothing here yet.</p>}
           </div>
           {a.kind === 'customers' && <FlowList view={view} fresh={fresh} />}
         </section>

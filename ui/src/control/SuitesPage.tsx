@@ -5,8 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ago, formatTime } from '../components';
 import { Button } from '../components/ui/button';
 import { DataTable } from '../components/ui/data-table';
-import { FilterChips } from '../components/ui/filter-chips';
-import { Checkbox, Input } from '../components/ui/input';
+import { Checkbox } from '../components/ui/input';
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel } from '../components/ui/panel';
 import { EmptyState, ErrorState } from '../components/ui/state';
@@ -14,20 +13,10 @@ import { StatusMark } from '../components/ui/status';
 import NewSuiteDialog, { RUNNERS } from '../suites/NewSuiteDialog';
 import { suites as fetchSuites } from './api';
 import { suiteMark } from './suite';
-import { type ListFilter, SUITE_FILTERS, progress, suiteCounts, suiteMatches, togglePick } from './suiteList';
+import { togglePick } from './suiteList';
 import type { ListedSuite } from './types';
 
-function Meter({ fraction, label }: { fraction: number; label: string }) {
-  return (
-    <span className="flex items-center gap-2">
-      <span className="font-mono text-xs">{label}</span>
-      <span aria-hidden="true" className="relative hidden h-1.5 w-16 overflow-hidden rounded-full bg-sunken ring-1 ring-line sm:block">
-        <span className="absolute inset-y-0 left-0 bg-line-strong" style={{ width: `${fraction * 100}%` }} />
-      </span>
-    </span>
-  );
-}
-
+/** Pick (to compare two), status, name (its team, scenarios, repeats and runner the tooltip), passed and when. */
 function columns(picked: string[], pick: (id: string) => void): ColumnDef<ListedSuite, unknown>[] {
   return [
     {
@@ -35,13 +24,15 @@ function columns(picked: string[], pick: (id: string) => void): ColumnDef<Listed
       cell: ({ row }) => <Checkbox checked={picked.includes(row.original.id)} onClick={(e) => e.stopPropagation()} onChange={() => pick(row.original.id)} aria-label={`Pick ${row.original.name} to compare`} />,
     },
     { id: 'status', header: 'Status', accessorFn: (s) => s.status, cell: ({ row }) => <StatusMark mark={suiteMark(row.original.status)} />, meta: { className: 'w-28' } },
-    { id: 'name', header: 'Suite', accessorFn: (s) => s.name, cell: ({ row }) => <span className="font-medium">{row.original.name}</span> },
-    { id: 'team', header: 'Team', accessorFn: (s) => s.team.name, cell: ({ getValue }) => <span className="text-muted">{String(getValue())}</span>, meta: { className: 'hidden lg:table-cell' } },
-    { id: 'size', header: 'Scenarios × repeats', enableSorting: false, cell: ({ row }) => <span className="font-mono text-xs">{row.original.tasks.length} × {row.original.repeats}</span>, meta: { className: 'hidden md:table-cell' } },
-    { id: 'runner', header: 'Runs made by', enableSorting: false, cell: ({ row }) => <span className="text-xs text-muted">{RUNNERS[row.original.runner]}</span>, meta: { className: 'hidden xl:table-cell' } },
-    { id: 'ended', header: 'Ended', accessorFn: progress, cell: ({ row }) => <Meter fraction={progress(row.original)} label={`${row.original.ended}/${row.original.runs}`} /> },
-    { id: 'passed', header: 'Passed', accessorFn: (s) => s.passed, cell: ({ row }) => <span className="font-mono text-xs">{row.original.passed}</span>, meta: { className: 'text-right' } },
-    { id: 'created', header: 'Created', accessorFn: (s) => s.created_at, cell: ({ row }) => <span className="text-xs text-muted" title={formatTime(row.original.created_at)}>{ago(row.original.created_at)}</span>, meta: { className: 'hidden sm:table-cell text-right' } },
+    {
+      id: 'name', header: 'Suite', accessorFn: (s) => s.name, meta: { className: 'w-full max-w-0' },
+      cell: ({ row: { original: s } }) => <span className="block truncate font-medium" title={`${s.team.name} · ${s.tasks.length} × ${s.repeats} · ${RUNNERS[s.runner]}`}>{s.name}</span>,
+    },
+    {
+      id: 'passed', header: 'Passed', accessorFn: (s) => s.passed, meta: { className: 'w-24 text-right whitespace-nowrap' },
+      cell: ({ row: { original: s } }) => <span className="text-xs" title={`${s.ended} of ${s.runs} runs ended`}>{s.passed} of {s.runs}</span>,
+    },
+    { id: 'created', header: 'When', accessorFn: (s) => s.created_at, cell: ({ row }) => <span className="text-xs text-muted" title={formatTime(row.original.created_at)}>{ago(row.original.created_at)}</span>, meta: { className: 'w-24 text-right' } },
   ];
 }
 
@@ -57,7 +48,6 @@ export default function SuitesPage() {
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
   const { list, error, load } = useSuites();
-  const [filter, setFilter] = useState<ListFilter>({ status: 'all', text: '' });
   const [picked, setPicked] = useState<string[]>([]);
   const cols = useMemo(() => columns(picked, (id) => setPicked((p) => togglePick(p, id))), [picked]);
   const newSuite = sp.get('new') === 'suite';
@@ -69,20 +59,15 @@ export default function SuitesPage() {
   );
   return (
     <>
-      <PageHeader title="Suites" meta="Each suite runs one team over every scenario, repeated, on the same seeded world."
-        actions={<>{compare}<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button></>} />
-      <PageBody>
+      <PageHeader title={<span title="Each suite runs one team over every scenario, repeated, on the same seeded world.">Suites</span>} className="mx-auto w-full max-w-5xl"
+        actions={<>{picked.length > 0 && compare}<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button></>} />
+      <PageBody className="mx-auto w-full max-w-5xl">
         {error && list && <ErrorState error={error} onRetry={load} />}
         <Panel>
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-            <FilterChips label="Status" options={SUITE_FILTERS} value={filter.status} counts={suiteCounts(list ?? [])} onChange={(status) => setFilter({ ...filter, status })} />
-            <Input className="ml-auto w-full sm:w-64" placeholder="Filter by name, team or scenario" value={filter.text} onChange={(e) => setFilter({ ...filter, text: e.target.value })} aria-label="Filter suites" />
-          </div>
           <DataTable label="Suites" columns={cols} data={list} getRowId={(s) => s.id} loadingLabel="Loading suites…" error={error} onRetry={load}
-            filter={filter} filterFn={(s, f) => suiteMatches(s, f as ListFilter)} onOpen={(s) => nav(`/suites/${s.id}`)} noMatch="No suite matches the filter."
+            onOpen={(s) => nav(`/suites/${s.id}`)}
             sorting={[{ id: 'created', desc: true }]}
-            empty={<EmptyState title="No suites yet" hint="A suite runs your team over each scenario, several times, so you can compare teams fairly."
-              action={<Button variant="primary" onClick={() => setNewSuite(true)}><Play />New suite</Button>} />} />
+            empty={<EmptyState title="No suites yet" />} />
         </Panel>
       </PageBody>
       <NewSuiteDialog open={newSuite} onOpenChange={setNewSuite} />

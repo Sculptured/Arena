@@ -13,9 +13,10 @@ const team: Team = { id: 't', name: 't', agents: [
 ] };
 
 describe('action timeline', () => {
-  it('each lane shows its agent, model and provider', () => {
+  it('each lane shows its agent, with its model and provider as the tooltip', () => {
     const html = renderToStaticMarkup(<ActionTimeline lanes={[{ id: 'resolver', name: 'resolver', marks: [] }]} team={team} span={null} selected={null} onSelect={() => {}} models onModels={() => {}} />);
-    expect(text(html)).toContain('Resolver ollama (local) · llama3.3');
+    expect(text(html)).toContain('Resolver');
+    expect(text(html)).not.toContain('llama3.3');
     expect(html).toContain('title="resolver · ollama (local) · llama3.3"');
   });
   it('labels marks by system kind and read/write, and says when an action was refused', () => {
@@ -24,7 +25,7 @@ describe('action timeline', () => {
     expect(html).toContain('aria-label="step 6 · LIMS read');
     expect(html).toContain('aria-label="step 9 · ERP write · hold_batch: hold_batch refused: no approval for CVX-2611"');
     expect(html).toContain('aria-pressed="true"');
-    expect(html).toContain('aria-label="What the marks mean"');
+    expect(html).toContain('aria-label="Timeline tools"');
   });
   it('a model call names the provider that answered', () => {
     expect(modelCallLine({ provider: 'anthropic', request: { model: 'claude-x' } })).toBe('Anthropic · claude-x');

@@ -6,19 +6,26 @@ import { scenarioOptions } from '../scenario/fixtures';
 import { initialSelection } from '../scenario/scenario';
 import { FORK_SEQ, comparison, v1Detail, v2Detail } from '../world/fixtures';
 import { TwinTile } from '../world/TwinTile';
-import OutcomePanel from './OutcomePanel';
+import OutcomePanel, { DivergenceStrip } from './OutcomePanel';
+import { divergenceStrip } from './divergence';
 
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 describe('outcome panel', () => {
-  it('shows each outcome for A and B, the better side, and the divergence strip', () => {
-    const html = text(renderToStaticMarkup(
-      <MemoryRouter><OutcomePanel a={{ detail: v1Detail, side: comparison.a }} b={{ detail: v2Detail, side: comparison.b }} first={FORK_SEQ} /></MemoryRouter>,
-    ));
-    expect(html).toContain('Valid plan every goal check passes ✕ not valid 8/9 ✓ valid 9/9 B better');
-    expect(html).toContain('Escalations approval requests 3 3 same');
-    expect(html).toContain(`first divergence · step ${FORK_SEQ}`);
+  it('shows each outcome for A and B and the better side, what each row means as its tooltip', () => {
+    const raw = renderToStaticMarkup(
+      <MemoryRouter><OutcomePanel a={{ detail: v1Detail, side: comparison.a }} b={{ detail: v2Detail, side: comparison.b }} /></MemoryRouter>,
+    );
+    const html = text(raw);
+    expect(html).toContain('Valid plan ✕ not valid 8/9 ✓ valid 9/9 B better');
+    expect(html).toContain('Escalations 3 3 same');
+    expect(raw).toContain('title="every goal check passes"');
     expect(html).toContain('Demo: Coordinated team v2');
+    expect(html).not.toContain('first divergence');
+  });
+  it('draws both branches on one step axis from where they first diverge', () => {
+    const html = text(renderToStaticMarkup(<DivergenceStrip s={divergenceStrip(v1Detail, v2Detail, FORK_SEQ)} />));
+    expect(html).toContain(`first divergence · step ${FORK_SEQ}`);
   });
 });
 

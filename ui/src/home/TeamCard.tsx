@@ -5,7 +5,6 @@ import ImportDialog from '../board/ImportDialog';
 import { agentModelLine } from '../providers';
 import TeamBoard from '../board/TeamBoard';
 import { Button } from '../components/ui/button';
-import { Panel, PanelHeader } from '../components/ui/panel';
 import { SidePanel } from '../components/ui/side-panel';
 import { LoadingState } from '../components/ui/state';
 import { Dialog, DialogContent } from '../components/ui/dialog';
@@ -60,28 +59,31 @@ function TeamPicker({ teams, current, onPick }: { teams: Team[]; current: Team |
   );
 }
 
-/** The team as a read-only board, with the suggested teams, Import, Edit and Expand (the board full screen); a card's prompt opens beside it. */
-export default function TeamCard({ team, runner, suggested = [], onImported }: { team: Team | null; runner: Runner; suggested?: Team[]; onImported: (t: Team) => void }) {
+/** The team's buttons, under Options: the suggested teams, Import and Edit. */
+export function TeamActions({ team, suggested = [], onImported }: { team: Team | null; suggested?: Team[]; onImported: (t: Team) => void }) {
   const [importing, setImporting] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   return (
-    <Panel className="flex min-h-0 flex-col">
-      <PanelHeader title="Team" meta={team?.name}>
-        <TeamPicker teams={suggested} current={team} onPick={onImported} />
-        <Button size="sm" onClick={() => setImporting(true)}><FileUp />Import</Button>
-        <Button size="sm" asChild><Link to="/team"><Pencil />Edit</Link></Button>
-      </PanelHeader>
-      {!team ? <LoadingState label="Loading your team…" rows={4} />
-        : <BoardView key={team.id} team={team} runner={runner} onExpand={() => setExpanded(true)} className="h-80 flex-1 rounded-b-lg" />}
-      {team && (
-        <Dialog open={expanded} onOpenChange={setExpanded}>
-          <DialogContent title={team.name} description={`${team.agents.length} agents · scroll to move, Ctrl + scroll or pinch to zoom, drag to pan`}
-            className="top-4 left-4 h-[calc(100vh-32px)] max-h-none w-[calc(100vw-32px)] translate-x-0">
-            <BoardView team={team} runner={runner} className="flex-1" />
-          </DialogContent>
-        </Dialog>
-      )}
+    <div className="flex flex-wrap items-center gap-1.5">
+      <TeamPicker teams={suggested} current={team} onPick={onImported} />
+      <Button size="sm" onClick={() => setImporting(true)}><FileUp />Import</Button>
+      <Button size="sm" asChild><Link to="/team"><Pencil />Edit</Link></Button>
       <ImportDialog open={importing} onOpenChange={setImporting} onImported={onImported} />
-    </Panel>
+    </div>
+  );
+}
+
+/** The team as a read-only board (Expand opens it full screen); a card's prompt opens beside it. */
+export default function TeamCard({ team, runner }: { team: Team | null; runner: Runner }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!team) return <LoadingState label="Loading your team…" rows={4} />;
+  return (
+    <div className="flex min-h-0 flex-col" title={team.name}>
+      <BoardView key={team.id} team={team} runner={runner} onExpand={() => setExpanded(true)} className="h-72 rounded-lg bg-surface" />
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent title={team.name} className="top-4 left-4 h-[calc(100vh-32px)] max-h-none w-[calc(100vw-32px)] translate-x-0">
+          <BoardView team={team} runner={runner} className="flex-1" />
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

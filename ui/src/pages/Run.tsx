@@ -1,6 +1,6 @@
-import { ChevronDown, Factory, GitBranch, GitCompare, Workflow } from 'lucide-react';
+import { ChevronDown, GitBranch, GitCompare } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApproximateMark, StatusChip } from '../components';
 import { Button } from '../components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -24,11 +24,12 @@ import { formatCost, summarize } from '../run/timeline';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
-import { useStepParam, withStep } from '../run/useStepParam';
+import { useStepParam } from '../run/useStepParam';
+import { taskName } from '../home/summary';
+import { type Task, useTasks } from '../home/useHome';
 import { type ForkChoice, forkChoiceOf } from '../run/architecture';
 import { recordedLine } from '../scenario/scenario';
 import { drivenLine } from '../world/page';
-import { Tag } from '../components/ui/status';
 import Waterfall from '../run/Waterfall';
 import { branchTree } from '../runs/tree';
 import { RunPageReview, type TryState } from '../review/RunReview';
@@ -51,7 +52,7 @@ function BranchMenu({ runId, detail, siblings }: { runId: string; detail: Branch
   const nav = useNavigate();
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm"><GitBranch />Branches <span className="font-mono text-faint">{siblings.length || 1}</span><ChevronDown /></Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost"><GitBranch />Branches <span className="font-mono text-faint">{siblings.length || 1}</span><ChevronDown /></Button></DropdownMenuTrigger>
       <DropdownMenuContent className="w-80">
         <DropdownMenuLabel>Branches of this run</DropdownMenuLabel>
         {branchTree(siblings).map(({ branch: b, depth }) => (
@@ -72,7 +73,7 @@ function CompareMenu({ detail, siblings }: { detail: BranchDetail; siblings: Bra
   const why = detail.status === 'running' ? 'Wait for this run to finish.' : others.length === 0 ? 'No other finished branch of this run yet. Press ⌘K to compare with another run.' : '';
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm" disabled={!!why} title={why}><GitCompare />Compare with…</Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" disabled={!!why} title={why}><GitCompare />Compare with…</Button></DropdownMenuTrigger>
       <DropdownMenuContent>
         {others.map((b) => (
           <DropdownMenuItem key={b.id} onSelect={() => nav(`/compare/${detail.id}/${b.id}`)}>
@@ -84,40 +85,50 @@ function CompareMenu({ detail, siblings }: { detail: BranchDetail; siblings: Bra
   );
 }
 
+/** The figures that say how it went: time, cost, the check, safety and any refusal. */
 function Stats({ detail }: { detail: BranchDetail }) {
   const sm = summarize(detail, detail.events);
   const st = runStats(detail.events, detail.start_seq);
   const cost = formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown));
   return (
-    <div className="grid grid-cols-3 gap-x-5 gap-y-2 sm:flex sm:flex-wrap sm:items-end">
+    <div className="grid grid-cols-3 gap-x-8 gap-y-2 pt-1 sm:flex sm:flex-wrap sm:items-end">
       <Stat label={`Seconds${sm.live ? ' so far' : ''}`} value={sm.seconds != null ? sm.seconds.toFixed(1) : '–'} />
-      <Stat label="Tokens" value={(detail.metrics?.tokens ?? sm.tokens).toLocaleString()} />
       <Stat label="Cost" value={cost} title={cost} />
-      <Stat label="Steps" value={st.steps} />
-      <Stat label="Reads · writes" value={`${st.reads} · ${st.writes}`} />
-      <Stat label="Refused / errors" value={st.abnormal ? `⚠ ${st.abnormal}` : '0'} abnormal={st.abnormal > 0} />
       {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={checkMark(st.check)} />} />}
       {st.safety && <Stat label="Safety" value={safetyLine(st.safety)} abnormal={st.safety.violated > 0} />}
-      {sm.scope && <span className="col-span-3 text-xs text-muted sm:ml-auto">{sm.scope}</span>}
+      {st.abnormal > 0 && <Stat label="Refused / errors" value={`⚠ ${st.abnormal}`} abnormal />}
     </div>
   );
 }
 
-function Header({ runId, detail, siblings, step }: { runId: string; detail: BranchDetail; siblings: Branch[]; step: number | null }) {
-  const task = taskOf(detail.events);
+/** The rest, folded: the world, how the agents ran, the disruption, tokens, steps, and the deployment estimate. */
+function More({ detail }: { detail: BranchDetail }) {
+  const sm = summarize(detail, detail.events);
+  const st = runStats(detail.events, detail.start_seq);
   const scenario = recordedLine((detail.events.find((e) => e.kind === 'run_start')?.payload as RunStartPayload | undefined)?.scenario);
-  const world = worldLine(detail.events);
-  const runner = runnerLine(detail.events);
-  const driven = drivenLine(detail.events);
+  const lines = [detail.fork_note, worldLine(detail.events), runnerLine(detail.events), drivenLine(detail.events), scenario && `▼ ${scenario}`, sm.scope].filter(Boolean);
   return (
-    <PageHeader mono title={task ? `task ${task}` : 'Run'}
-      status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} />{driven && <Tag>{driven}</Tag>}<span className="font-mono text-xs text-faint">{detail.id.slice(0, 8)}</span></>}
-      actions={<>
-        <Button size="sm" variant="primary" asChild><Link to={withStep(`/world/${runId}/${detail.id}`, step)}><Factory />World</Link></Button>
-        <Button size="sm" asChild><Link to={withStep(`/control/${runId}/${detail.id}`, step)}><Workflow />Process view</Link></Button>
-        <BranchMenu runId={runId} detail={detail} siblings={siblings} /><CompareMenu detail={detail} siblings={siblings} />
-      </>}
-      meta={<>{detail.fork_note && <span>{detail.fork_note}</span>}{world && <span className="truncate" title={world}>{world}</span>}{runner && <span>{runner}</span>}{scenario && <span className="text-warn">▼ {scenario}</span>}</>}>
+    <details className="group rounded-lg bg-surface">
+      <summary className="cursor-pointer px-4 py-2.5 text-sm text-muted hover:text-fg">More about this run</summary>
+      <div className="flex flex-col gap-3 px-4 pb-4">
+        <ul className="flex flex-col gap-0.5 text-xs text-muted">{lines.map((l) => <li key={l as string}>{l}</li>)}</ul>
+        <div className="flex flex-wrap gap-x-8 gap-y-2">
+          <Stat label="Tokens" value={(detail.metrics?.tokens ?? sm.tokens).toLocaleString()} />
+          <Stat label="Steps" value={st.steps} />
+          <Stat label="Reads · writes" value={`${st.reads} · ${st.writes}`} />
+          <Stat label="Branch" value={detail.id.slice(0, 8)} />
+        </div>
+        {detail.metrics && <><h3 className="text-xs font-semibold text-muted">Deployment estimate</h3><MetricsPanel m={detail.metrics} /></>}
+      </div>
+    </details>
+  );
+}
+
+function Header({ runId, detail, siblings, title }: { runId: string; detail: BranchDetail; siblings: Branch[]; title: string }) {
+  return (
+    <PageHeader title={title}
+      status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} /></>}
+      actions={<><BranchMenu runId={runId} detail={detail} siblings={siblings} /><CompareMenu detail={detail} siblings={siblings} /></>}>
       <Stats detail={detail} />
     </PageHeader>
   );
@@ -159,14 +170,13 @@ function Main({ detail, selected, onSelect, models, setModels }: {
       <Panel>
         <Tabs defaultValue="timeline">
           <div className="flex items-center gap-3 border-b border-line pl-3">
-            <h2 className="text-xs font-semibold text-muted">Actions{detail.status === 'running' ? ' · live' : ''}</h2>
             <TabsList className="border-b-0"><TabsTrigger value="timeline">Timeline</TabsTrigger><TabsTrigger value="log">Event log</TabsTrigger></TabsList>
           </div>
           <TabsContent value="timeline"><ActionTimeline lanes={lanes} team={detail.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} live={live} pauses={pauses} /></TabsContent>
           <TabsContent value="log"><EventLog lanes={lanes} span={span} selected={selected} onSelect={onSelect} models={models} /></TabsContent>
         </Tabs>
       </Panel>
-      <Panel><PanelHeader title="Trace" meta="the selected step's turn" /><Waterfall events={detail.events} selected={selected} onSelect={onSelect} /></Panel>
+      {selected != null && <Panel><PanelHeader title="Trace" /><Waterfall events={detail.events} selected={selected} onSelect={onSelect} /></Panel>}
     </div>
   );
 }
@@ -188,10 +198,18 @@ function useRunView(branchId: string, order: number[]) {
   return { selected, setSelected, forking, setForking, notice, setNotice, prefill, setPrefill, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
 }
 
+/** The task in plain words, or its id when the benchmark no longer lists it. */
+function runTitleOf(detail: BranchDetail, tasks: Task[] | null): string {
+  const id = taskOf(detail.events);
+  const t = tasks?.find((x) => x.id === id);
+  return t ? taskName(t) : id || 'Run';
+}
+
 export default function Run() {
   const { runId = '', branchId = '' } = useParams();
   const { detail, siblings, error, reload } = useBranch(branchId, runId);
   const [models, setModels] = useState(true);
+  const { tasks } = useTasks();
   const order = useMemo(() => (detail ? stepOrder(buildLanes(detail.events, detail.team, detail.start_seq), models) : []), [detail, models]);
   const v = useRunView(branchId, order);
   if (!detail) {
@@ -200,7 +218,7 @@ export default function Run() {
   const event = detail.events.find((e) => e.seq === v.selected) ?? null;
   return (
     <>
-      <Header runId={runId} detail={detail} siblings={siblings} step={v.selected} />
+      <Header runId={runId} detail={detail} siblings={siblings} title={runTitleOf(detail, tasks)} />
       <PageBody>
         {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
         {error && <ErrorState error={error} onRetry={reload} />}
@@ -208,7 +226,7 @@ export default function Run() {
         <RunPageReview d={detail} onStep={v.setSelected} onTry={(seq, p) => { v.setPrefill(p); v.setSelected(seq); v.setForking(true); }} />
         <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
           side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} prefill={v.prefill} />} />
-        {detail.metrics && <Panel><PanelHeader title="Deployment estimate" meta="time in production, arena overhead, tokens and cost per agent" /><MetricsPanel m={detail.metrics} /></Panel>}
+        <More detail={detail} />
       </PageBody>
     </>
   );

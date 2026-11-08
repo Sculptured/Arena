@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { reviewSettings } from './api';
 import type { ReviewSettings } from './types';
 
-/** This browser's choice (Advanced → AI review): on unless turned off. */
+/** This browser's choice (⋯ → AI review): on unless turned off. */
 export const REVIEW_KEY = 'arena.review';
 
 /** The stored choice read as on or off: anything but "off" is on. */

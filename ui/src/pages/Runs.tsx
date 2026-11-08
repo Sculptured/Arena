@@ -11,11 +11,10 @@ import { Button } from '../components/ui/button';
 import { DataTable } from '../components/ui/data-table';
 import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
-import { Input } from '../components/ui/input';
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel } from '../components/ui/panel';
 import { EmptyState, ErrorState } from '../components/ui/state';
-import { type BranchRow, branchRows, rowMatches, runIsRunning, runTitle } from '../runs/runsTable';
+import { type BranchRow, branchRows, runIsRunning, runTitle } from '../runs/runsTable';
 import type { RunSummary } from '../types';
 
 /** The runs, polled every 3 s while any of them runs. */
@@ -41,7 +40,7 @@ function RowMenu({ row, onDelete }: { row: BranchRow; onDelete: (r: RunSummary) 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Run actions" onClick={(e) => e.stopPropagation()}><MoreHorizontal /></Button>
+        <Button variant="ghost" size="icon" aria-label="Run actions" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100" onClick={(e) => e.stopPropagation()}><MoreHorizontal /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
         <DropdownMenuItem onSelect={() => nav(openOf(row))}>Open</DropdownMenuItem>
@@ -58,12 +57,13 @@ function RowMenu({ row, onDelete }: { row: BranchRow; onDelete: (r: RunSummary) 
 /** A row opens on the Run screen: its result and timeline, with everything else one click away. */
 const openOf = (r: BranchRow) => `/?run=${encodeURIComponent(r.run.id)}&branch=${encodeURIComponent(r.branch.id)}`;
 
+/** The run's name (its team is the tooltip); a rerun is "↳ Rerun", its note the tooltip. */
 function NameCell({ row, name }: { row: BranchRow; name: string }) {
-  if (row.depth === 0) return <span className="block truncate font-medium" title={name}>{name}</span>;
+  const team = row.branch.team.name;
+  if (row.depth === 0) return <span className="block truncate font-medium" title={`${name} · ${team}`}>{name}</span>;
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-muted" style={{ paddingLeft: (row.depth - 1) * 14 }}>
+    <span className="flex min-w-0 items-center gap-1.5 text-muted" style={{ paddingLeft: (row.depth - 1) * 14 }} title={[row.branch.fork_note, team].filter(Boolean).join(' · ')}>
       <span aria-hidden="true" className="font-mono">↳</span><span>Rerun</span>
-      {row.branch.fork_note && <span className="max-w-[40ch] truncate" title={row.branch.fork_note}>{row.branch.fork_note}</span>}
       <ApproximateMark of={row.branch} />
     </span>
   );
@@ -72,7 +72,6 @@ function NameCell({ row, name }: { row: BranchRow; name: string }) {
 function columns(nameOf: (r: BranchRow) => string, onDelete: (r: RunSummary) => void): ColumnDef<BranchRow, unknown>[] {
   return [
     { id: 'name', header: 'Name', enableSorting: false, cell: ({ row }) => <NameCell row={row.original} name={nameOf(row.original)} />, meta: { className: 'w-full max-w-0' } },
-    { id: 'team', header: 'Team', accessorFn: (r) => r.branch.team.name, cell: ({ getValue }) => <span className="block max-w-56 truncate text-muted">{String(getValue())}</span>, meta: { className: 'hidden md:table-cell' } },
     { id: 'result', header: 'Result', accessorFn: (r) => r.branch.status, cell: ({ row }) => <StatusChip status={row.original.branch.status} />, meta: { className: 'w-32' } },
     {
       id: 'when', header: 'When', accessorFn: (r) => r.branch.created_at, meta: { className: 'w-28 text-right' },
@@ -111,7 +110,6 @@ export default function Runs() {
   const nav = useNavigate();
   const { runs, error, refresh } = useRuns();
   const { tasks } = useTasks();
-  const [text, setText] = useState('');
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const rows = useMemo(() => (runs ? branchRows(runs) : null), [runs]);
   const nameOf = useCallback((r: BranchRow) => runTitle(r.run, (id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : ''; }), [tasks]);
@@ -119,17 +117,13 @@ export default function Runs() {
   const newRun = <Button variant="primary" asChild><Link to="/"><Play />New run</Link></Button>;
   return (
     <>
-      <PageHeader title="History" meta={runs ? `${runs.length} run${runs.length === 1 ? '' : 's'}` : null} actions={newRun} />
-      <PageBody>
+      <PageHeader title="History" className="mx-auto w-full max-w-5xl" />
+      <PageBody className="mx-auto w-full max-w-5xl">
         {error && runs && <ErrorState error={error} onRetry={refresh} />}
         <Panel>
-          <div className="flex border-b border-line px-3 py-2">
-            <Input className="w-full sm:w-72" placeholder="Filter by name, team or result" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter runs" />
-          </div>
           <DataTable label="Runs" columns={cols} data={rows} getRowId={(r) => r.branch.id} loadingLabel="Loading runs…"
-            error={error} onRetry={refresh} filter={text} filterFn={(r, f) => rowMatches(r, f as string, nameOf(r))}
-            onOpen={(r) => nav(openOf(r))} noMatch="No run matches the filter."
-            empty={<EmptyState title="No runs yet" hint="Pick a task on the Run screen and press Run. Every step is recorded, and you can rewind to any of them." action={newRun} />} />
+            error={error} onRetry={refresh} onOpen={(r) => nav(openOf(r))}
+            empty={<EmptyState title="No runs yet" action={newRun} />} />
         </Panel>
       </PageBody>
       <DeleteRunDialog run={deleting} onClose={() => setDeleting(null)} onDone={refresh} />

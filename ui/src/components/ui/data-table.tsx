@@ -67,7 +67,7 @@ function HeaderRow<T>({ table }: { table: TableT<T> }) {
 function BodyRow<T>({ row, active, onOpen, className }: { row: Row<T>; active: boolean; onOpen?: (r: T) => void; className?: string }) {
   return (
     <tr data-active={active || undefined} aria-selected={active}
-      className={cn('cursor-default hover:bg-hover data-[active]:bg-accent-soft last:[&>td]:border-b-0', onOpen && 'cursor-pointer', className)}
+      className={cn('group cursor-default hover:bg-hover data-[active]:bg-accent-soft last:[&>td]:border-b-0', onOpen && 'cursor-pointer', className)}
       onClick={() => onOpen?.(row.original)}>
       {row.getVisibleCells().map((c) => (
         <Td key={c.id} className={c.column.columnDef.meta?.className}>{flexRender(c.column.columnDef.cell, c.getContext())}</Td>

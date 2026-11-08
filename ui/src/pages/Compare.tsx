@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { branch as fetchBranch, compare, views as fetchViews } from '../api';
-import OutcomePanel from '../compare/OutcomePanel';
+import OutcomePanel, { DivergenceStrip } from '../compare/OutcomePanel';
+import { divergenceStrip } from '../compare/divergence';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Button } from '../components/ui/button';
 import WhatMatters from '../review/WhatMatters';
 import { stepHref } from '../review/present';
 import { normalizeViews } from '../world/twin';
@@ -139,26 +142,43 @@ function Divergence({ got, a, b }: { got: Loaded; a: string; b: string }) {
   );
 }
 
+/** Everything under the outcomes: the divergence strip, each side's figures, the first differing step and the differing rows. */
+function Details({ got, a, b }: { got: Loaded; a: string; b: string }) {
+  return (
+    <>
+      <Panel><DivergenceStrip s={divergenceStrip(got.a, got.b, got.data.first_divergent_seq)} /></Panel>
+      <div className="grid gap-3 lg:grid-cols-2"><Side label="A" id={a} s={got.data.a} team={got.a.team} /><Side label="B" id={b} s={got.data.b} team={got.b.team} /></div>
+      {(isApproximate(got.data.a) || isApproximate(got.data.b)) && <Notice>{APPROXIMATE_NOTE}</Notice>}
+      <Divergence got={got} a={a} b={b} />
+      <Rows data={got.data} />
+    </>
+  );
+}
+
+/** What matters and the outcomes; the rest behind Details. */
+function Comparison({ got, a, b }: { got: Loaded; a: string; b: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WhatMatters target={{ kind: 'compare', a, b }} what="both runs and their comparison"
+        hrefOf={(side, seq) => (typeof seq === 'number' ? stepHref(side === 'a' ? got.a.run_id : got.b.run_id, side === 'a' ? a : b, seq) : null)} />
+      <OutcomePanel a={{ detail: got.a, side: got.data.a, view: got.va }} b={{ detail: got.b, side: got.data.b, view: got.vb }} />
+      <Button variant="ghost" className="self-center text-muted" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <><ChevronUp />Hide details</> : <><ChevronDown />Details</>}</Button>
+      {open && <Details got={got} a={a} b={b} />}
+    </>
+  );
+}
+
 export default function Compare() {
   const { a = '', b = '' } = useParams();
   const { got, error, retry } = useCompare(a, b);
   return (
     <>
-      <PageHeader title="Compare" meta={<span>branch <span className="font-mono">{a.slice(0, 8)}</span> (A) against <span className="font-mono">{b.slice(0, 8)}</span> (B)</span>} />
-      <PageBody>
+      <PageHeader title={<span title={`Branch ${a.slice(0, 8)} (A) against ${b.slice(0, 8)} (B)`}>Compare</span>} className="mx-auto w-full max-w-6xl" />
+      <PageBody className="mx-auto w-full max-w-6xl">
         {error && <ErrorState error={error} onRetry={retry} hint="Both branches must have finished and kept their final saves." />}
-        {!got && !error && <Panel><LoadingState label="Comparing the two final worlds… The first comparison of a pair can take up to a minute while the saves are read." rows={4} /></Panel>}
-        {got && (
-          <>
-            <WhatMatters target={{ kind: 'compare', a, b }} what="both runs and their comparison"
-              hrefOf={(side, seq) => (typeof seq === 'number' ? stepHref(side === 'a' ? got.a.run_id : got.b.run_id, side === 'a' ? a : b, seq) : null)} />
-            <OutcomePanel a={{ detail: got.a, side: got.data.a, view: got.va }} b={{ detail: got.b, side: got.data.b, view: got.vb }} first={got.data.first_divergent_seq} />
-            <div className="grid gap-3 lg:grid-cols-2"><Side label="A" id={a} s={got.data.a} team={got.a.team} /><Side label="B" id={b} s={got.data.b} team={got.b.team} /></div>
-            {(isApproximate(got.data.a) || isApproximate(got.data.b)) && <Notice>{APPROXIMATE_NOTE}</Notice>}
-            <Divergence got={got} a={a} b={b} />
-            <Rows data={got.data} />
-          </>
-        )}
+        {!got && !error && <LoadingState label="Comparing the two final worlds…" rows={4} />}
+        {got && <Comparison got={got} a={a} b={b} />}
       </PageBody>
     </>
   );

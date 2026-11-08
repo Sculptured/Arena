@@ -1,5 +1,5 @@
-import { ListTree, Pause, Play, Plus, RotateCcw, Square, Undo2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ListTree, Pause, Play, Square, Undo2 } from 'lucide-react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { setPaused, stopBranch } from '../api';
 import { Button } from '../components/ui/button';
@@ -30,43 +30,50 @@ import { LiveRunReview } from '../review/RunReview';
 
 type Main = 'timeline' | 'twin';
 
-/** Pause or Resume, Stop, the time so far and the status, and the Timeline | Digital Twin switch. */
-function Toolbar({ flow, seconds, title, main, setMain, onPause, onStop, busy }: {
+/** Timeline or Digital Twin: two quiet words, the one on screen in the foreground. */
+function MainSwitch({ main, setMain }: { main: Main; setMain: (m: Main) => void }) {
+  const cls = (on: boolean) => cn('px-1 py-1 text-sm', on ? 'font-medium text-fg' : 'text-muted hover:text-fg');
+  return (
+    <div className="ml-auto flex gap-3" role="group" aria-label="What to show">
+      <button type="button" className={cls(main === 'timeline')} aria-pressed={main === 'timeline'} onClick={() => setMain('timeline')}>Timeline</button>
+      <button type="button" className={cls(main === 'twin')} aria-pressed={main === 'twin'} onClick={() => setMain('twin')}>Digital Twin</button>
+    </div>
+  );
+}
+
+/**
+ * Pause or Resume, Stop, the status and the time so far (the task and team are its tooltip), and
+ * the Timeline | Digital Twin switch; once the run has ended, its result takes the status's place.
+ */
+function Toolbar({ flow, seconds, title, main, setMain, onPause, onStop, busy, result }: {
   flow: Flow; seconds: number | null; title: string; main: Main; setMain: (m: Main) => void;
-  onPause: (paused: boolean) => void; onStop: () => void; busy: boolean;
+  onPause: (paused: boolean) => void; onStop: () => void; busy: boolean; result?: ReactNode;
 }) {
   const live = isLive(flow);
-  const switchClass = (on: boolean) => cn('rounded-sm px-3 py-1 text-sm font-medium', on ? 'bg-raised text-fg shadow-panel' : 'text-muted hover:text-fg');
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       {live && (flow === 'paused'
         ? <Button variant="primary" onClick={() => onPause(false)} disabled={busy}><Play />Resume</Button>
         : <Button onClick={() => onPause(true)} disabled={busy || flow === 'starting'}><Pause />Pause</Button>)}
-      {live && <Button onClick={onStop} disabled={busy || flow === 'starting'}><Square />Stop</Button>}
-      <StatusMark mark={flowMark(flow)} className="text-sm" />
-      {seconds != null && <span className="font-mono text-sm text-muted" title="Time since the run started">{clockText(seconds)}</span>}
-      <span className="min-w-0 truncate text-sm text-muted">{title}</span>
-      <div className="ml-auto flex rounded-md border border-line bg-sunken p-0.5" role="group" aria-label="What to show">
-        <button type="button" className={switchClass(main === 'timeline')} aria-pressed={main === 'timeline'} onClick={() => setMain('timeline')}>Timeline</button>
-        <button type="button" className={switchClass(main === 'twin')} aria-pressed={main === 'twin'} onClick={() => setMain('twin')}>Digital Twin</button>
-      </div>
+      {live && <Button variant="ghost" onClick={onStop} disabled={busy || flow === 'starting'}><Square />Stop</Button>}
+      {result ?? <StatusMark mark={flowMark(flow)} className="text-sm" title={title} />}
+      {seconds != null && <span className="font-mono text-sm text-muted" title={title}>{clockText(seconds)}</span>}
+      <MainSwitch main={main} setMain={setMain} />
     </div>
   );
 }
 
-/** Passed or Failed (or Stopped, Error) and one plain sentence on why; Rewind, See all details, and run again. */
-function ResultBanner({ r, rewind, details, onAgain, onNew }: { r: Result; rewind: string | null; details: string; onAgain: () => void; onNew: () => void }) {
-  const bad = flowMark(r.flow).abnormal;
+/** Passed or Failed (or Stopped, Error) and one plain sentence on why; Rewind and Details. */
+function ResultLine({ r, rewind, details }: { r: Result; rewind: string | null; details: string }) {
+  const m = flowMark(r.flow);
   return (
-    <div role="status" className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-3', bad ? 'border-alarm bg-alarm-soft' : 'border-line-strong bg-surface')}>
-      <span className={cn('flex items-center gap-2 text-lg font-semibold', bad && 'text-alarm')}><span aria-hidden="true" className="font-mono">{flowMark(r.flow).glyph}</span>{r.title}</span>
-      <span className="min-w-0 flex-1 text-sm">{r.why}</span>
-      <div className="flex flex-wrap gap-1.5">
+    <div role="status" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+      <span className={cn('flex items-center gap-1.5 text-base font-semibold', m.abnormal && 'text-alarm')}><span aria-hidden="true" className="font-mono">{m.glyph}</span>{r.title}</span>
+      <span className="min-w-0 text-sm">{r.why}</span>
+      <span className="flex gap-1.5">
         {rewind && <Button asChild title="Go back to a step, change the team, and run again from there"><Link to={rewind}><Undo2 />Rewind</Link></Button>}
-        <Button asChild><Link to={details}><ListTree />See all details</Link></Button>
-        <Button onClick={onAgain}><RotateCcw />Run again</Button>
-        <Button variant="ghost" onClick={onNew}><Plus />New run</Button>
-      </div>
+        <Button variant="ghost" asChild title="Everything about this run: event log, trace, branches, figures"><Link to={details}><ListTree />Details</Link></Button>
+      </span>
     </div>
   );
 }
@@ -88,11 +95,10 @@ function StepDrawer({ d, event, onClose }: { d: BranchDetail; event: Event; onCl
 /** The world being restored: calm words, not a blank screen. */
 function Restoring({ line }: { line: string }) {
   return (
-    <Panel className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+    <div className="flex flex-col items-center gap-3 px-6 py-24 text-center" title="Every system starts from the same saved state, so each step can be replayed later. This takes a minute or so.">
       <span className="relative block h-1 w-48 overflow-hidden rounded-full bg-sunken"><span className="absolute inset-y-0 w-1/3 animate-slide rounded-full bg-line-strong" /></span>
       <p className="text-base font-medium">{line}</p>
-      <p className="max-w-md text-sm text-muted">Every system starts from the same saved state, so each step can be replayed later. This takes a minute or so.</p>
-    </Panel>
+    </div>
   );
 }
 
@@ -109,7 +115,7 @@ function TimelineMain({ d, now, selected, onSelect }: { d: BranchDetail; now: nu
   return (
     <Panel>
       {span ? <ActionTimeline lanes={lanes} team={d.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} live={live} pauses={pauses} />
-        : <EmptyState title="The world is ready." hint="The first step shows here as soon as an agent takes it." />}
+        : <EmptyState title="The world is ready." />}
     </Panel>
   );
 }
@@ -117,7 +123,7 @@ function TimelineMain({ d, now, selected, onSelect }: { d: BranchDetail; now: nu
 function TwinMain({ runId, d, scrub }: { runId: string; d: BranchDetail; scrub: boolean }) {
   const { views, error } = useViews(d.id, d);
   const w = useWorldView(runId, d, views);
-  if (!views.length) return <Panel><EmptyState title="No view of the world yet." hint={error ? `Couldn't load it: ${error}` : 'The digital twin shows here after the first step that changes the world.'} /></Panel>;
+  if (!views.length) return <Panel><EmptyState title="No view of the world yet." hint={error ? `Couldn't load it: ${error}` : undefined} /></Panel>;
   return <TwinView w={w} views={views} scrub={scrub} />;
 }
 
@@ -151,18 +157,17 @@ function MainArea({ runId, d, main, flow, now, selected, onSelect }: {
   );
 }
 
-function Ended({ d, runId, selected, onAgain, onNew }: { d: BranchDetail; runId: string; selected: number | null; onAgain: () => void; onNew: () => void }) {
+/** The result line of an ended run, or null while it runs. */
+function endedLine(d: BranchDetail, runId: string, selected: number | null): ReactNode {
   const r = resultOf(d);
   if (!r) return null;
   const seq = rewindFrom(d.events, selected);
   const base = `/runs/${runId}/${d.id}`;
-  return <ResultBanner r={r} rewind={seq != null ? `${base}?step=${seq}&fork=1` : null} details={withStep(base, selected)} onAgain={onAgain} onNew={onNew} />;
+  return <ResultLine r={r} rewind={seq != null ? `${base}?step=${seq}&fork=1` : null} details={withStep(base, selected)} />;
 }
 
 /** A run, live: the toolbar, the timeline or the twin filling in as steps happen, the step drawer, and the result when it ends. */
-export function LiveRun({ runId, branchId, nameOf, onAgain, onNew }: {
-  runId: string; branchId: string; nameOf: (taskId: string) => string; onAgain: () => void; onNew: () => void;
-}) {
+export function LiveRun({ runId, branchId, nameOf }: { runId: string; branchId: string; nameOf: (taskId: string) => string }) {
   const { detail: d, error, reload } = useBranch(branchId, runId);
   const [main, setMain] = useState<Main>('timeline');
   const [selected, setSelected] = useStepParam();
@@ -173,10 +178,9 @@ export function LiveRun({ runId, branchId, nameOf, onAgain, onNew }: {
   return (
     <div className="flex flex-col gap-3">
       <Toolbar flow={flow} seconds={d ? summarize(d, d.events, now).seconds : null} title={title} main={main} setMain={setMain} busy={c.busy}
-        onPause={c.pause} onStop={() => c.setStopping(true)} />
+        onPause={c.pause} onStop={() => c.setStopping(true)} result={d ? endedLine(d, runId, selected) : null} />
       {error && <ErrorState error={error} onRetry={reload} />}
       {c.error && <ErrorState error={c.error} hint="The run carries on as it was." />}
-      {d && <Ended d={d} runId={runId} selected={selected} onAgain={onAgain} onNew={onNew} />}
       {d && <LiveRunReview runId={runId} d={d} onStep={setSelected} />}
       {d && <MainArea runId={runId} d={d} main={main} flow={flow} now={now} selected={selected} onSelect={setSelected} />}
       <Dialog open={c.stopping} onOpenChange={c.setStopping}>

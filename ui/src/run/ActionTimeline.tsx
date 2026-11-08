@@ -1,4 +1,4 @@
-import { CircleHelp, Minus, Plus, Radio } from 'lucide-react';
+import { Minus, MoreHorizontal, Plus, Radio } from 'lucide-react';
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CHECK_LANE, type LaneRow, type Mark, type Span, WORLD_LANE } from '../control/lanes';
 import { Button } from '../components/ui/button';
@@ -103,14 +103,13 @@ function Wires({ layout, lanes, width, selected }: { layout: Layout; lanes: numb
 function LaneLabels({ lanes, team, width }: { lanes: LaneRow[]; team: Team; width: number }) {
   return (
     <div className="sticky left-0 z-30 shrink-0 border-r border-line bg-surface" style={{ width }}>
-      <div className="border-b border-line px-2 text-2xs leading-[21px] font-medium text-muted" style={{ height: RULER_H }}>Agent</div>
+      <div className="border-b border-line" style={{ height: RULER_H }} />
       {lanes.map((l) => {
         const agent = team.agents.find((a) => a.id === l.id);
         const model = agent ? agentModelLine(agent) : l.id === WORLD_LANE ? 'Links and world events' : l.id === CHECK_LANE ? 'Scoring' : '';
         return (
           <div key={l.id} className="flex flex-col justify-center border-b border-line/60 px-2 last:border-b-0" style={{ height: LANE_H }} title={model ? `${l.id} · ${model}` : l.id}>
             <span className="truncate text-xs font-medium">{agent?.name ?? l.name}</span>
-            {model && <span className="truncate text-2xs text-faint">{model}</span>}
           </div>
         );
       })}
@@ -229,38 +228,48 @@ function useShowSelected(selected: number | null, layout: Layout | null, t: Retu
   }, [selected, layout, latest, move]);
 }
 
-function Toolbar({ t, viewW, minW, models, onModels, live }: {
-  t: ReturnType<typeof useTrackView>; viewW: number; minW: number; models: boolean; onModels: (s: boolean) => void; live: boolean;
-}) {
-  const { view } = t;
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-1.5 text-xs text-muted">
-      <Legend />
-      <span className="hidden text-faint sm:inline">Scroll to move · Ctrl + scroll or pinch to zoom · drag to pan</span>
-      {live && !t.following && <Button size="sm" onClick={t.follow} title="Follow the newest step"><Radio />Follow</Button>}
-      <label className="ml-auto flex items-center gap-1.5"><Checkbox checked={models} onChange={(e) => onModels(e.target.checked)} />Model calls</label>
-      <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
-        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" disabled={view.zoom <= MIN_ZOOM} onClick={() => t.move(stepZoom(view, -1, viewW, minW))}><Minus /></Button>
-        <Button size="sm" variant="ghost" className="w-12 font-mono" onClick={() => t.move({ zoom: 1, scroll: 0 })} title="Fit the run to the width">{view.zoom <= 1.01 ? 'Fit' : `${view.zoom.toFixed(view.zoom < 10 ? 1 : 0)}×`}</Button>
-        <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" disabled={view.zoom >= MAX_ZOOM} onClick={() => t.move(stepZoom(view, 1, viewW, minW))}><Plus /></Button>
-      </div>
-    </div>
-  );
-}
-
 function Legend() {
   const item = (shape: Shape, word: string) => (
     <span className="inline-flex items-center gap-1.5"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE[shape])} /></span>{word}</span>
   );
   return (
+    <div className="grid grid-cols-2 gap-1.5">
+      {item('read', 'Read')}{item('write', 'Write')}{item('gate-write', 'Approval')}{item('message', 'Message')}{item('model', 'Model call')}
+      <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 bg-sunken ring-1 ring-line" />Paused</span>
+      <span className="col-span-2 inline-flex items-center gap-1.5 text-alarm"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE.abnormal)} /></span>Refused or error</span>
+    </div>
+  );
+}
+
+/** "⋯": what the marks mean, model calls on or off, and zoom by button (the mouse does it all too). */
+function Tools({ t, viewW, minW, models, onModels }: {
+  t: ReturnType<typeof useTrackView>; viewW: number; minW: number; models: boolean; onModels: (s: boolean) => void;
+}) {
+  const { view } = t;
+  return (
     <Popover>
-      <PopoverTrigger asChild><Button size="icon" variant="ghost" className="size-6" aria-label="What the marks mean"><CircleHelp /></Button></PopoverTrigger>
-      <PopoverContent className="flex w-56 flex-col gap-1.5 text-xs">
-        {item('read', 'Read')}{item('write', 'Write')}{item('gate-write', 'Approval')}{item('message', 'Message')}{item('model', 'Model call')}
-        <span className="inline-flex items-center gap-1.5 text-alarm"><span className="grid size-3 place-items-center"><span className={cn('block', SHAPE.abnormal)} /></span>Refused or error</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 bg-sunken ring-1 ring-line" />Paused</span>
+      <PopoverTrigger asChild><Button size="icon" variant="ghost" className="size-6 bg-surface" aria-label="Timeline tools"><MoreHorizontal /></Button></PopoverTrigger>
+      <PopoverContent align="end" className="flex w-60 flex-col gap-3 text-xs">
+        <Legend />
+        <label className="flex items-center gap-1.5"><Checkbox checked={models} onChange={(e) => onModels(e.target.checked)} />Model calls</label>
+        <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
+          <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" disabled={view.zoom <= MIN_ZOOM} onClick={() => t.move(stepZoom(view, -1, viewW, minW))}><Minus /></Button>
+          <Button size="sm" variant="ghost" className="w-12 font-mono" onClick={() => t.move({ zoom: 1, scroll: 0 })} title="Fit the run to the width">{view.zoom <= 1.01 ? 'Fit' : `${view.zoom.toFixed(view.zoom < 10 ? 1 : 0)}×`}</Button>
+          <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" disabled={view.zoom >= MAX_ZOOM} onClick={() => t.move(stepZoom(view, 1, viewW, minW))}><Plus /></Button>
+        </div>
+        <p className="text-faint">Scroll to move · Ctrl + scroll or pinch to zoom · drag to pan</p>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Follow (when a live run's newest step is out of view) and "⋯", over the ruler's right end; faint until hovered. */
+function Overlay({ t, live, ...tools }: Parameters<typeof Tools>[0] & { live: boolean }) {
+  return (
+    <div className="absolute top-0 right-1 z-40 flex items-center gap-1 opacity-50 transition-opacity group-hover/tl:opacity-100 focus-within:opacity-100" style={{ height: RULER_H }}>
+      {live && !t.following && <Button size="sm" className="h-5" onClick={t.follow} title="Follow the newest step"><Radio />Follow</Button>}
+      <Tools t={t} {...tools} />
+    </div>
   );
 }
 
@@ -287,8 +296,8 @@ export default function ActionTimeline({ lanes, team, span, selected, onSelect, 
   useShowSelected(selected, layout, t);
   const height = lanes.length * LANE_H;
   return (
-    <div className="flex min-w-0 flex-col">
-      <Toolbar t={t} viewW={viewW} minW={minW} models={models} onModels={onModels} live={live} />
+    <div className="group/tl relative flex min-w-0 flex-col">
+      <Overlay t={t} viewW={viewW} minW={minW} models={models} onModels={onModels} live={live} />
       <div ref={box.ref} className="relative flex min-w-0 cursor-grab touch-pan-y overflow-x-auto overscroll-x-contain select-none active:cursor-grabbing" {...mouse}>
         <LaneLabels lanes={lanes} team={team} width={labelW} />
         {layout && (
