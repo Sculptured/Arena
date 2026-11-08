@@ -37,6 +37,11 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 | `GET /api/suites/{id}` | the suite's report: `{id, name, team, tasks, repeats, runner, benchmark, created_at, ended_at, error, status, finished_s, runs, checks, summary, spread}`. `status` is `running`, `finished` or `stopped` (a built-in suite that ended before its last run: arenad stopped, or the saves reached the limit); `finished_s` the seconds from its creation to its last run's end. `runs`: per task × variant × repeat `{task_id, variant, repeat, run_id, branch_id, status, error, outcome}` (`variant`: the index in `variants`, 0 without them), `status` being `pending`, `starting`, `error` (it could not start), `missing` (its run was deleted) or the branch's status, and `outcome` `{status, scored, checks, checks_passed, checks_total, safety_violations, measured_s, estimated_s, tokens, cost_usd, peak_context}`. `checks`: per task and check `{task_id, name, safety, passed, runs, pass_rate}`. `summary`: `{runs, ended, scored, unscored, passed, pass_rate, score, safety_violations, runs_with_violation}` and the spread of each figure; `spread`: per task `{task_id, runs}` and the spread of each figure. A figure (`checks_passed`, `measured_s`, `estimated_s`, `tokens`, `cost_usd`, `peak_context`) is `{n, unknown, min, max, mean}` over the scored runs (`unknown`: runs without the figure, such as an unknown cost) |
 | `POST /api/suites/{id}/claim` | external suites: claims the next run and starts it as an external run; returns `{done: false, task_id, variant, repeat, run_id, branch_id, agents}` (driven as any external run), or `{done: true}` when every run is claimed. 409 for a suite arenad runs itself |
 | `GET /api/suites/compare?a=<suite>&b=<suite>` | suite `b` against suite `a`: `{a, b, verdict, checks, pass_rate, score, safety, measured_s, estimated_s, tokens, cost_usd, peak_context}`. Each is `{a, b, change, verdict}` (`checks` per task and check, with `task_id`, `name`, `safety`); `verdict` is `improved`, `regressed`, `same`, or `incomparable` when one side lacks the figure. Pass rates and `safety` (failed safety checks per scored run) count any change; time, tokens and cost (means over the scored runs) count a change beyond 10% of `a`'s. The top `verdict` is `regressed` when a check, the pass rate or safety regressed, `improved` when one improved and none regressed |
+| `GET /api/review/settings` | `{enabled, model, why?}`: whether AI review is on and with which reviewer (see [AI review](#ai-review)) |
+| `POST /api/branches/{id}/review[?again=1]` | starts an AI review of an ended branch, or returns the stored one (a failed one is tried again; `again=1` always makes a new one); answers at once with the stored row, `status: running` until the model answers. 404 for an unknown branch, 409 while it runs or when AI review is off |
+| `GET /api/branches/{id}/review` | the stored review: `{key, kind, status, model, review, issues, error, cost_usd, cost_source, tokens, seconds, digest_bytes, created_at, finished_at}` (`status` `running`, `done` or `error`); 404 before any. `review` is `{verdict, went_wrong: [{title, why, steps, severity, unverified?}], suggestions: [{change, why, kind, agent?, prompt_text?, step?}], went_well, confidence}` |
+| `POST`/`GET /api/compare/review?a=&b=[&again=1]` | the same for two ended branches; `review` is `{headline, differences: [{title, a, b, why_it_matters, steps_a, steps_b, unverified?}], which_is_better, why}` |
+| `POST`/`GET /api/suites/compare/review?a=&b=[&again=1]` | the same for suite `b` against `a`; `steps_a` and `steps_b` are example runs (branch ids) of each suite |
 | `GET /api/world` | the benchmark's parts with what each integration reports (version, restore, clock use, tool names, and `system` when it says what kind of system it is) and whether it answered (each gets 5 s; a silent one shows `did not answer within 5 s`) |
 | `GET /api/usage` | `{integrations: [{integration, parts, bytes, error?}], total_bytes, limit_bytes}`: the bytes each integration keeps (its own `usage` plus its save folders) and the world parts that use it. An integration whose `usage` fails or doesn't answer within 5 s has `bytes: 0` and an `error`, and adds nothing to `total_bytes` |
 | `POST /api/gc` | runs the startup cleanup and returns `{removed, freed_bytes, errors}`; it keeps every save a recorded run names and the shared base and gold saves; 409 while agents are running, and new runs and forks answer 409 while it runs. It has no deadline: it answers when every integration's `gc` has (an integration that never answers keeps the cleanup on until it exits), and a client that stops waiting does not end it |
@@ -73,6 +78,12 @@ Environment variables, read once at startup by arenad:
   upper-cased, with `-` as `_`).
 - `ARENA_ANTHROPIC_MAX_TOKENS`: the `max_tokens` of a Claude call whose request names none (default 16000). A
   value that isn't a positive whole number is reported at startup and the default is used.
+- `ARENA_REVIEW`: `on` or `off` (default on when the reviewer can run). Off: no review is started and nothing is
+  sent to a model; stored reviews can still be read.
+- `ARENA_REVIEW_MODEL`: the reviewer, `claude_code:<model>` (default `claude_code:sonnet`, Claude Code headless,
+  signed in as the CLI agents are) or `<provider>:<model>` for one of the providers below (`openrouter:<model>`,
+  `anthropic:<model>`, `openai:<model>`, `local:<name>:<model>`). A reviewer that can't run (no `claude` on the
+  PATH, a provider without its key) turns AI review off, with why in `/api/review/settings`.
 - `ARENA_UI_DIST`: a built UI folder for arenad to serve at `/`. Optional: arenad is fully usable without a UI
   (from code, see [sdk.md](sdk.md)), and the UI can be served from anywhere else.
 - `ARENA_CORS_ORIGIN`: web origins, comma-separated (`http://127.0.0.1:5173,https://ui.example`), whose pages
@@ -144,6 +155,43 @@ Cost per provider: OpenRouter's is the cost it reports (`cost_source: "openroute
 report no price and arenad keeps no price table, so their tokens are recorded and the cost is unknown
 (`cost_usd: null`); the UI shows `unknown`. A local server's cost is 0 with
 `cost_source: "local (no API charge)"`; the UI shows `no API charge`.
+
+## AI review
+
+Optional. A real model reads a compact digest of the record and answers in JSON, which arenad checks:
+
+- **What it reads.** For a branch: the task and its ticket, the team (each agent's kind, model and prompt) and
+  runner, the fork's parent and point, the checks (each with its detail; safety flagged), refused and failed tool
+  calls with their errors, each agent's start, end, reads per tool and writes, handoff notes and messages, the
+  scenario's disruptions, the world's events (alarming ones first), the agents' writes (arguments and results
+  trimmed; the world's own steps, such as an approval system's decisions, only counted) and the metrics. Every
+  item carries its step (`seq`). It is deterministic and at most 40 000 bytes: long lists are capped (keeping how
+  they start and end, and how many were left out) and texts trimmed, at three levels, until it fits; the two
+  recorded pharma runs in the tests come to about 38 and 25 KB. A comparison sends both branches' digests (at
+  most 26 000 bytes each) and what the comparison found: check counts, the checks whose outcome differs, the first
+  divergent step, metrics side by side and the final worlds' differences per kind of row with a sample of changed
+  fields. Two suites: each deployment's team, the figures B against A, and each check whose pass rate moved with
+  example runs where it passed and failed.
+- **The reviewer.** Claude Code is run as `claude -p --output-format json --tools "" --strict-mcp-config
+  --setting-sources "" --no-session-persistence`, with the reviewer's system prompt, the answer's JSON schema
+  (`--json-schema`) and the digest on stdin, in a fresh folder, with the same environment scrubbing as the CLI
+  agents. A provider gets one chat-completions call. The cost is Claude Code's own (API-equivalent) figure, the
+  provider's, or the list price of `docs/prices.toml`.
+- **What is kept.** The answer is validated (unknown enum values read leniently and said in `issues`, lists
+  bounded), and every cited step must be a step of the branch (of A for `steps_a`, of B for `steps_b`; a suite
+  review's runs must be runs of that suite): others are dropped and listed in `issues`, and an item whose every
+  citation was dropped is marked `unverified`. A review is stored per branch, pair of branches or pair of suites,
+  and redone only when asked. Reviews running when arenad stops are marked failed when it starts again.
+- **In the web UI.** Advanced → AI review turns it off in that browser. On the Run screen and the run page a
+  Review card shows under the result; a run watched to its end there is reviewed at once, an older one has a
+  "Review this run" button. Each cited step selects it; a prompt or team suggestion has "Rewind and try this",
+  which opens "Change and rerun" at the suggested step with the text added to the agent's prompt. The compare pages
+  show "What matters" above the outcome, reviewed when the page opens.
+
+Checked on the pharma demo (2026-11-08) with Claude Code Sonnet: the failed six-agent haiku run ($0.11, 19 s),
+the single Sonnet agent ($0.07, 9 s) and their comparison ($0.10, 13 s for the model after about 45 s comparing
+the final worlds). The unit tests build digests, prompts and checks on those two recorded runs; the live test
+(`live_review_of_a_recorded_run_is_valid_and_cites_real_steps`) asks haiku for a review and checks it.
 
 ## Disk
 
