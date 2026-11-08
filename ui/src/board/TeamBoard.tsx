@@ -65,7 +65,7 @@ const ZOOM_MS = 150;
 function Controls({ onExpand }: { onExpand?: () => void }) {
   const rf = useReactFlow();
   return (
-    <Panel position="top-right" className="!m-2 flex items-center gap-0.5 rounded-md border border-line bg-raised p-0.5 shadow-panel">
+    <Panel position="top-right" className="!m-2 flex items-center gap-0.5 rounded-md border border-line bg-raised p-0.5 opacity-0 shadow-panel transition-opacity group-hover/board:opacity-100 focus-within:opacity-100">
       <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom out" onClick={() => rf.zoomOut({ duration: ZOOM_MS })}><Minus /></Button>
       <Button size="sm" variant="ghost" onClick={() => rf.fitView({ padding: 0.08, duration: ZOOM_MS })} title="Show the whole board">Fit</Button>
       <Button size="icon" variant="ghost" className="size-6" aria-label="Zoom in" onClick={() => rf.zoomIn({ duration: ZOOM_MS })}><Plus /></Button>
@@ -91,7 +91,7 @@ export default function TeamBoard({ team, runner, selected, onSelect, onExpand, 
     if (el) rf.setViewport(openingView(boardSize(layoutBoard(team, runner)), el.clientWidth, el.clientHeight));
   };
   return (
-    <div ref={box} className={cn('h-72 w-full', className)}>
+    <div ref={box} className={cn('group/board h-72 w-full', className)}>
       <ReactFlowProvider key={fitKey}>
         <ReactFlow nodes={g.nodes} edges={g.edges} nodeTypes={NODE_TYPES} onInit={open} proOptions={{ hideAttribution: true }}
           nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnScroll zoomOnScroll={false} zoomOnPinch minZoom={0.2} maxZoom={1.5}

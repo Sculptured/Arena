@@ -9,32 +9,45 @@ import { PageBody } from '../components/ui/page';
 import { ErrorState } from '../components/ui/state';
 import { LiveRun, StartingRun } from '../home/LiveView';
 import { missingFor, restoringLine, runLine, taskName } from '../home/summary';
-import TeamCard from '../home/TeamCard';
+import TeamCard, { TeamActions } from '../home/TeamCard';
+import DisruptionPicker from '../home/DisruptionPicker';
 import { RUNNER_WORDS, RUNNERS } from '../home/runners';
 import { type Task, useSuggestedTeams, useTasks, useTeam, useWorldPreview } from '../home/useHome';
 import WorldCard from '../home/WorldCard';
 import { useScenario } from '../scenario/ScenarioBuilder';
 import { teamForRun } from '../team';
-import type { Health, Runner, Team } from '../types';
+import type { Health, Runner } from '../types';
 
-/** The big Run button, the one line on what will run, what is missing, and the runner under Advanced. */
-function RunBar({ team, runner, setRunner, missing, error, disabled, onRun }: {
-  team: Team | null; runner: Runner; setRunner: (r: Runner) => void; missing: string[]; error: string | null; disabled: boolean; onRun: () => void;
-}) {
+/** The runner and the disruptions, behind Options. */
+function Options({ s, busy }: { s: Setup; busy: boolean }) {
   return (
-    <div className="flex flex-col items-center gap-2 py-2">
-      <Button variant="primary" className="h-11 gap-2 px-12 text-base [&_svg]:size-4" onClick={onRun} disabled={disabled || missing.length > 0}><Play />Run</Button>
-      <p className="text-sm text-muted">{team ? `${runLine(team)}${runner === 'chain' || team.agents.length < 2 ? '' : ` · ${RUNNER_WORDS[runner]}`}` : 'Loading your team…'}</p>
+    <div className="flex w-full flex-col gap-4 rounded-lg bg-surface p-4">
+      <DisruptionPicker s={s.scenario} busy={busy} />
+      <Field label="How the agents run" className="w-72">
+        <NativeSelect value={s.runner} onChange={(e) => s.setRunner(e.target.value as Runner)}>
+          {RUNNERS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+        </NativeSelect>
+      </Field>
+      <div className="flex flex-col gap-1">
+        <span className="text-2xs font-medium text-muted">Team</span>
+        <TeamActions team={s.team.team} suggested={s.suggested} onImported={s.team.replace} />
+      </div>
+    </div>
+  );
+}
+
+/** The one Run button (what will run is its tooltip), what is missing, and Options. */
+function RunBar({ s, missing, error, disabled, onRun }: { s: Setup; missing: string[]; error: string | null; disabled: boolean; onRun: () => void }) {
+  const [open, setOpen] = useState(false);
+  const team = s.team.team;
+  const line = team ? `${runLine(team)}${s.runner === 'chain' || team.agents.length < 2 ? '' : ` · ${RUNNER_WORDS[s.runner]}`}` : '';
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <Button variant="primary" className="h-11 gap-2 px-14 text-base [&_svg]:size-4" onClick={onRun} disabled={disabled || missing.length > 0} title={line}><Play />Run</Button>
       {missing.map((m) => <p key={m} className="text-sm font-medium text-alarm" role="status">⚠ {m}</p>)}
-      {error && <ErrorState error={error} hint="Nothing was started. Fix the cause and press Run again." className="max-w-2xl" />}
-      <details className="text-sm text-muted">
-        <summary className="cursor-pointer text-center text-xs hover:text-fg">Advanced</summary>
-        <Field label="How the agents run" className="mt-2 w-72" hint="A team the benchmark suggests picks its own. Arena records every agent either way.">
-          <NativeSelect value={runner} onChange={(e) => setRunner(e.target.value as Runner)}>
-            {RUNNERS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </NativeSelect>
-        </Field>
-      </details>
+      {error && <ErrorState error={error} hint="Nothing was started." className="max-w-2xl" />}
+      <button type="button" className="text-xs text-muted hover:text-fg" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide options' : 'Options'}</button>
+      {open && <Options s={s} busy={false} />}
     </div>
   );
 }
@@ -74,23 +87,23 @@ function useStart(s: Setup, open: (run: string, branch: string) => void, back: (
   return { starting, error, run };
 }
 
-/** Before a run: the world on the left, the team on the right, the Run button under them. */
+/** What must be fixed before the team can run; an external system runs the agents itself, so nothing here has to be installed for it. */
+const missingOf = (s: Setup, health: Health | null) => (s.team.team && s.runner !== 'external' ? missingFor(s.team.team, health) : []);
+
+/** Before a run: the world and its task, the team, and the Run button. */
 function SetupView({ s, health, start }: { s: Setup; health: Health | null; start: ReturnType<typeof useStart> }) {
   const preview = useWorldPreview();
   const team = s.team.team;
-  // An external system runs the agents itself: nothing here has to be installed for it.
-  const missing = team && s.runner !== 'external' ? missingFor(team, health) : [];
+  const missing = missingOf(s, health);
   const loadError = s.tasks.error ?? s.team.error;
+  const benchmark = preview.bench?.name ?? health?.benchmark?.name ?? '';
   return (
-    <PageBody className="mx-auto w-full max-w-[1400px]">
+    <PageBody className="mx-auto w-full max-w-3xl gap-8 py-10">
       {loadError && <ErrorState error={loadError} />}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-        <WorldCard benchmark={preview.bench?.name ?? health?.benchmark?.name ?? ''} twin={preview.twin} parts={partsOf(health)} tasks={s.tasks.tasks} task={s.task}
-          onTask={s.setTaskId} scenario={s.scenario} busy={start.starting} />
-        <TeamCard team={team} runner={s.runner} suggested={s.suggested} onImported={s.team.replace} />
-      </div>
-      <RunBar team={team} runner={s.runner} setRunner={s.setRunner} missing={missing} error={start.error} onRun={start.run}
-        disabled={!team || !s.task || !!s.scenario.problem} />
+      <WorldCard benchmark={benchmark} title={preview.twin?.title} tasks={s.tasks.tasks} task={s.task}
+        onTask={s.setTaskId} scenario={s.scenario} busy={start.starting} />
+      <TeamCard team={team} runner={s.runner} />
+      <RunBar s={s} missing={missing} error={start.error} onRun={start.run} disabled={!team || !s.task || !!s.scenario.problem} />
     </PageBody>
   );
 }
@@ -107,7 +120,7 @@ export default function Home() {
   const branchId = sp.get('branch');
   if (start.starting) return <PageBody><StartingRun title={s.task ? taskName(s.task) : ''} line={restoringLine(partsOf(health))} /></PageBody>;
   if (runId && branchId) {
-    return <PageBody><LiveRun key={branchId} runId={runId} branchId={branchId} nameOf={s.nameOf} onAgain={start.run} onNew={() => setSp({})} /></PageBody>;
+    return <PageBody><LiveRun key={branchId} runId={runId} branchId={branchId} nameOf={s.nameOf} /></PageBody>;
   }
   return <SetupView s={s} health={health} start={start} />;
 }
