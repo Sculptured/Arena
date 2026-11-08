@@ -1,3 +1,4 @@
+mod dispatch;
 mod links;
 mod setup;
 mod talk;
@@ -19,9 +20,10 @@ use crate::{
     world::{Called, PartEvent, Saves, World, WorldError},
 };
 
+pub use dispatch::{Said, CLOSED, DELEGATE, FINISH, REPORT};
 pub use links::LINK_ACTOR;
 pub use setup::SETUP_ACTOR;
-pub use talk::{handoff_schema, mail_for, HANDOFF, INBOX, MESSAGE};
+pub use talk::{handoff_schema, mail_for, said_text, HANDOFF, INBOX, MESSAGE};
 
 /// One running branch: its world, team, arena clock and per-agent handoff notes.
 pub struct BranchCtx {
@@ -47,6 +49,10 @@ pub struct BranchCtx {
     ending: std::sync::atomic::AtomicBool,
     /// Paused, stopped or running: calls wait while the branch is paused.
     pub flow: FlowControl,
+    /// Where what agents say is passed on, while a dispatch runner listens.
+    tap: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Said>>>,
+    /// Set once the lead of a dispatch run has finished it: every later call is refused.
+    closed: std::sync::atomic::AtomicBool,
 }
 
 impl BranchCtx {
@@ -67,6 +73,8 @@ impl BranchCtx {
             gate: tokio::sync::Mutex::new(()),
             ending: Default::default(),
             flow: FlowControl::default(),
+            tap: Mutex::new(None),
+            closed: Default::default(),
         }
     }
 
@@ -95,6 +103,39 @@ impl BranchCtx {
         if let Some(t) = self.ticker.lock().await.take() {
             t.stop().await;
         }
+    }
+
+    /// The id of the agent that leads a dispatch run (see [`Team::lead_index`]).
+    pub fn lead_id(&self) -> String {
+        let lead = self.team.agents.get(self.team.lead_index());
+        lead.map(|a| a.id.clone()).unwrap_or_default()
+    }
+
+    pub fn is_lead(&self, agent: &str) -> bool {
+        self.lead_id() == agent
+    }
+
+    /// Passes what agents say from now on to the returned receiver (replacing an earlier one).
+    pub fn listen(&self) -> tokio::sync::mpsc::UnboundedReceiver<Said> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.tap.lock().unwrap() = Some(tx);
+        rx
+    }
+
+    /// Passes on what an agent said, when someone listens.
+    pub fn tell(&self, said: Said) {
+        if let Some(tx) = self.tap.lock().unwrap().as_ref() {
+            let _ = tx.send(said);
+        }
+    }
+
+    /// Refuses every later call: the run is over.
+    pub fn close(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn is_last(&self, agent: &str) -> bool {
@@ -476,6 +517,9 @@ impl ToolExec {
     ) -> Result<Value, String> {
         branch.flow.go().await.map_err(|_| STOPPED.to_string())?;
         let _gate = branch.gate_timed().await;
+        if branch.is_closed() {
+            return Err(CLOSED.to_string());
+        }
         if talk::is_talk(branch, name) {
             return self.talk(branch, agent, name, args, tool_call_id).await;
         }

@@ -38,6 +38,7 @@ fn agent(id: &str) -> AgentSpec {
         prompt: "p".into(),
         provider: None,
         read_only: false,
+        lead: false,
     }
 }
 

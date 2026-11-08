@@ -46,6 +46,7 @@ fn spec(model: Option<&str>) -> AgentSpec {
         prompt: "p".into(),
         provider: None,
         read_only: false,
+        lead: false,
     }
 }
 
@@ -320,6 +321,7 @@ fn agent_spec(id: &str, kind: AgentKind, prompt: &str) -> AgentSpec {
         prompt: prompt.into(),
         provider: None,
         read_only: false,
+        lead: false,
     }
 }
 

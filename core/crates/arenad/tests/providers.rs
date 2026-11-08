@@ -59,6 +59,7 @@ fn agent(id: &str, provider: Option<&str>, model: Option<&str>) -> AgentSpec {
         prompt: format!("You are {id}."),
         provider: provider.map(str::to_string),
         read_only: false,
+        lead: false,
     }
 }
 

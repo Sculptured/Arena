@@ -6,13 +6,18 @@
 //!   --disable-slash-commands --tools "" --allowedTools "mcp__<server>__*"
 //! `<server>` is the benchmark's name (`super::server_name`).
 //! `--tools ""` removes the built-in tools; `--allowedTools` pre-approves the MCP tools so
-//! no permission prompt blocks the non-interactive run.
+//! no permission prompt blocks the non-interactive run. A dispatch run's session takes
+//! `--input-format stream-json --output-format stream-json --verbose` instead of `--output-format
+//! json` and the prompt (confirmed live against claude 2.1.319).
 
 use std::{future::Future, pin::Pin, process::Command};
 
 use serde_json::{json, Value};
 
-use super::{AgentResult, AgentRun, Driver, Mcp, CLI_TIMEOUT_SECS};
+use super::{
+    session::{Session, SessionStart},
+    AgentResult, AgentRun, Driver, Mcp, CLI_TIMEOUT_SECS,
+};
 use crate::model::AgentSpec;
 
 pub struct ClaudeDriver {
@@ -36,12 +41,20 @@ pub fn command(spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Command {
 }
 
 fn command_with(binary: &str, spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Command {
+    let mut c = isolated(binary, spec, mcp);
+    // The prompt is positional and may start with "-": keep it apart from the flags.
+    c.args(["--output-format", "json"]).args(["--", prompt]);
+    c
+}
+
+/// Claude Code headless with only the world's MCP tools, and none of the user's settings,
+/// sessions, slash commands or built-in tools; its environment scrubbed of other secrets.
+fn isolated(binary: &str, spec: &AgentSpec, mcp: &Mcp) -> Command {
     let config = json!({"mcpServers": {&mcp.server: {"type": "http", "url": mcp.url}}});
     let mut c = Command::new(binary);
     c.arg("-p")
         .arg("--model")
         .arg(spec.model.as_deref().unwrap_or("sonnet"))
-        .args(["--output-format", "json"])
         .args(["--setting-sources", ""])
         .arg("--strict-mcp-config")
         .arg("--mcp-config")
@@ -50,10 +63,18 @@ fn command_with(binary: &str, spec: &AgentSpec, mcp: &Mcp, prompt: &str) -> Comm
         .args(["--tools", ""])
         .arg("--allowedTools")
         .arg(format!("mcp__{}__*", mcp.server))
-        .arg("--no-session-persistence")
-        // The prompt is positional and may start with "-": keep it apart from the flags.
-        .args(["--", prompt]);
+        .arg("--no-session-persistence");
     super::scrub_env(&mut c, "ANTHROPIC_API_KEY");
+    c
+}
+
+/// A long-lived session (see `claude_session`): the isolated command taking its turns as a stream
+/// of user messages on stdin and answering in stream-json.
+pub fn session_command(binary: &str, spec: &AgentSpec, mcp: &Mcp) -> Command {
+    let mut c = isolated(binary, spec, mcp);
+    c.args(["--input-format", "stream-json"])
+        .args(["--output-format", "stream-json"])
+        .arg("--verbose");
     c
 }
 
@@ -90,6 +111,11 @@ pub fn parse(stdout: &str) -> AgentResult {
 }
 
 impl Driver for ClaudeDriver {
+    fn session(&self, start: SessionStart) -> Result<Box<dyn Session>, String> {
+        let s = super::claude_session::ClaudeSession::start(&self.self_base, &self.binary, start)?;
+        Ok(Box::new(s))
+    }
+
     fn run<'a>(&'a self, run: AgentRun) -> Pin<Box<dyn Future<Output = AgentResult> + Send + 'a>> {
         Box::pin(async move {
             let mcp = Mcp::of(&self.self_base, &run);

@@ -114,7 +114,7 @@ fn validate_suite(state: &AppState, req: &NewSuiteReq) -> Result<(), ApiError> {
     }
     match req.runner {
         Runner::External => validate_agents(state, &req.team.agents),
-        _ => validate_builtin_team(state, &req.team),
+        runner => validate_builtin_team(state, &req.team, runner),
     }
 }
 

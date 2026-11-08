@@ -35,6 +35,7 @@ pub const REASON_KIND: &str = "the agent's mode changes";
 pub const REASON_TOOL: &str = "a tool call is redone from the model call that chose it";
 pub const REASON_CONCURRENT: &str = "agents that ran at once all restart from the run's start";
 pub const REASON_RUN_START: &str = "the run restarts from the first agent's start";
+pub const REASON_FINISHED: &str = "the lead had finished the run: the fork starts at its finish";
 pub const REASON_AGENT_RESTART: &str = "the agent restarts from its first start";
 pub const REASON_LAST_MODEL_CALL: &str =
     "the step is redone from the agent's last model call before it";
@@ -266,6 +267,7 @@ impl Planner<'_> {
         Ok(match rules.runner {
             Runner::Concurrent => self.restart_all(),
             Runner::External => self.at_point(),
+            Runner::Dispatch => self.dispatch_point(),
             Runner::Chain => self.start_for(changes, changed, self.active_agent()?)?,
         })
     }
@@ -277,6 +279,31 @@ impl Planner<'_> {
         Start {
             seq: first.map_or(self.at_seq + 1, |e| e.seq),
             reason: Some(REASON_CONCURRENT),
+            agent: 0,
+            resume: None,
+        }
+    }
+
+    /// A dispatch run forks where asked: every agent restarts there in a new session with its
+    /// recorded history (see `crate::dispatch`). Asked for `RunStart`, it starts at the first
+    /// agent's start; asked for a step after the lead's finish, at the finish.
+    fn dispatch_point(&self) -> Start {
+        if self.at.kind == EventKind::RunStart {
+            let first = self.events.iter().find(|e| e.kind == EventKind::AgentStart);
+            return Start {
+                seq: first.map_or(self.at_seq + 1, |e| e.seq),
+                reason: Some(REASON_RUN_START),
+                agent: 0,
+                resume: None,
+            };
+        }
+        let finish = self
+            .events
+            .iter()
+            .find(|e| e.kind == EventKind::Finish && e.seq < self.at_seq);
+        Start {
+            seq: finish.map_or(self.at_seq, |f| f.seq),
+            reason: finish.map(|_| REASON_FINISHED),
             agent: 0,
             resume: None,
         }
@@ -731,6 +758,7 @@ mod tests {
             prompt: format!("You are {id}."),
             provider: None,
             read_only: false,
+            lead: false,
         }
     }
 

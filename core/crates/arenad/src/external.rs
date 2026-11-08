@@ -97,6 +97,7 @@ impl Join {
             prompt: self.prompt.clone(),
             provider: self.provider.as_deref().and_then(trimmed),
             read_only: self.read_only,
+            lead: false,
         }
     }
 }

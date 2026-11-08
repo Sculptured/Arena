@@ -46,6 +46,7 @@ fn agent(id: &str) -> AgentSpec {
         prompt: format!("You are {id}."),
         provider: None,
         read_only: false,
+        lead: false,
     }
 }
 
