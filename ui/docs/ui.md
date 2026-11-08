@@ -1,38 +1,50 @@
 # Arena UI: look, tokens, components, patterns
 
-Arena's web UI is dumb simple to start and has depth one click away: one Run screen, a History,
-and everything else under Advanced. It stays calm and readable at a glance.
+Arena's web UI is extra sparse: each screen shows only what a first-time user needs to do its one
+main thing, with one primary action. Everything else is one click away under **⋯**, **More**,
+**Details**, **Options** or ⌘K. No helper paragraphs on screens (a tooltip at most), no ids, no
+secondary metadata lines, few borders, plenty of whitespace.
 
 ## Screens
 
-- **Run** (`/`, `pages/Home.tsx`, `home/`). Before a run: **World** on the left (the world's name and
-  the task's ticket heading in plain words, a thumbnail of the digital twin as the newest run first
-  saw it, or the world's parts when there is none; a task picker by plain name; **Add a disruption**,
-  the scenario builder as a picker with parameters behind **Adjust**) and **Team** on the right (the
-  team board, with **Import** and **Edit**). Under them one big **Run** button and one line on what will
-  run ("6 agents · Claude Code · Sonnet", `home/summary.ts`), or exactly what is missing ("Claude
-  Code isn't installed", "OpenRouter isn't ready: OPENROUTER_API_KEY is not set"), with no stand-in.
-  The runner (One after another, All at once, By an external system) is under **Advanced**.
+- **Top bar** (`app/TopBar.tsx`): the wordmark, **Run**, **History**, and one **⋯** with the run on
+  screen's other views (world view, all details, process view), Suites, Compare two runs or two
+  suites, World view of a run, the Team editor, AI review on or off, the command palette, the theme
+  and which Arena core is in use.
+- **Run** (`/`, `pages/Home.tsx`, `home/`). Before a run, in one centred column: the world's name, a
+  task picker by plain name (the ticket heading is its tooltip), the team board, and one big **Run**
+  button (what will run, "6 agents · Claude Code · Sonnet" from `home/summary.ts`, is its tooltip).
+  What is missing shows under it in words ("Claude Code isn't installed"). A small **Options** link
+  opens the disruptions (the scenario builder as a picker, parameters behind **Adjust**), the runner
+  (One after another, A lead dispatches, All at once, By an external system) and the team's
+  **Suggested**, **Import** and **Edit**. A chosen disruption also shows in words under the task.
 - **The live run** is the same screen (`?run=&branch=`, `home/LiveView.tsx`): while the world is
-  restored a calm "Restoring the world: ERP, LIMS, …"; then a toolbar with **Pause** / **Resume**,
-  **Stop** (confirmed), the time so far and a status chip (Starting, Running, Paused, Passed, Failed,
-  Stopped; `run/flow.ts`), and a **Timeline | Digital Twin** switch. The timeline fills in as steps
-  happen and follows the newest; the twin follows the latest step, with its scrubber once the run is
-  paused or done. A step opens a slim drawer: what happened in a sentence or two
-  (`run/stepSummary.ts`), the raw record behind **Details**. When the run ends a banner says
-  **Passed** or **Failed** and why in one sentence, the first safety violation or failed check in words
-  (`run/result.ts`), with **Rewind** (the fork panel at the chosen step), **See all details** (the run
-  page), **Run again** and **New run**.
-- **History** (`/history`, `pages/Runs.tsx`): name (the task in plain words), team, result, when;
-  reruns under their run. A row opens on the Run screen.
-- **Advanced** (top bar menu, and ⌘K): this run's world view, all details (event log, trace,
-  deployment estimate, branches) and process view; suites; compare two runs or suites; a run's world
-  view; the team editor. Nothing was removed; it just isn't on the first screen.
+  restored a calm "Restoring the world: ERP, LIMS, …"; then one toolbar line with **Pause** /
+  **Resume**, **Stop** (confirmed), the status (Starting, Running, Paused; `run/flow.ts`), the time so
+  far, and a quiet **Timeline | Digital Twin** switch. The timeline fills in as steps happen and
+  follows the newest; the twin follows the latest step, with its scrubber once the run is paused or
+  done. A step opens a slim drawer: what happened in a sentence or two (`run/stepSummary.ts`), the
+  raw record behind **Details**. When the run ends, the status gives way to the result on the same
+  line: **Passed** or **Failed** and why in one sentence (`run/result.ts`), with **Rewind** (the fork
+  panel at the chosen step) and **Details** (the run page). Under it the AI review is one line, its
+  verdict, with **More**.
+- **History** (`/history`, `pages/Runs.tsx`): name (the task in plain words; the team is its
+  tooltip), result, when; reruns under their run as "↳ Rerun". A row opens on the Run screen; its
+  menu (on hover) has All details, Process view and Delete. ⌘K finds any run by name.
+- **Compare** (`/compare/:a/:b`): **What matters** as one line with **More**, and the outcome rows;
+  the divergence strip, each side's figures, the first differing step and the differing rows sit
+  behind **Details**.
+- **Run page** (`/runs/:run/:branch`, all details): the task, its status, **Branches** and **Compare
+  with…**; time, cost, check, safety and any refusal; the review line; the timeline and event log with
+  the step inspector beside them; the trace once a step is picked; and **More about this run** (the
+  world, how the agents ran, the disruption, tokens, steps, and the deployment estimate).
+- Suites, the team editor, the world view and the process view are under **⋯** and ⌘K. Nothing was
+  removed; it just isn't on the first screen.
 
 **Which core.** The UI talks to the Arena core (arenad) it is served from. A build can name another
 with `VITE_ARENA_URL=<url>`, and the address can switch with `?core=<url>` (this browser remembers it;
 `?core=` with nothing goes back to the serving core); every `/api` request and the event stream go
-there (`src/core.ts`), and the Advanced menu says which core is in use. A UI served from another
+there (`src/core.ts`), and the ⋯ menu says which core is in use. A UI served from another
 origin needs the core started with `ARENA_CORS_ORIGIN=<the UI's origin>`.
 
 Pause and Stop are arenad's (`POST /api/branches/{id}/pause`, `/resume`, `/stop`): while paused, the
@@ -82,7 +94,7 @@ These are shadcn-style components: the code is ours, built on Radix primitives w
 - `button`: variants `default`, `primary`, `ghost` and `danger`. `asChild` styles a link as a button.
 - `panel`: `Panel` and `PanelHeader` (a title, a meta note, and actions).
 - `side-panel`: `SidePanel`, a slim panel beside the main area (a step, an agent's prompt).
-- `page`: `PageHeader` (title, state, actions, meta line, children) and `PageBody`. `Stat` is a label
+- `page`: `PageHeader` (title, state, actions, children; no border or panel) and `PageBody`. `Stat` is a label
   over a mono value, with an `abnormal` option.
 - `status`: `StatusMark` shows a glyph and a word, and adds colour only when `abnormal`. `Tag` is a
   neutral label, with optional `warn` or `alarm` tones.
@@ -106,17 +118,20 @@ Logic lives in pure modules with tests, and components only render. For example:
 
 ## Patterns
 
-- **Words.** Sentence case for labels, no all-caps; values start with a capital (Passed, Failed, Read,
+- **Words.** Labels start with a capital, no all-caps; values start with a capital (Passed, Failed, Read,
   Write, Refused, One after another, Claude Code). No ids, hashes, step numbers or image tags on the
-  Run screen or History: they live behind Details and on the run page.
+  Run screen or History: they live behind Details and on the run page. Explanations are tooltips,
+  not sentences on the screen.
 - **Status.** A status is always a glyph and a word: `✓ Passed`, `◐ Running`, `‖ Paused`, `✕ Failed`,
   `⚠ Infra error`, `■ Interrupted`, `■ Stopped`, `◆ unsafe`. Only abnormal states are coloured.
 - **Action timeline** (`run/ActionTimeline.tsx`). There is one lane per agent, plus World (links and
   world events) and Check. Marks are placed on one time axis. The mouse moves it (`run/zoom.ts`):
   the wheel scrolls sideways when there is more to see (else the page scrolls), Ctrl/⌘ + wheel or a
-  trackpad pinch zooms around the cursor (fit up to 64×), a drag on empty space pans, and −, Fit and
-  + do it by button. A live run follows its newest step until you scroll or zoom away; **Follow**
-  brings it back. Pauses are shaded bands. What the marks mean is in the **?** popover.
+  trackpad pinch zooms around the cursor (fit up to 64×), and a drag on empty space pans. A live run
+  follows its newest step until you scroll or zoom away; **Follow** brings it back. Pauses are shaded
+  bands. There is no toolbar row: a faint **⋯** over the ruler's right end holds what the marks
+  mean, Model calls on or off, and −, Fit and + zoom. Lanes show the agent's name; its model is the
+  tooltip.
   - Shapes: hollow circle for a read, solid square for a write (heavier), diamond for approvals, and
     an alarm-coloured triangle for a refusal or error. A model call is a thin tick.
   - Labels: an action carries its system kind ("ERP") where the label fits. The selected mark shows
@@ -138,13 +153,15 @@ Logic lives in pure modules with tests, and components only render. For example:
   - Flows: writes are heavier and solid, reads-only flows are thin and dashed. An abnormal flow is
     alarm-coloured and labelled ("⚠ 1 refused").
   - On phones the diagram scrolls sideways.
-- **World view** (`pages/World.tsx`, `/world/:runId/:branchId`). The benchmark's digital twin
+- **World view** (`pages/World.tsx`, `/world/:runId/:branchId`). The twin's title and the run's
+  status (the task and disruption are the title's tooltip), the KPIs as plain figures, the scrubber,
+  and the benchmark's digital twin
   (`world_view` events, `GET /api/branches/{id}/views`) as an HMI overview: areas as zones left to right
-  in process order (`world/layout.ts`), approvals as a dashed rail, items as tiles with a glyph and a
-  word, and lot-to-order flows as pipes along a bus under the zones between them, one labelled lane
-  each. Tiles changed since the view before get an accent ring and a "what changed" line
+  in process order (`world/layout.ts`; no item counts or alarm badges on the zones, the tiles say
+  it), approvals as a dashed rail, items as tiles with a glyph and a word, and lot-to-order flows as
+  pipes along a bus under the zones between them, one labelled lane each (ids in the tooltip). Tiles changed since the view before get an accent ring and a "what changed" line
   (`world/twin.ts`). The scrubber (`world/scrub.ts`) stops at each view, marks disruptions (▼) and
-  refusals (▲), plays and pauses (space), and moves with ←/→. Rewind here opens the run page's fork
+  refusals (▲; what each is in its tooltip), plays and pauses (space), and moves with ←/→. Rewind here opens the run page's fork
   panel at the next agent step with "Swap architecture" chosen (`run/architecture.ts`): Team v2 adds its
   rules to every agent's prompt; the single agent replaces the team (a fork's `team`, which only a run
   an external system drives can take). The selected
@@ -154,7 +171,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   cards (name, a one-line job from the prompt, model badge, Read-only, the decisions it owns), group
   zones and "hands work to" arrows from a Sculptured design; any other team laid out from its runner
   (in order: rows of three left to right with an arrow to the next; at once: one row;
-  `board/board.ts`). It opens readable: a board that only fits below 80% opens at 80% from its top-left corner. The wheel pans, Ctrl/⌘ + wheel or a pinch zooms, a drag pans; −, Fit and + zoom by button, and **Expand** opens it full screen. A card shows its prompt beside the board. **Import** (`board/importTeam.ts`) takes a
+  `board/board.ts`). It opens readable: a board that only fits below 80% opens at 80% from its top-left corner. The wheel pans, Ctrl/⌘ + wheel or a pinch zooms, a drag pans; −, Fit and + zoom by button and **Expand** opens it full screen (these show on hover). A card shows its prompt beside the board. **Import** (`board/importTeam.ts`) takes a
   Sculptured design (`TeamDraft`: `claude` becomes Claude Code, `codex` Codex; the model from the
   agent, its group or the team; places, groups and hands-work-to connections kept; agents put in work
   order; an agent whose `data_access.writes` is empty is read-only) or an Arena team, picked, dropped
@@ -163,10 +180,11 @@ Logic lives in pure modules with tests, and components only render. For example:
 - **Scenario builder** (`scenario/`). On the Run screen as a picker, and in the New suite dialog, from the benchmark's
   `scenario_options` (`GET /api/benchmark`): a toggle and parameters per disruption (label and
   description filled with them, as arenad fills the template), and a plain-words preview.
-- **Outcome comparison** (`compare/`). At the top of the compare page: valid plan, safety
+- **Outcome comparison** (`compare/`). Under What matters on the compare page: valid plan, safety
   violations, orders on time and transport cost (the twin's `orders_covered` and `transport_cost`
   KPIs at the end), agent cost (as the agents reported it, labelled reported, and illustrative for
-  scripted usage) and escalations for both branches, and a divergence strip on one step axis. World
+  scripted usage) and escalations for both branches (what each row means is its tooltip); the
+  divergence strip on one step axis is under Details. World
   views are not steps: the timeline, run figures, process view and divergence skip them.
 - **Fixtures.** A build with `VITE_ARENA_FIXTURES=1` answers `/api` from the pharma fixtures
   (`dev/fixtureApi.ts`), for screenshots without arenad.
@@ -176,7 +194,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   click or Enter.
 - **Command palette.** Opens with ⌘K or Ctrl+K. It lists the pages (Run, History, Suites, Team
   editor); the deeper views of the run on screen; new run and new suite (`?new=suite`); compare two
-  runs or two suites, picked in two steps (the Advanced menu opens it at that step); the theme; and
+  runs or two suites, picked in two steps (the ⋯ menu opens it at that step); the theme; and
   every run branch and suite.
 - **Status bar.** Only what needs attention, otherwise nothing: no model to run agents with (no agent
   CLI and no API key, with each provider, its reason and Check one click away), or saves 90% full or

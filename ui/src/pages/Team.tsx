@@ -99,7 +99,7 @@ export default function Team() {
   const openOk = list.some((s) => s.available || (s.kind === 'local' && !s.checked));
   return (
     <>
-      <PageHeader title={<span title="Agents run in order, each handing off to the next; any agent may write unless you make it read-only. New runs and suites use this team. Edits are saved in this browser.">Team</span>}
+      <PageHeader title={<span title="Agents run in order, each handing off to the next; any agent may write unless you make it read-only. New runs and suites use this team. Edits are saved in this browser.">Team</span>} className="mx-auto w-full max-w-5xl"
         actions={<><Button variant="ghost" className="text-muted" onClick={ed.reset}><RotateCcw />Reset</Button><Button variant="primary" onClick={ed.add} disabled={!ed.team}><Plus />Add agent</Button></>} />
       <PageBody className="mx-auto w-full max-w-5xl">
         {ed.error && <ErrorState error={ed.error} />}
