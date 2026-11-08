@@ -37,7 +37,7 @@ function Main({ d, selected, onSelect, models, setModels }: { d: BranchDetail; s
     <div className="flex min-w-0 flex-col gap-3">
       <Panel><PanelHeader title="Process" meta="agents as units, the world's systems as equipment; heavier lines carry writes, dashed lines only reads" /><ProcessDiagram view={view} /></Panel>
       <Panel><PanelHeader title={`Actions${running ? ' · live' : ''}`} meta="sequence of events, one lane per agent" />
-        <ActionTimeline lanes={lanes} team={d.team} span={spanOf(lanes, running ? Date.now() : undefined)} selected={selected} onSelect={onSelect} models={models} onModels={setModels} />
+        <ActionTimeline lanes={lanes} team={d.team} span={spanOf(lanes)} selected={selected} onSelect={onSelect} models={models} onModels={setModels} />
       </Panel>
       <Panel><PanelHeader title="Trends" /><TrendsPanel events={d.events} actions={actions} /></Panel>
     </div>

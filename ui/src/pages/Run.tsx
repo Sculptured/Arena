@@ -149,7 +149,7 @@ function Main({ detail, selected, onSelect, models, setModels }: {
   const lanes = useMemo(() => buildLanes(detail.events, detail.team, detail.start_seq), [detail]);
   const live = detail.status === 'running';
   const now = Date.now();
-  const span = spanOf(lanes, live ? now : undefined);
+  const span = spanOf(lanes);
   const pauses = useMemo(() => pausesOf(detail.events, now), [detail.events, now]);
   return (
     <div className="flex min-w-0 flex-col gap-3">

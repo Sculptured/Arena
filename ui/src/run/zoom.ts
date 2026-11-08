@@ -62,3 +62,20 @@ export function onWheel(e: WheelInput, view: View, cursor: number, viewW: number
 
 /** A zoom button: twice as close (or as far), around the middle of the viewport. */
 export const stepZoom = (view: View, dir: 1 | -1, viewW: number, minW = 0) => zoomAround(view, view.zoom * 2 ** dir, viewW / 2, viewW, minW);
+
+/**
+ * The view that keeps the same moments on screen after the run's span changes from `from` to `to`
+ * (a live run's newest event): the time at the left edge and the pixels per millisecond stay put,
+ * so a user zoomed in away from the end sees nothing move. At Fit (zoom 1) the run keeps fitting.
+ */
+export function holdTimeWindow(view: View, from: { start: number; end: number }, to: { start: number; end: number }, viewW: number, minW = 0): View {
+  const len0 = from.end - from.start, len1 = to.end - to.start;
+  if (view.zoom <= MIN_ZOOM || len0 <= 0 || len1 <= 0 || viewW <= 0) return view;
+  const w0 = trackWidth(viewW, view.zoom, minW);
+  const pxPerMs = (w0 - 2 * TRACK_PAD) / len0;
+  const leftAt = from.start + (view.scroll - TRACK_PAD) / pxPerMs;
+  const zoom = clampZoom((pxPerMs * len1 + 2 * TRACK_PAD) / viewW);
+  const w1 = trackWidth(viewW, zoom, minW);
+  const scroll = TRACK_PAD + (leftAt - to.start) * ((w1 - 2 * TRACK_PAD) / len1);
+  return { zoom, scroll: clampScroll(scroll, w1, viewW) };
+}

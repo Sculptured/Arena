@@ -120,12 +120,15 @@ export interface Span {
   end: number;
 }
 
-/** The time the marks cover, and `now` while live (at least one second, so a single mark has room). */
-export function spanOf(lanes: LaneRow[], now?: number): Span | null {
+/**
+ * The time the marks cover (at least one second, so a single mark has room). A live run's span
+ * grows only when a new event is recorded, never with the clock.
+ */
+export function spanOf(lanes: LaneRow[]): Span | null {
   const times = lanes.flatMap((l) => l.marks.map((m) => m.at)).filter((t) => !Number.isNaN(t));
   if (!times.length) return null;
   const start = Math.min(...times);
-  const end = Math.max(...times, now ?? -Infinity);
+  const end = Math.max(...times);
   return { start, end: Math.max(end, start + 1000) };
 }
 

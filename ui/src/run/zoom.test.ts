@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TRACK_PAD, layoutTimeline } from './timelineLayout';
-import { MAX_ZOOM, clampScroll, endScroll, onWheel, stepZoom, wheelZoom, zoomAround } from './zoom';
+import { MAX_ZOOM, clampScroll, endScroll, holdTimeWindow, onWheel, stepZoom, trackWidth, wheelZoom, zoomAround } from './zoom';
 
 const wheel = (deltaY: number, mods: { ctrlKey?: boolean; metaKey?: boolean; deltaX?: number } = {}) =>
   ({ deltaX: mods.deltaX ?? 0, deltaY, deltaMode: 0, ctrlKey: !!mods.ctrlKey, metaKey: !!mods.metaKey });
@@ -59,5 +59,30 @@ describe('pause bands', () => {
     const width = 1000 + 2 * TRACK_PAD;
     const l = layoutTimeline(lanes, span, width, true, [{ start: 2000, end: 5000, open: false }, { start: 9000, end: 10_000, open: true }]);
     expect(l.bands).toEqual([{ x1: TRACK_PAD + 200, x2: TRACK_PAD + 500, open: false }, { x1: TRACK_PAD + 900, x2: TRACK_PAD + 1000, open: true }]);
+  });
+});
+
+describe('holdTimeWindow', () => {
+  const viewW = 1000;
+  // The moment at the viewport's left edge and the px per ms, as the layout draws them.
+  const at = (v: { zoom: number; scroll: number }, s: { start: number; end: number }) => {
+    const w = trackWidth(viewW, v.zoom);
+    const pxPerMs = (w - 2 * TRACK_PAD) / (s.end - s.start);
+    return { left: s.start + (v.scroll - TRACK_PAD) / pxPerMs, pxPerMs };
+  };
+
+  it('keeps the same moments on screen when a new event grows the span', () => {
+    const from = { start: 0, end: 60_000 }, to = { start: 0, end: 90_000 };
+    const v0 = { zoom: 8, scroll: 2_000 };
+    const v1 = holdTimeWindow(v0, from, to, viewW);
+    const a = at(v0, from), b = at(v1, to);
+    expect(b.left).toBeCloseTo(a.left, 3);
+    expect(b.pxPerMs).toBeCloseTo(a.pxPerMs, 6);
+    expect(v1.zoom).toBeCloseTo(12, 1);
+  });
+
+  it('leaves Fit fitting and unchanged spans alone', () => {
+    const v = { zoom: 1, scroll: 0 };
+    expect(holdTimeWindow(v, { start: 0, end: 10 }, { start: 0, end: 20 }, viewW)).toEqual(v);
   });
 });

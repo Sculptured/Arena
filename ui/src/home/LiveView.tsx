@@ -104,7 +104,7 @@ function TimelineMain({ d, now, selected, onSelect }: { d: BranchDetail; now: nu
   const pauses = useMemo(() => pausesOf(d.events, now), [d.events, now]);
   const order = useMemo(() => stepOrder(lanes, models), [lanes, models]);
   useStepKeys(order, onSelect);
-  const span = spanOf(lanes, live ? now : undefined);
+  const span = spanOf(lanes);
   return (
     <Panel>
       {span ? <ActionTimeline lanes={lanes} team={d.team} span={span} selected={selected} onSelect={onSelect} models={models} onModels={setModels} live={live} pauses={pauses} />

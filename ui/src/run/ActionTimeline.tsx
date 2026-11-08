@@ -9,7 +9,7 @@ import { agentModelLine } from '../providers';
 import type { Team } from '../types';
 import type { Pause } from './flow';
 import { LANE_H, type Layout, type Placed, type Shape, layoutTimeline, shapeOf, shortLabel } from './timelineLayout';
-import { MAX_ZOOM, MIN_ZOOM, type View, clampScroll, endScroll, onWheel, stepZoom, trackWidth } from './zoom';
+import { MAX_ZOOM, MIN_ZOOM, type View, clampScroll, endScroll, holdTimeWindow, onWheel, stepZoom, trackWidth } from './zoom';
 const RULER_H = 22;
 
 /** Each shape's look: hollow reads, solid (heavier) writes, diamonds for approvals, a triangle in alarm colour for refusals and errors. */
@@ -141,9 +141,17 @@ export interface TimelineProps {
 }
 
 /** The track's zoom and scroll, applied to the box, and whether it follows the newest step. */
-function useTrackView(el: HTMLDivElement | null, viewW: number, minW: number, live: boolean) {
+function useTrackView(el: HTMLDivElement | null, viewW: number, minW: number, live: boolean, span: Span | null) {
   const [view, setView] = useState<View>({ zoom: 1, scroll: 0 });
   const [follow, setFollow] = useState(true);
+  // A new event grows the span; when the user isn't following, keep the same moments on screen.
+  const lastSpan = useRef(span);
+  useLayoutEffect(() => {
+    const from = lastSpan.current;
+    lastSpan.current = span;
+    if (!from || !span || (from.start === span.start && from.end === span.end) || (live && follow)) return;
+    setView((v) => holdTimeWindow(v, from, span, viewW, minW));
+  }, [span, live, follow, viewW, minW]);
   const trackW = trackWidth(viewW, view.zoom, minW);
   const following = live && follow;
   // While following, the end of the track (the newest step) stays in view.
@@ -266,7 +274,7 @@ export default function ActionTimeline({ lanes, team, span, selected, onSelect, 
   // A phone gets a track wider than the screen, to scroll; a desktop fits the run at 1×.
   const minW = box.width < 640 ? 640 : 240;
   const viewW = Math.max(0, box.width - labelW);
-  const t = useTrackView(box.ref.current, viewW, minW, live);
+  const t = useTrackView(box.ref.current, viewW, minW, live, span);
   const layout = useMemo(() => (span ? layoutTimeline(lanes, span, t.trackW, models, pauses) : null), [lanes, span, t.trackW, models, pauses]);
   const mouse = useMouse(box.ref.current, labelW, t);
   useNativeScroll(box.ref.current, t);
