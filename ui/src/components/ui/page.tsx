@@ -2,13 +2,13 @@ import type { ComponentProps, ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
 /** A page's title row: the title and its state on the left, actions on the right, a meta line under. */
-export function PageHeader({ title, status, meta, actions, children, mono = false }: {
-  title: ReactNode; status?: ReactNode; meta?: ReactNode; actions?: ReactNode; children?: ReactNode; mono?: boolean;
+export function PageHeader({ title, status, meta, actions, children, mono = false, className }: {
+  title: ReactNode; status?: ReactNode; meta?: ReactNode; actions?: ReactNode; children?: ReactNode; mono?: boolean; className?: string;
 }) {
   return (
-    <header className="flex flex-col gap-2 border-b border-line bg-surface px-3 py-2.5 sm:px-4">
+    <header className={cn('flex flex-col gap-2 px-3 pt-5 pb-1 sm:px-5', className)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <h1 className={cn('min-w-0 truncate text-lg font-semibold', mono && 'font-mono text-base')}>{title}</h1>
+        <h1 className={cn('min-w-0 truncate text-xl font-semibold', mono && 'font-mono text-lg')}>{title}</h1>
         {status}
         {actions && <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>}
       </div>
@@ -20,7 +20,7 @@ export function PageHeader({ title, status, meta, actions, children, mono = fals
 
 /** The scrolling area under the header. */
 export function PageBody({ className, ...props }: ComponentProps<'main'>) {
-  return <main className={cn('flex min-w-0 flex-col gap-3 p-3 sm:p-4', className)} {...props} />;
+  return <main className={cn('flex min-w-0 flex-col gap-4 p-3 sm:p-5', className)} {...props} />;
 }
 
 /** A labelled figure in a header or an overview: the label small above, the value in mono below. */
