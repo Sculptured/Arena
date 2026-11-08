@@ -123,6 +123,6 @@ export default function ReviewCard({ d, auto, onStep, onTry }: {
   if (!enabled || !ended || !h.loaded) return null;
   return (
     <ReviewFrame title="Review" label="AI review" h={h} what="the run's record" retryHint="Nothing else changed. Try again, or turn AI review off under Advanced."
-      empty={<Offer onStart={() => h.start()} />} done={(r) => <RunReviewBody r={r} d={d} onStep={onStep} onTry={onTry} />} footer={(s) => <Footer s={s} />} />
+      empty={<Offer onStart={() => h.start()} />} headline={(r) => r.verdict} done={(r) => <RunReviewBody r={r} d={d} onStep={onStep} onTry={onTry} />} footer={(s) => <Footer s={s} />} />
   );
 }

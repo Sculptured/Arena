@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { ARCHITECTURES, type ForkChoice, architectureOf, singleTeam, swapChanges, teamSwapProblem } from './architecture';
 import { fork } from '../api';
@@ -160,8 +160,11 @@ export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'ag
 }) {
   const f = useFork(branch, seq, onForked, choice, prefill);
   const a = f.architecture;
+  const top = useRef<HTMLDivElement>(null);
+  // Opened from a review's suggestion, maybe far up the page: brought into view.
+  useEffect(() => { if (prefill) top.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); }, [prefill]);
   return (
-    <div className="flex flex-col">
+    <div ref={top} className="flex scroll-mt-14 flex-col">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold">Change and rerun from step {seq}</h3>

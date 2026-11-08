@@ -1,5 +1,5 @@
-import { RotateCcw, Sparkles } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ChevronDown, ChevronUp, RotateCcw, Sparkles } from 'lucide-react';
+import { type ReactNode, useState } from 'react';
 import { Button } from '../components/ui/button';
 import { Panel, PanelHeader } from '../components/ui/panel';
 import { ErrorState } from '../components/ui/state';
@@ -31,25 +31,48 @@ function Stored<R>({ s, what, retryHint, onAgain, done }: {
   return s.review ? <>{done(s.review)}</> : null;
 }
 
+/** Whether review cards show only their headline: this browser's choice. */
+const SHORT_KEY = 'arena.review.short';
+
+function useShort(): [boolean, (v: boolean) => void] {
+  const [short, setShort] = useState(() => { try { return localStorage.getItem(SHORT_KEY) === '1'; } catch { return false; } });
+  const set = (v: boolean) => {
+    setShort(v);
+    try { localStorage.setItem(SHORT_KEY, v ? '1' : '0'); } catch { /* the choice lasts for this page */ }
+  };
+  return [short, set];
+}
+
+/** The headline line a short card keeps. */
+const Headline = ({ text }: { text: string }) => <p className="px-3 py-2.5 text-sm font-medium">{text}</p>;
+
+function ShortSwitch({ short, onShort }: { short: boolean; onShort: (v: boolean) => void }) {
+  return <Button size="sm" variant="ghost" onClick={() => onShort(!short)}>{short ? <><ChevronDown />Show all</> : <><ChevronUp />Headline only</>}</Button>;
+}
+
 /**
  * A review card: its title, "Review again" once it has an answer, and the review in its state;
  * `empty` shows before there is any review, `footer` under a finished one.
  */
-export function ReviewFrame<R extends RunReview | CompareReview>({ title, meta, label, h, what, retryHint, empty, done, footer }: {
+export function ReviewFrame<R extends RunReview | CompareReview>({ title, meta, label, h, what, retryHint, empty, done, headline, footer }: {
   title: string; meta?: string; label: string; h: ReviewHandle<R>; what: string; retryHint: string;
-  empty?: ReactNode; done: (r: R) => ReactNode; footer: (s: StoredReview<R>) => ReactNode;
+  empty?: ReactNode; done: (r: R) => ReactNode; headline: (r: R) => string; footer: (s: StoredReview<R>) => ReactNode;
 }) {
   const { stored, error, start } = h;
+  const [short, setShort] = useShort();
   const finished = stored != null && stored.status !== 'running';
+  const answered = stored?.status === 'done' && stored.review != null;
+  const show = (r: R) => (short ? <Headline text={headline(r)} /> : done(r));
   return (
     <Panel aria-label={label}>
       <PanelHeader title={<span className="flex items-center gap-1.5"><Sparkles className="size-3.5" />{title}</span>} meta={meta}>
         {finished && <Button size="sm" variant="ghost" onClick={() => start(true)} title="Ask the model again"><RotateCcw />Review again</Button>}
+        {answered && <ShortSwitch short={short} onShort={setShort} />}
       </PanelHeader>
       {error && <ErrorState className="m-3" error={error} hint="The review could not be started." onRetry={() => start()} />}
       {!stored && !error && empty}
-      {stored && <Stored s={stored} what={what} retryHint={retryHint} onAgain={() => start(true)} done={done} />}
-      {finished && footer(stored)}
+      {stored && <Stored s={stored} what={what} retryHint={retryHint} onAgain={() => start(true)} done={show} />}
+      {finished && !short && footer(stored)}
     </Panel>
   );
 }

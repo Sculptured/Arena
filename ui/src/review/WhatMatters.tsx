@@ -73,7 +73,7 @@ export default function WhatMatters({ target, hrefOf, what }: { target: Target; 
   if (!enabled || !h.loaded) return null;
   return (
     <ReviewFrame title="What matters" meta="an AI review of the comparison" label="What matters" h={h} what={what} retryHint="The comparison below is unchanged."
-      done={(r) => <CompareBody r={r} hrefOf={hrefOf} />} footer={(s) => <p className="border-t border-line px-3 py-1.5 text-2xs text-faint">{smallPrint(s)}</p>} />
+      headline={(r) => r.headline} done={(r) => <CompareBody r={r} hrefOf={hrefOf} />} footer={(s) => <p className="border-t border-line px-3 py-1.5 text-2xs text-faint">{smallPrint(s)}</p>} />
   );
 }
 
