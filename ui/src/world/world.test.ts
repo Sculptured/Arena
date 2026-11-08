@@ -233,6 +233,9 @@ describe('world view state', () => {
   it('says when a run made no model call', () => {
     expect(drivenLine([])).toBe('No model calls');
     expect(drivenLine([{ branch_id: 'b', seq: 2, at: '', agent: 'a', kind: 'model_call', payload: {} }])).toBe('');
+    // A CLI agent: no model_call events, but its end reports the tokens it used.
+    expect(drivenLine([{ branch_id: 'b', seq: 9, at: '', agent: 'a', kind: 'agent_end', payload: { tokens: 573562 } }])).toBe('');
+    expect(drivenLine([{ branch_id: 'b', seq: 9, at: '', agent: 'a', kind: 'agent_end', payload: { tokens: 0 } }])).toBe('No model calls');
     expect(stepHeadline(v1Detail.events, team, 1)).toBe('Step 1 · after setup');
     expect(stepHeadline(v1Detail.events, team, null)).toBe('No step');
   });
