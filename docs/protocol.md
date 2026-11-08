@@ -109,7 +109,7 @@ A benchmark program speaks the same transport.
 
 | Method | Params | Result |
 |---|---|---|
-| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket, setup?: [{part, tool, args}]}], instructions, instructions_title?, team?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool, scenario_options?: ScenarioOptions, view?: {docs: [part]}}` |
+| `describe` | `{}` | `{name, version, protocol, world: [{part, integration, config}], tasks: [{id, reason, ticket, setup?: [{part, tool, args}]}], instructions, instructions_title?, team?, teams?, tools: [ToolSchema], links?: [Link], gates?: [Gate], scored?: bool, scenario_options?: ScenarioOptions, view?: {docs: [part]}}` |
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
@@ -122,7 +122,11 @@ A benchmark program speaks the same transport.
   match `^[a-z0-9_-]+$`; the order is the order arenad's chain runner runs them in). Every agent may use
   every tool unless `read_only` is true, which keeps it to read tools; no agent has to hand off. arenad
   offers it as the default team, each agent run by Claude Code with model `sonnet` unless the request names
-  another kind, model or provider; when it is absent arenad offers one agent with a generic prompt.
+  another kind, model or provider; when it is absent arenad offers one agent with a generic prompt. A team
+  may say `runner`, the arenad runner its prompts are written for (`chain`, `concurrent` or `dispatch`; in a
+  `dispatch` run the first agent leads).
+- `teams` are more teams the benchmark suggests beside `team`, in the same shape, offered one click away
+  (`GET /api/teams`).
 - The CLI agents know the world's MCP server by the benchmark's `name` (any character outside
   `[A-Za-z0-9_-]` replaced by `_`), so their tools are `mcp__<name>__<tool>` in Claude Code.
 
