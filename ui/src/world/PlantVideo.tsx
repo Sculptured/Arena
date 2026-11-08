@@ -28,7 +28,7 @@ export default function PlantVideo({ branchId, events, step }: { branchId: strin
         <span className="font-medium text-foreground">Plant (Isaac Sim)</span>
         <span>{t == null ? 'arena time unknown' : `arena ${clockText(t)}`}{inherited}</span>
       </div>
-      <video ref={ref} src={rec.video} controls muted playsInline preload="metadata" className="w-full rounded bg-black" />
+      <video ref={ref} src={rec.video} controls muted playsInline preload="metadata" className="mx-auto block max-h-[46vh] w-auto max-w-full rounded bg-black" />
     </Panel>
   );
 }
