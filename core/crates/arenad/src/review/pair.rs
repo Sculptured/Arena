@@ -38,6 +38,9 @@ pub struct PairDigest {
 pub struct PairFacts {
     /// The first step at which the two branches did something different.
     pub first_divergent_seq: Option<i64>,
+    /// How many checks each passed, of how many.
+    pub checks_passed: [usize; 2],
+    pub checks_total: [usize; 2],
     /// The checks whose outcome differs between A and B.
     pub outcome_differs: Vec<OutcomeRow>,
     pub outcome_same: usize,
@@ -91,6 +94,8 @@ pub fn pair_digest(a: &RunRecord, b: &RunRecord, facts: &CompareFacts) -> PairDi
     let (outcome_differs, outcome_same) = outcome(&da, &db);
     let comparison = PairFacts {
         first_divergent_seq: facts.first_divergent_seq,
+        checks_passed: [passed(&da).0, passed(&db).0],
+        checks_total: [passed(&da).1, passed(&db).1],
         outcome_differs,
         outcome_same,
         metrics: SideBySide {
@@ -105,6 +110,15 @@ pub fn pair_digest(a: &RunRecord, b: &RunRecord, facts: &CompareFacts) -> PairDi
         b: db,
         comparison,
     }
+}
+
+/// How many of a digest's checks passed, of how many.
+fn passed(d: &Digest) -> (usize, usize) {
+    let items = d
+        .checks
+        .as_ref()
+        .map_or(&[][..], |c| c.items.items.as_slice());
+    (items.iter().filter(|c| c.passed).count(), items.len())
 }
 
 /// The checks whose outcome differs (by name, A's order then B's), and how many are the same.
@@ -249,6 +263,10 @@ mod tests {
             ]
         );
         assert_eq!(d.comparison.outcome_same, 10);
+        assert_eq!(
+            (d.comparison.checks_passed, d.comparison.checks_total),
+            ([9, 13], [14, 14])
+        );
         let w = &d.comparison.world;
         assert_eq!(w.differing_rows, 137);
         let total: usize = w
