@@ -79,7 +79,7 @@ mod tests {
     fn row(decision: Option<Value>) -> Value {
         let mut r = json!({"id": "chg-1", "action": "create_purchase_order", "system": "ERP",
             "summary": "Order", "payload": {"qty": 2}, "reason": null, "at_ms": 5,
-            "agent": "team.p1@arena", "agent_name": "Proposer 1", "checks": []});
+            "agent": "external.arena@arena", "agent_name": "arena", "checks": []});
         if let Some(d) = decision {
             r["decision"] = d;
         }
