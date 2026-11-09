@@ -22,7 +22,7 @@ const POLL: Duration = Duration::from_millis(200);
 /// Why a built-in suite stops when arenad shuts down.
 const SHUTTING_DOWN: &str = "arenad stopped before the suite finished";
 
-fn shutting_down(state: &AppState) -> bool {
+pub(crate) fn shutting_down(state: &AppState) -> bool {
     *state.shutdown.borrow()
 }
 
@@ -59,7 +59,7 @@ async fn drive_builtin(state: &Arc<AppState>, suite: &Suite) -> Result<()> {
 
 /// Starts the slot's run (waiting out a cleanup): its branch, or None when its setup failed
 /// (recorded on the slot). Saves over the limit stop the suite.
-async fn start_builtin(
+pub(crate) async fn start_builtin(
     state: &Arc<AppState>,
     suite: &Suite,
     slot: &Slot,
@@ -89,7 +89,7 @@ async fn start_builtin(
 }
 
 /// Waits until the branch is no longer running (or arenad shuts down).
-async fn wait_ended(state: &AppState, branch: &str) -> Result<()> {
+pub(crate) async fn wait_ended(state: &AppState, branch: &str) -> Result<()> {
     while !shutting_down(state) {
         match state.store.find_branch(branch).await? {
             Some(b) if b.status == BranchStatus::Running => tokio::time::sleep(POLL).await,

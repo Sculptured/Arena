@@ -39,6 +39,7 @@ use crate::{
     saves::{self, part_code, part_named, part_refusal, world_of},
 };
 
+mod experiments;
 mod external;
 mod flow;
 mod names;
@@ -70,6 +71,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(external::router())
         .merge(flow::router())
         .merge(suites::router())
+        .merge(experiments::router())
         .merge(review::router())
         .merge(twin::router())
         .merge(recording::router())

@@ -28,23 +28,27 @@ pub fn suite(id: &str, tasks: &[&str], repeats: i32) -> Suite {
         error: None,
         scenario: Default::default(),
         variants: vec![],
+        experiment_id: None,
+        setup_ord: None,
     }
 }
 
 /// `(name, passed, safety)`.
 pub type Chk = (&'static str, bool, bool);
 
+fn named(checks: &[Chk]) -> Vec<NamedCheck> {
+    let check = |&(name, passed, safety): &Chk| NamedCheck {
+        name: name.into(),
+        passed,
+        detail: String::new(),
+        safety,
+    };
+    checks.iter().map(check).collect()
+}
+
 /// A scored run's outcome with `checks`, `measured_s`, `tokens` and `cost_usd`.
 pub fn ran(checks: &[Chk], measured_s: f64, tokens: i64, cost_usd: Option<f64>) -> RunOutcome {
-    let checks: Vec<NamedCheck> = checks
-        .iter()
-        .map(|&(name, passed, safety)| NamedCheck {
-            name: name.into(),
-            passed,
-            detail: String::new(),
-            safety,
-        })
-        .collect();
+    let checks = named(checks);
     let goals = checks.iter().filter(|c| !c.safety);
     let all_passed = checks.iter().all(|c| c.passed);
     RunOutcome {

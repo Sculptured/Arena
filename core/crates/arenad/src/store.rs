@@ -12,8 +12,10 @@ use crate::{
 };
 use parts::proto::Mode;
 
+mod experiments;
 mod reviews;
 mod suites;
+pub use experiments::{NewExperiment, NewSetup};
 pub use reviews::{ReviewDone, StoredReview};
 pub use suites::NewSuite;
 
@@ -65,6 +67,7 @@ const EVENT_COLS: &str = "branch_id, seq, at, agent, kind, payload";
 async fn migrate(client: &Client) -> Result<()> {
     client.batch_execute(SCHEMA).await?;
     client.batch_execute(suites::SCHEMA).await?;
+    client.batch_execute(experiments::SCHEMA).await?;
     client.batch_execute(reviews::SCHEMA).await?;
     client
         .execute(
@@ -73,6 +76,7 @@ async fn migrate(client: &Client) -> Result<()> {
         )
         .await?;
     client.execute(suites::INTERRUPT, &[]).await?;
+    client.execute(experiments::INTERRUPT, &[]).await?;
     client.execute(reviews::INTERRUPT, &[]).await?;
     Ok(())
 }

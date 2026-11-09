@@ -23,6 +23,7 @@ use crate::scenario::Scenario;
 
 pub use compare::{compare, CheckDelta, Comparison, Delta, Verdict};
 pub use drive::{claim_external, spawn_builtin, ExternalClaim};
+pub(crate) use drive::{shutting_down, start_builtin, wait_ended};
 pub use load::{listed, load, Listed};
 pub use outcome::{outcome, RunOutcome, GOLD_CHECK};
 pub use report::{report, CheckRate, RunRow, Safety, Spread, SuiteReport};
@@ -53,6 +54,12 @@ pub struct Suite {
     /// The expanded scenarios each task × repeat runs in, one slot each (empty: just `scenario`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Scenario>,
+    /// The experiment the suite is a setup of (None: a suite on its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment_id: Option<String>,
+    /// The setup's place in its experiment, from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_ord: Option<i32>,
 }
 
 impl Suite {

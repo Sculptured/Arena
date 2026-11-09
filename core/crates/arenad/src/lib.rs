@@ -5,6 +5,7 @@ pub mod clock;
 pub mod compare;
 pub mod dispatch;
 pub mod exec;
+pub mod experiment;
 pub mod external;
 pub mod flow;
 pub mod fork;
