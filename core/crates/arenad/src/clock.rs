@@ -69,12 +69,6 @@ impl BranchClock {
         self.state.lock().unwrap().now_ms() as i64
     }
 
-    pub fn set_speed(&self, speed: f64) {
-        let mut s = self.state.lock().unwrap();
-        s.settle();
-        s.speed = speed;
-    }
-
     /// Stops the clock until the matching `resume` (pauses nest).
     pub fn pause(&self) {
         let mut s = self.state.lock().unwrap();
@@ -189,9 +183,5 @@ mod tests {
         let c = BranchClock::new(0, 4.0);
         sleep(50);
         assert!(c.now_ms() >= 190, "{}", c.now_ms());
-        c.set_speed(0.0);
-        let t = c.now_ms();
-        sleep(30);
-        assert_eq!(c.now_ms(), t);
     }
 }
