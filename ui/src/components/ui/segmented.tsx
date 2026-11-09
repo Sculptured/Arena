@@ -9,7 +9,7 @@ export function Segmented<T extends string | number>({ value, options, onChange,
       {options.map((o) => (
         <button key={String(o.id)} type="button" role="radio" aria-checked={o.id === value} disabled={disabled} onClick={() => onChange(o.id)}
           className={cn('h-7 min-w-10 rounded-[3px] px-3 text-sm tabular-nums transition-colors disabled:opacity-50',
-            o.id === value ? 'bg-raised font-medium text-fg shadow-panel ring-1 ring-line' : 'text-muted hover:text-fg')}>
+            o.id === value ? 'bg-raised font-medium text-fg shadow-panel ring-1 ring-line-strong/50' : 'text-muted hover:text-fg')}>
           {o.label}
         </button>
       ))}

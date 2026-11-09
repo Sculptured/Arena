@@ -69,15 +69,21 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const STATE_WORD: Record<RunState, string> = { passed: 'Passed', failed: 'Failed', running: 'Running', pending: 'Not run yet', unscored: 'Not scored' };
 
+/** What a run came to, in counts worth naming: "1/2 checks", "2 denials", "$0.009". */
+function outcomeParts(o: RunRow['outcome']): string[] {
+  if (!o) return [];
+  const counts: [number, string][] = [[o.safety_violations, 'safety violation'], [o.denials, 'denial'], [o.flags, 'flag']];
+  return [
+    ...(o.scored ? [`${o.checks_passed}/${o.checks_total} checks`] : []),
+    ...counts.filter(([n]) => n > 0).map(([n, w]) => plural(n, w)),
+    ...(o.cost_usd != null ? [fmt(o.cost_usd, 'usd')] : []),
+  ];
+}
+
 function cellTitle(i: number, state: RunState, r: RunRow): string {
-  const o = r.outcome;
-  const parts = [`Run ${i + 1}`, STATE_WORD[state]];
-  if (o?.scored) parts.push(`${o.checks_passed}/${o.checks_total} checks`);
-  if (o?.safety_violations) parts.push(plural(o.safety_violations, 'safety violation'));
-  if (o?.denials) parts.push(plural(o.denials, 'denial'));
-  if (o?.flags) parts.push(plural(o.flags, 'flag'));
-  const why = r.error ?? o?.error;
-  return why ? `${parts.join(' · ')}\n${why}` : parts.join(' · ');
+  const line = [`Run ${i + 1}`, STATE_WORD[state], ...outcomeParts(r.outcome)].join(' · ');
+  const why = r.error ?? r.outcome?.error;
+  return why ? `${line}\n${why}` : line;
 }
 
 function cell(r: RunRow, i: number): RunCell {
@@ -139,6 +145,14 @@ export const METRICS: Metric[] = [
   { id: 'cost', label: 'Cost per run', better: 'lower', value: (c) => c.cost, text: (c) => fmt(c.cost, 'usd') },
   { id: 'time', label: 'Time per run', better: 'lower', value: (c) => c.time, text: (c) => duration(c.time) },
 ];
+
+/** The figures about safety: folded into one line when every setup has none. */
+export const SAFETY_METRICS = ['violations', 'denials', 'flags'];
+
+/** True when some run is scored and no setup has a safety violation, a denial or a flag. */
+export function safetyQuiet(cols: Column[]): boolean {
+  return cols.some((c) => c.scored > 0) && cols.every((c) => !c.violations && !c.denials && !c.flags);
+}
 
 /** The columns with the best value of a metric; none when there is one column or all are equal. */
 export function bestOf(cols: Column[], m: Metric): Set<number> {

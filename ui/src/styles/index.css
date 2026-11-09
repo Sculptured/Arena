@@ -25,10 +25,14 @@
   --fg: #15181c;
   --muted: #5a6169;
   --faint: #8b9199;
-  /* The one accent: interaction (focus, selection, the primary action). */
+  /* The one accent: interaction (focus, selection, links). */
   --accent: #2b5c94;
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  /* The primary action: a solid fill with white text in both themes. */
+  --primary: #2b5c94;
+  --primary-hover: #234d7d;
+  --primary-fg: #ffffff;
   /* Abnormal states only. */
   --alarm: #b42318;
   --alarm-soft: color-mix(in srgb, var(--alarm) 9%, transparent);
@@ -61,6 +65,9 @@
   --faint: #737a82;
   --accent: #8ab2de;
   --accent-fg: #0d1520;
+  --primary: #3d78c2;
+  --primary-hover: #4a86d0;
+  --primary-fg: #ffffff;
   --alarm: #f07167;
   --alarm-soft: color-mix(in srgb, var(--alarm) 13%, transparent);
   --warn: #e3ac4a;
@@ -90,6 +97,9 @@
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
   --color-alarm: var(--alarm);
   --color-alarm-soft: var(--alarm-soft);
   --color-warn: var(--warn);
@@ -106,7 +116,7 @@
 @theme {
   --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* Type scale: 11 / 12 / 13 (body) / 14 / 16 / 20 px, and 28 px for a result's headline figure. */
+  /* Type scale: 11 / 12 / 13 (body) / 14 / 16 / 20 px, 28 px and 40 px for a result's headline figure. */
   --text-2xs: 11px;
   --text-2xs--line-height: 16px;
   --text-xs: 12px;
@@ -121,6 +131,8 @@
   --text-xl--line-height: 28px;
   --text-2xl: 28px;
   --text-2xl--line-height: 32px;
+  --text-3xl: 40px;
+  --text-3xl--line-height: 44px;
   /* Radii: controls and chips, panels, dialogs. */
   --radius-sm: 3px;
   --radius-md: 4px;

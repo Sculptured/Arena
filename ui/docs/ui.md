@@ -20,12 +20,15 @@ secondary metadata lines, few borders, plenty of whitespace.
   last); **Runs per setup** (1, 3, 5, 10; default 5); a bottom bar with "2 setups × 5 runs = 10 runs",
   what blocks starting, and **Run experiment**.
 - **Experiment** (`/experiments/:id`, `/experiments/compare?ids=`): the name, status and scenario
-  line; **Stop** while it runs. One column per setup (`experiments/Results.tsx`, model in
-  `experiments/model.ts`): the pass rate large with its 95% Wilson range as a band, a square per run
-  (solid passed, ✕ failed, ! not scored, pulsing running, dashed not run yet, a red dot for a safety
-  violation; each opens its run), then checks passed, safety violations, denied actions, flags for a
-  human, cost and time per run, the best in bold. Under it the checks that some run failed, side by
-  side as bars (all of them one click away). Two setups that ended get the AI comparison line above.
+  line; **Stop** while it runs. The page is as wide as its setups need (two fit a narrow page, four a
+  wide one). One card per setup (`experiments/Results.tsx`, model in `experiments/model.ts`): name
+  and team; the pass rate at 40 px over one bar (passes in the result ink, failures in the alarm
+  ink) with the 95% Wilson range as a whisker under it; a square per run (ink passed, red ✕ failed,
+  ! not scored, pulsing running, dashed not run yet, a dot for a safety violation; hover shows its
+  checks and cost, click opens it); then checks passed, cost and time, the best in bold. Safety
+  violations, denied actions and flags are rows only when some setup has one; otherwise one quiet
+  "No safety violations, denied actions or flags". Under the cards, the AI comparison for two
+  setups, then the checks that some run failed, side by side.
 - **Runs** (`/runs`, `pages/Runs.tsx`): name, team, result, when; reruns under their run as "↳
   Rerun". A row opens on Run once's live view; its menu has All details, Process view and Delete.
 - **Run once** (`/run`, `pages/Home.tsx`, `home/`): the world's name, a task picker, the team board
@@ -75,7 +78,8 @@ Tailwind names and never raw colours.
 | Surfaces | `bg`, `surface`, `raised`, `sunken`, `hover` | canvas, panels, controls, wells and code, row hover |
 | Lines | `line`, `line-strong` | hairlines, strong borders and lane bars |
 | Text | `fg`, `muted`, `faint` | body, secondary, tertiary |
-| Accent (the only one) | `accent`, `accent-fg`, `accent-soft` | focus, selection, the primary action |
+| Accent (the only one) | `accent`, `accent-fg`, `accent-soft` | focus, selection, links |
+| Primary | `primary`, `primary-hover`, `primary-fg` | the one primary button: solid, white text, both themes |
 | Abnormal only | `alarm`, `alarm-soft`, `warn`, `warn-soft` | refused, failed, unsafe; approximate restore |
 | Result ink | `ok` | a passed run's square, a bar of passes (an ink, never a colour) |
 | Process view | `equip`, `equip-line`, `flow`, `flow-strong` | equipment shapes; read flows and write flows |
@@ -83,7 +87,7 @@ Tailwind names and never raw colours.
 - **Type.** Inter (variable) for text and JetBrains Mono (variable) for ids, numbers and JSON, both
   bundled with `@fontsource-variable`; figures use Inter's tabular digits, mono is for ids, code and
   the timeline axis. The scale is `text-2xs` 11 px (labels), `text-xs` 12, `text-sm` 13 (body),
-  `text-base` 14, `text-lg` 16, `text-xl` 20 (page titles) and `text-2xl` 28 (a result's headline).
+  `text-base` 14, `text-lg` 16, `text-xl` 20 (page titles), `text-2xl` 28 and `text-3xl` 40 (a result's headline).
 - **Spacing.** Tailwind's 4 px scale. Pages use a 16 px gutter on phones and 24 px from `sm`, and one
   of four widths (`PageHeader`/`PageBody` `width`: narrow 768, default 1024, wide 1280, full). Panels
   are spaced 16 px apart. Table rows are 32 px tall.

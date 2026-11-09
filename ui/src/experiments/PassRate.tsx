@@ -3,30 +3,46 @@ import type { Column } from './model';
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-/** The pass rate's 95% range as a faint band on a track, the rate itself as a mark on it. */
-function RangeBar({ rate, range }: { rate: number; range: [number, number] }) {
+/**
+ * The scored runs as one bar, passes in the result ink and failures in the alarm ink, and under it
+ * the 95% range of the pass rate as a whisker on the same scale.
+ */
+function Bar({ c, rate, range }: { c: Column; rate: number; range: [number, number] }) {
   return (
-    <Tooltip content={`95% range: ${pct(range[0])} to ${pct(range[1])}`}>
-      <span className="relative block h-1.5 w-full rounded-full bg-line">
-        <span className="absolute inset-y-0 rounded-full bg-line-strong" style={{ left: pct(range[0]), width: pct(range[1] - range[0]) }} />
-        <span className="absolute top-1/2 size-2.5 -translate-1/2 rounded-full border-2 border-surface bg-fg" style={{ left: pct(rate) }} />
-      </span>
+    <Tooltip content={`${c.passed} of ${c.scored} passed\n95% range: ${pct(range[0])} to ${pct(range[1])}`}>
+      <div className="flex flex-col gap-1.5" aria-label={`Pass rate ${pct(rate)}, 95% range ${pct(range[0])} to ${pct(range[1])}`}>
+        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-line">
+          <span className="h-full bg-ok" style={{ width: pct(rate) }} />
+          <span className="h-full bg-alarm" style={{ width: pct(1 - rate) }} />
+        </div>
+        <div className="relative h-2" aria-hidden="true">
+          <span className="absolute top-1/2 h-px -translate-y-1/2 bg-faint" style={{ left: pct(range[0]), width: pct(range[1] - range[0]) }} />
+          <span className="absolute inset-y-0 w-px bg-faint" style={{ left: pct(range[0]) }} />
+          <span className="absolute inset-y-0 w-px -translate-x-px bg-faint" style={{ left: pct(range[1]) }} />
+        </div>
+      </div>
     </Tooltip>
   );
 }
 
-/** "60%" large, "3 of 5 passed" under it, and the range it could really be. */
+/** The pass rate, the hero of a setup: the figure large, "3 of 5 passed", and the bar. */
 export default function PassRate({ c }: { c: Column }) {
   if (c.rate == null || !c.range) {
-    return <div className="flex flex-col gap-2"><span className="text-2xl font-semibold text-faint">–</span><span className="text-xs text-muted">No run scored yet</span></div>;
+    return (
+      <div className="flex flex-col gap-3">
+        <span className="text-3xl font-semibold tracking-tight text-faint">–</span>
+        <div className="h-2.5 w-full rounded-full bg-line" />
+        <span className="text-xs text-muted">{c.runs.some((r) => r.state === 'running') ? 'First run in progress' : 'No run scored yet'}</span>
+      </div>
+    );
   }
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-semibold tracking-tight tabular-nums">{pct(c.rate)}</span>
-        <span className="text-xs text-muted">{c.passed} of {c.scored} passed</span>
+        <span className="text-3xl font-semibold tracking-tight tabular-nums">{pct(c.rate)}</span>
+        <span className="text-sm text-muted">{c.passed} of {c.scored} passed</span>
       </div>
-      <RangeBar rate={c.rate} range={c.range} />
+      <Bar c={c} rate={c.rate} range={c.range} />
     </div>
   );
 }

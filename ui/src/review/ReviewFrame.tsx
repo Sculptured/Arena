@@ -7,9 +7,9 @@ import type { CompareReview, RunReview, StoredReview } from './types';
 /** "Reviewing…": a calm line while the model reads the record. */
 export function Reviewing({ what }: { what: string }) {
   return (
-    <div className="flex items-center gap-3 py-1" aria-busy="true">
-      <span className="relative block h-1 w-24 shrink-0 overflow-hidden rounded-full bg-sunken"><span className="absolute inset-y-0 w-1/3 animate-slide rounded-full bg-line-strong" /></span>
-      <span className="text-sm text-muted" title={`A model is reading ${what}. This takes a minute or so.`}>Reviewing…</span>
+    <div className="flex items-center gap-2 text-sm text-muted" aria-busy="true" title={`A model is reading ${what}. This takes a minute or so.`}>
+      <Sparkles className="size-3.5 shrink-0 animate-pulse" aria-hidden="true" />
+      <span>AI review in progress…</span>
     </div>
   );
 }

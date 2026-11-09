@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
-import { PageBody, PageHeader } from '../components/ui/page';
+import { PageBody, PageHeader, type Width } from '../components/ui/page';
 import { Panel } from '../components/ui/panel';
 import { ErrorState, LoadingState } from '../components/ui/state';
 import { StatusMark } from '../components/ui/status';
@@ -12,7 +12,7 @@ import { useTaskNames } from '../home/useHome';
 import { usePolled } from '@/lib/usePolled';
 import { experiment as fetchExperiment, stopExperiment } from './api';
 import { columnOf } from './model';
-import { Checks, Columns } from './Results';
+import { Checks, Setups } from './Results';
 import { SuiteWhatMatters } from '../review/WhatMatters';
 import type { Experiment } from './types';
 
@@ -55,14 +55,17 @@ function StopButton({ id, onStopped }: { id: string; onStopped: () => void }) {
   );
 }
 
+/** As wide as the setups need: two side by side fit a narrow page, four a wide one. */
+const widthFor = (n: number): Width => (n <= 2 ? 'narrow' : n === 3 ? 'default' : 'wide');
+
 const ended = (e: Experiment) => e.setups.reduce((n, s) => n + s.summary.ended, 0);
 const total = (e: Experiment) => e.setups.reduce((n, s) => n + s.summary.runs, 0);
 
-function Header({ list, reload }: { list: Experiment[]; reload: () => void }) {
+function Header({ list, reload, width }: { list: Experiment[]; reload: () => void; width: Width }) {
   const one = list.length === 1 ? list[0] : null;
   const running = one?.status === 'running';
   return (
-    <PageHeader width="wide" title={one ? one.name : 'Comparison'}
+    <PageHeader width={width} title={one ? one.name : 'Comparison'}
       status={one && <StatusMark mark={experimentMark(one.status)} title={one.error ?? undefined} />}
       meta={<ScenarioLine e={list[0]} />}
       actions={running && one && <><span className="text-xs text-muted tabular-nums">{ended(one)} of {total(one)} runs</span><StopButton id={one.id} onStopped={reload} /></>} />
@@ -72,17 +75,18 @@ function Header({ list, reload }: { list: Experiment[]; reload: () => void }) {
 function View({ ids }: { ids: string[] }) {
   const { list, error, reload } = useExperiments(ids);
   if (!list) {
-    return <><PageHeader width="wide" title={error ? 'Experiment' : <span className="block h-7 w-72 animate-pulse rounded-md bg-sunken" />} /><PageBody width="wide">{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the results…" rows={7} /></Panel>}</PageBody></>;
+    return <><PageHeader width="default" title={error ? 'Experiment' : <span className="block h-7 w-72 animate-pulse rounded-md bg-sunken" />} /><PageBody width="default">{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the results…" rows={7} /></Panel>}</PageBody></>;
   }
   const reports = list.flatMap((e) => e.setups);
+  const width = widthFor(reports.length);
   return (
     <>
-      <Header list={list} reload={reload} />
-      <PageBody width="wide">
+      <Header list={list} reload={reload} width={width} />
+      <PageBody width={width}>
         {error && <ErrorState error={error} hint="Showing the last results read." onRetry={reload} />}
         {list.filter((e) => e.error && e.error !== 'stopped').map((e) => <ErrorState key={e.id} error={e.error!} hint="The experiment stopped early. The runs that ended are scored." />)}
+        <Setups cols={reports.map(columnOf)} />
         {reports.length === 2 && list.every((e) => e.status !== 'running') && <SuiteWhatMatters a={reports[0].id} b={reports[1].id} />}
-        <Columns cols={reports.map(columnOf)} />
         <Checks reports={reports} />
       </PageBody>
     </>

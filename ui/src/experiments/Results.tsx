@@ -6,10 +6,10 @@ import { cn } from '@/lib/cn';
 import type { SuiteReport } from '../control/types';
 import PassRate from './PassRate';
 import RunStrip from './RunStrip';
-import { type CheckCell, type CheckRow, type Column, METRICS, bestOf, checkLabel, checkMatrix } from './model';
+import { type CheckCell, type CheckRow, type Column, METRICS, type Metric, SAFETY_METRICS, bestOf, checkLabel, checkMatrix, safetyQuiet } from './model';
 
-/** The label column, then one column per setup, never wider than a setup needs. */
-const gridOf = (n: number): CSSProperties => ({ gridTemplateColumns: `minmax(120px, 160px) repeat(${n}, minmax(0, 300px))` });
+/** The checks' label column, then one column per setup. */
+const gridOf = (n: number): CSSProperties => ({ gridTemplateColumns: `minmax(140px, 200px) repeat(${n}, minmax(0, 1fr))` });
 
 function Row({ label, n, children, className }: { label: ReactNode; n: number; children: ReactNode; className?: string }) {
   return (
@@ -20,43 +20,46 @@ function Row({ label, n, children, className }: { label: ReactNode; n: number; c
   );
 }
 
-function Heads({ cols }: { cols: Column[] }) {
+/** Cards side by side, as many columns as setups once there is room. */
+const COLS: Record<number, string> = { 1: '', 2: 'sm:grid-cols-2', 3: 'md:grid-cols-3', 4: 'md:grid-cols-2 xl:grid-cols-4' };
+
+function Figure({ m, c, best }: { m: Metric; c: Column; best: boolean }) {
+  const bad = !!m.abnormal?.(c);
   return (
-    <div className="grid gap-x-6 px-4 pt-4 pb-3" style={gridOf(cols.length)}>
-      <span />
-      {cols.map((c) => (
-        <div key={c.id} className="flex min-w-0 flex-col">
-          <span className="line-clamp-2 text-sm font-semibold" title={c.name}>{c.name}</span>
-          <span className="truncate text-xs text-muted" title={c.team}>{c.team}</span>
-        </div>
-      ))}
+    <div className="flex items-baseline justify-between gap-3 py-1.5">
+      <dt className="text-xs text-muted">{m.label}</dt>
+      <dd className={cn('text-sm tabular-nums', best ? 'font-semibold' : 'text-fg/80', bad && 'font-semibold text-alarm')}>{bad && <span aria-hidden="true">◆ </span>}{m.text(c)}</dd>
     </div>
   );
 }
 
-/** One column per setup: the pass rate, a square per run, then each figure, the best one in bold. */
-export function Columns({ cols }: { cols: Column[] }) {
-  const n = cols.length;
+/** One setup: its name and team, the pass rate large, a square per run, then its figures. */
+function SetupCard({ c, figures, best, quiet }: { c: Column; figures: Metric[]; best: (m: Metric) => boolean; quiet: boolean }) {
   return (
-    <Panel className="overflow-x-auto">
-      <div className="min-w-fit">
-        <Heads cols={cols} />
-        <Row label="Pass rate" n={n} className="py-4">{cols.map((c) => <PassRate key={c.id} c={c} />)}</Row>
-        <Row label="Runs" n={n}>{cols.map((c) => <RunStrip key={c.id} runs={c.runs} />)}</Row>
-        {METRICS.map((m) => {
-          const best = bestOf(cols, m);
-          return (
-            <Row key={m.id} label={m.label} n={n}>
-              {cols.map((c, i) => (
-                <span key={c.id} className={cn('text-sm tabular-nums', best.has(i) ? 'font-semibold' : 'text-fg/80', m.abnormal?.(c) && 'font-semibold text-alarm')}>
-                  {m.abnormal?.(c) && <span aria-hidden="true">◆ </span>}{m.text(c)}
-                </span>
-              ))}
-            </Row>
-          );
-        })}
-      </div>
+    <Panel className="flex flex-col gap-5 p-5">
+      <header className="flex min-h-10 flex-col">
+        <h2 className="line-clamp-2 text-sm font-semibold" title={c.name}>{c.name}</h2>
+        <span className="truncate text-xs text-muted" title={c.team}>{c.team}</span>
+      </header>
+      <PassRate c={c} />
+      <RunStrip runs={c.runs} />
+      <dl className="flex flex-col border-t border-line pt-2">
+        {figures.map((m) => <Figure key={m.id} m={m} c={c} best={best(m)} />)}
+        {quiet && <p className="pt-1.5 text-xs text-muted"><span aria-hidden="true">✓ </span>No safety violations, denied actions or flags</p>}
+      </dl>
     </Panel>
+  );
+}
+
+/** A card per setup: the pass rate first, then the runs, then the figures, the best of each in bold. */
+export function Setups({ cols }: { cols: Column[] }) {
+  const quiet = safetyQuiet(cols);
+  const figures = quiet ? METRICS.filter((m) => !SAFETY_METRICS.includes(m.id)) : METRICS;
+  const bests = new Map(figures.map((m) => [m.id, bestOf(cols, m)]));
+  return (
+    <div className={cn('grid gap-4', COLS[cols.length])}>
+      {cols.map((c, i) => <SetupCard key={c.id} c={c} figures={figures} quiet={quiet} best={(m) => !!bests.get(m.id)?.has(i)} />)}
+    </div>
   );
 }
 
