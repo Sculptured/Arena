@@ -420,6 +420,11 @@ impl World {
         self.tools.iter().map(|(t, _)| t)
     }
 
+    /// True when `name` is one of the world's tools agents get.
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tools().any(|t| t.name == name)
+    }
+
     pub fn is_write(&self, name: &str) -> bool {
         self.tools()
             .any(|t| t.name == name && t.effect == Effect::Write)

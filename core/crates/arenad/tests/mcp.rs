@@ -31,6 +31,7 @@ fn run<F: Future>(f: F) -> F::Output {
 
 fn agent(id: &str) -> AgentSpec {
     AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
@@ -57,16 +58,21 @@ async fn setup(tag: &str) -> Fx {
     setup_with(tag, &[], "retail").await
 }
 
-/// A run of a three-agent team (the middle one read-only) with one branch, recorded in `store`.
+/// A run of a four-agent team (the second read-only, the third given one tool) with one branch,
+/// recorded in `store`.
 async fn new_branch(store: &Store) -> (Team, String) {
     let auditor = AgentSpec {
         read_only: true,
         ..agent("auditor")
     };
+    let lister = AgentSpec {
+        tools: vec!["get_user_details".into()],
+        ..agent("lister")
+    };
     let team = Team {
         id: "t".into(),
         name: "T".into(),
-        agents: vec![agent("triage"), auditor, agent("resolver")],
+        agents: vec![agent("triage"), auditor, lister, agent("resolver")],
     };
     let run_id = store.create_run("task", &team).await.unwrap();
     let branch = store
@@ -201,6 +207,24 @@ fn tools_list_has_writes_unless_read_only_and_handoff_unless_last() {
         assert!(
             t["name"].is_string() && t["description"].is_string() && t["inputSchema"].is_object(),
             "{t}"
+        );
+        teardown(fx).await;
+    })
+}
+
+#[test]
+fn an_agent_whose_setup_lists_tools_sees_and_calls_only_those() {
+    run(async {
+        let fx = setup("allow").await;
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
+        let (_, l) = rpc(&fx, "lister", req).await;
+        let world: Vec<String> = names(&l).into_iter().filter(|n| n != "handoff").collect();
+        assert_eq!(world, ["get_user_details"]);
+        let r = call(&fx, "lister", "modify_user_address", address_args()).await;
+        assert_eq!(r["isError"], true);
+        assert_eq!(
+            r["content"][0]["text"],
+            "modify_user_address is not available to this agent: its setup does not list it"
         );
         teardown(fx).await;
     })

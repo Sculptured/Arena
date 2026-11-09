@@ -751,6 +751,7 @@ mod tests {
 
     fn spec(id: &str, kind: AgentKind) -> AgentSpec {
         AgentSpec {
+            tools: Vec::new(),
             id: id.into(),
             name: id.into(),
             kind,

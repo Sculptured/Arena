@@ -99,6 +99,7 @@ fn run_as(team: &mut Team, pick: &Pick) {
 
 fn generic_team() -> Team {
     let solo = TeamRole {
+        tools: Vec::new(),
         id: "agent".into(),
         name: "Agent".into(),
         prompt: GENERIC_PROMPT.into(),
@@ -131,6 +132,7 @@ fn agent(role: &TeamRole) -> AgentSpec {
         lead: false,
         url: None,
         headers: Default::default(),
+        tools: role.tools.clone(),
     }
 }
 
@@ -177,6 +179,7 @@ mod tests {
     #[test]
     fn a_benchmark_team_is_used_as_given() {
         let role = |id: &str| TeamRole {
+            tools: Vec::new(),
             id: id.into(),
             name: id.to_uppercase(),
             prompt: format!("be {id}"),
@@ -231,6 +234,7 @@ mod tests {
 
     fn role(id: &str) -> TeamRole {
         TeamRole {
+            tools: Vec::new(),
             id: id.into(),
             name: id.into(),
             prompt: id.into(),

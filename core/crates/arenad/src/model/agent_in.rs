@@ -43,6 +43,8 @@ pub(super) struct AgentSpecIn {
     url: Option<String>,
     #[serde(default)]
     headers: Headers,
+    #[serde(default)]
+    tools: Vec<String>,
 }
 
 impl From<AgentSpecIn> for AgentSpec {
@@ -69,6 +71,7 @@ impl From<AgentSpecIn> for AgentSpec {
             lead: a.lead,
             url: a.url,
             headers: a.headers,
+            tools: a.tools,
         }
     }
 }
@@ -77,6 +80,15 @@ impl From<AgentSpecIn> for AgentSpec {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_tools_allowlist_survives_reading() {
+        let a: AgentSpec = serde_json::from_value(json!({"id": "a", "name": "A",
+            "kind": "claude_code", "tools": ["read_tag"]}))
+        .unwrap();
+        assert_eq!(a.tools, ["read_tag"]);
+        assert!(a.may_use("read_tag") && !a.may_use("write_tag"));
+    }
 
     #[test]
     fn a_bedrock_agent_is_an_open_agent_on_bedrock() {

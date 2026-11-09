@@ -58,6 +58,7 @@ async fn setup(tag: &str, providers: Option<ProviderConfig>) -> Fx {
 
 fn spec(id: &str, kind: AgentKind) -> AgentSpec {
     AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind,

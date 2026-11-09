@@ -118,9 +118,9 @@ A benchmark program speaks the same transport.
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
   `Instructions` when it is absent.
-- `team` is the team the benchmark suggests, `{id, name, agents: [{id, name, prompt, read_only?}]}` (ids
+- `team` is the team the benchmark suggests, `{id, name, agents: [{id, name, prompt, read_only?, tools?}]}` (ids
   match `^[a-z0-9_-]+$`; the order is the order arenad's chain runner runs them in). Every agent may use
-  every tool unless `read_only` is true, which keeps it to read tools; no agent has to hand off. arenad
+  every tool unless `read_only` is true, which keeps it to read tools, or `tools` lists the world tools it gets; no agent has to hand off. arenad
   offers it as the default team, each agent run by Claude Code with model `sonnet` unless the request names
   another kind, model or provider; when it is absent arenad offers one agent with a generic prompt. A team
   may say `runner`, the arenad runner its prompts are written for (`chain`, `concurrent` or `dispatch`; in a

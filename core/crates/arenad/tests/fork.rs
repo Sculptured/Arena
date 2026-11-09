@@ -50,6 +50,7 @@ fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) 
 /// A team for data only (never run).
 fn team() -> Team {
     let agent = |id: &str| AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
