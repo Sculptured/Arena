@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { cn } from '@/lib/cn';
 import { ARCHITECTURES, type ForkChoice, architectureOf, singleTeam, swapChanges, teamSwapProblem } from './architecture';
 import { fork } from '../api';
@@ -126,10 +126,10 @@ function useArchitecture() {
 }
 
 /** Edits to the team, the restore and the start button, kept for one step. */
-function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void, initial: ForkChoice, prefill?: Record<string, Change>) {
-  const [choice, setChoice] = useState<ForkChoice>(prefill ? 'agents' : initial);
+function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) => void, initial: ForkChoice) {
+  const [choice, setChoice] = useState<ForkChoice>(initial);
   const architecture = useArchitecture();
-  const [edits, setEdits] = useState<Record<string, Change>>(prefill ?? {});
+  const [edits, setEdits] = useState<Record<string, Change>>({});
   const [restore, setRestore] = useState<RestoreMode>('exact');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -148,23 +148,18 @@ function useFork(branch: BranchDetail, seq: number, onForked: (r: ForkResponse) 
   return { choice, setChoice, architecture, edits, set, restore, setRestore, plan, list, changes, team, go, busy, err, blocked };
 }
 
-export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents', prefill }: {
+export default function ForkPanel({ branch, seq, onForked, onClose, choice = 'agents' }: {
   branch: BranchDetail;
   seq: number;
   onForked: (r: ForkResponse) => void;
   onClose?: () => void;
-  /** Which change the panel opens with ("Rewind here" in the world view opens "Swap architecture"). */
+  /** Which change the panel opens with (from the world view: "Swap architecture"). */
   choice?: ForkChoice;
-  /** Changes to start with (an AI review's "Rewind and try this"). */
-  prefill?: Record<string, Change>;
 }) {
-  const f = useFork(branch, seq, onForked, choice, prefill);
+  const f = useFork(branch, seq, onForked, choice);
   const a = f.architecture;
-  const top = useRef<HTMLDivElement>(null);
-  // Opened from a review's suggestion, maybe far up the page: brought into view.
-  useEffect(() => { if (prefill) top.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); }, [prefill]);
   return (
-    <div ref={top} className="flex scroll-mt-14 flex-col">
+    <div className="flex flex-col">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold">Change and rerun from step {seq}</h3>

@@ -97,3 +97,12 @@ export function withSlugIds(agents: AgentSpec[]): AgentSpec[] {
     return { ...a, id };
   });
 }
+
+const MARK = '\n\nDeployment rules:\n';
+
+/** A prompt with the rules in place of any earlier deployment rules. */
+export function withRules(prompt: string, rules: string): string {
+  const base = prompt.includes(MARK) ? prompt.slice(0, prompt.indexOf(MARK)) : prompt;
+  const r = rules.trim();
+  return r ? `${base.trimEnd()}${MARK}${r}` : base;
+}

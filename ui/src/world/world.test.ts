@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseStep, withStep } from '../run/useStepParam';
 import { drivenLine, stepHeadline, worldState } from './page';
-import { swapChanges, withRules, forkChoiceOf, singleTeam, teamSwapProblem, ARCHITECTURES } from '../run/architecture';
+import { swapChanges, forkChoiceOf, singleTeam, teamSwapProblem, ARCHITECTURES } from '../run/architecture';
+import { withRules } from '../team';
 import type { Event } from '../types';
-import { FORK_SEQ, RUN_ID, V1, baseView, team, v1Detail, v2Detail, views } from './fixtures';
+import { FORK_SEQ, V1, baseView, team, v1Detail, v2Detail, views } from './fixtures';
 import { BUS_LANE, roundedPath, MIN_TILE_W, PROCESS_ORDER, TILE_H, TILE_H_CHANGED, arrowBetween, fitsSideBySide, splitAreas, twinLayout } from './layout';
-import { buildTrack, happenings, moveStop, nearestStop, rewindLink, rewindSeq, snapStop, trackAt, trackMarks } from './scrub';
+import { buildTrack, happenings, moveStop, nearestStop, rewindSeq, snapStop, trackAt, trackMarks } from './scrub';
 import { isIdLike, diffViews, itemFacts, itemShort, normalizeViews, statusGlyph, statusMark, viewIndexAt, viewsFromEvents } from './twin';
 
 const v1Views = views[V1];
@@ -178,7 +179,6 @@ describe('scrubber', () => {
     expect(rewindSeq(v1Detail.events, 10_000)).toBeNull();
     const evs: Event[] = [{ branch_id: 'b', seq: 4, at: '', agent: 'link', kind: 'tool_call', payload: {} }, { branch_id: 'b', seq: 5, at: '', agent: null, kind: 'world_view', payload: {} }, { branch_id: 'b', seq: 6, at: '', agent: 'a', kind: 'tool_call', payload: {} }];
     expect(rewindSeq(evs, 3)).toBe(6);
-    expect(rewindLink(RUN_ID, V1, 14)).toBe(`/runs/${RUN_ID}/${V1}?step=14&fork=1&change=architecture`);
   });
 });
 
@@ -211,22 +211,18 @@ describe('swap architecture', () => {
 });
 
 describe('world view state', () => {
-  const input = { views: v1Views, step: null, events: v1Detail.events, team, startSeq: null, runId: RUN_ID, branchId: V1, running: false };
+  const input = { views: v1Views, step: null, events: v1Detail.events, team, startSeq: null };
   it('shows the last view when the address names no step', () => {
     const s = worldState(input);
     expect(s.index).toBe(v1Views.length - 1);
     expect(s.current).toBe(v1Views.at(-1)!.seq);
-    expect(s.rewind.seq).toBe(v1Detail.events.find((e) => e.kind === 'agent_end')!.seq);
-    expect(worldState({ ...input, events: v1Detail.events.filter((e) => e.kind !== 'agent_end') }).rewind).toMatchObject({ href: null, why: 'Nothing after this step to rerun.' });
   });
 
-  it('at the step before the bad decision, offers to rewind from exactly there', () => {
+  it('names the step on screen', () => {
     const before = v1Views.filter((v) => v.seq < FORK_SEQ).at(-1)!.seq;
     const s = worldState({ ...input, step: before });
     expect(s.current).toBe(before);
     expect(s.headline).toBe(`Step ${before} · Logistics · cold_chain_quotes`);
-    expect(s.rewind).toMatchObject({ seq: FORK_SEQ, href: rewindLink(RUN_ID, V1, FORK_SEQ) });
-    expect(worldState({ ...input, step: before, running: true }).rewind.href).toBeNull();
     expect(worldState({ ...input, views: [] }).view).toBeNull();
   });
 

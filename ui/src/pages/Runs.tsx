@@ -55,7 +55,7 @@ function RowMenu({ row, onDelete }: { row: BranchRow; onDelete: (r: RunSummary) 
 }
 
 /** A row opens on the Run screen: its result and timeline, with everything else one click away. */
-const openOf = (r: BranchRow) => `/?run=${encodeURIComponent(r.run.id)}&branch=${encodeURIComponent(r.branch.id)}`;
+const openOf = (r: BranchRow) => `/run?run=${encodeURIComponent(r.run.id)}&branch=${encodeURIComponent(r.branch.id)}`;
 
 /** The run's name (its team is the tooltip); a rerun is "↳ Rerun", its note the tooltip. */
 function NameCell({ row, name }: { row: BranchRow; name: string }) {
@@ -114,7 +114,7 @@ export default function Runs() {
   const rows = useMemo(() => (runs ? branchRows(runs) : null), [runs]);
   const nameOf = useCallback((r: BranchRow) => runTitle(r.run, (id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : ''; }), [tasks]);
   const cols = useMemo(() => columns(nameOf, setDeleting), [nameOf]);
-  const newRun = <Button variant="primary" asChild><Link to="/"><Play />New run</Link></Button>;
+  const newRun = <Button variant="primary" asChild><Link to="/run"><Play />Run once</Link></Button>;
   return (
     <>
       <PageHeader title="History" className="mx-auto w-full max-w-5xl" />

@@ -1,5 +1,5 @@
 // Mirrors arenad's suite/ (report.rs, compare.rs, outcome.rs) and world/systems.rs (serde snake_case).
-import type { ScenarioChoice } from '../scenario/types';
+import type { RecordedScenario, ScenarioChoice } from '../scenario/types';
 import type { BranchStatus, Runner, Team } from '../types';
 
 /** What kind of system a part is (`describe.system`); absent when its integration does not say. */
@@ -33,6 +33,10 @@ export interface RunOutcome {
   checks_passed: number;
   checks_total: number;
   safety_violations: number;
+  /** Tool calls the world refused or denied (a limit, a gate, a decision right). */
+  denials: number;
+  /** Flags raised for a human: approval requests and escalations. */
+  flags: number;
   measured_s: number;
   estimated_s: number | null;
   tokens: number;
@@ -91,6 +95,10 @@ export interface Summary extends Figures {
   score: number | null;
   safety_violations: number;
   runs_with_violation: number;
+  denials: number;
+  flags: number;
+  runs_with_denial: number;
+  runs_with_flag: number;
 }
 
 export interface TaskSpread extends Figures {
@@ -111,6 +119,8 @@ export interface Suite {
   created_at: string;
   ended_at: string | null;
   error: string | null;
+  /** The disruptions every run starts with, as arenad expanded them. */
+  scenario?: RecordedScenario;
 }
 
 export interface SuiteReport extends Suite {
