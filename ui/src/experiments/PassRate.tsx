@@ -7,8 +7,8 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 function RangeBar({ rate, range }: { rate: number; range: [number, number] }) {
   return (
     <Tooltip content={`95% range: ${pct(range[0])} to ${pct(range[1])}`}>
-      <span className="relative block h-1.5 w-full rounded-full bg-sunken">
-        <span className="absolute inset-y-0 rounded-full bg-line-strong/60" style={{ left: pct(range[0]), width: pct(range[1] - range[0]) }} />
+      <span className="relative block h-1.5 w-full rounded-full bg-line">
+        <span className="absolute inset-y-0 rounded-full bg-line-strong" style={{ left: pct(range[0]), width: pct(range[1] - range[0]) }} />
         <span className="absolute top-1/2 size-2.5 -translate-1/2 rounded-full border-2 border-surface bg-fg" style={{ left: pct(rate) }} />
       </span>
     </Tooltip>

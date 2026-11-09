@@ -94,7 +94,7 @@ export function Checks({ reports }: { reports: SuiteReport[] }) {
       <div className="min-w-fit">
         <div className="flex items-center gap-3 px-4 py-3">
           <h2 className="text-sm font-semibold">Checks</h2>
-          <span className="text-xs text-muted">{failing.length ? `${failing.length} of ${rows.length} failed in some run` : `All ${rows.length} passed in every run`}</span>
+          <span className="text-xs text-muted">{failing.length ? `${failing.length} of ${rows.length} failed in some run` : rows.length === 1 ? 'The check passed in every run' : `All ${rows.length} passed in every run`}</span>
           {failing.length < rows.length && (
             <button type="button" className="ml-auto text-xs text-muted hover:text-fg" onClick={() => setAll(!all)}>{all ? 'Only the failed ones' : `Show all ${rows.length}`}</button>
           )}
