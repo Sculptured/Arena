@@ -1,6 +1,6 @@
 kind = "benchmark"
 name = "plant-floor"
-version = "0.1.0"
+version = "0.2.0"
 protocol = 1
 run = { command = ["uv", "run", "--project", ".", "python", "-m", "plantfloor"] }
 needs = { gpu_vram_gb = 0, services = [] }

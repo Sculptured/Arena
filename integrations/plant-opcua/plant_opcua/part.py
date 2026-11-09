@@ -9,7 +9,7 @@ from arena_part.params import Param, Refusal
 
 from . import opcua, sim, tags
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DENIALS = "_audit/denials"
 BRIDGE = {
     "opcua_browse": {"description": "Browse the plant's OPC UA address space: the child nodes of `path` (empty: the "

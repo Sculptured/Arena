@@ -1,6 +1,6 @@
 [project]
 name = "plant-opcua"
-version = "0.1.0"
+version = "0.2.0"
 description = "arena-part/1 integration: a simulated plant floor served over OPC UA (asyncua), with a bridge that browses, reads and writes tags; interlocks enforced at the tag level"
 requires-python = ">=3.10"
 dependencies = ["arena-part", "asyncua==2.1.0"]

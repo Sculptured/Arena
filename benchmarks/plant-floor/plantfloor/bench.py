@@ -8,7 +8,7 @@ from arena_part import Benchmark, errors
 
 from . import checks, setups, twin
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DATA = Path(__file__).resolve().parents[1] / "data" / "plant-floor.json"
 
 
