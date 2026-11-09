@@ -5,7 +5,7 @@ export function Segmented<T extends string | number>({ value, options, onChange,
   value: T; options: readonly { id: T; label: string }[]; onChange: (v: T) => void; label: string; disabled?: boolean; className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className={cn('inline-flex rounded-md bg-sunken p-0.5', className)}>
+    <div role="radiogroup" aria-label={label} className={cn('inline-flex self-start rounded-md bg-sunken p-0.5', className)}>
       {options.map((o) => (
         <button key={String(o.id)} type="button" role="radio" aria-checked={o.id === value} disabled={disabled} onClick={() => onChange(o.id)}
           className={cn('h-7 min-w-10 rounded-[3px] px-3 text-sm tabular-nums transition-colors disabled:opacity-50',

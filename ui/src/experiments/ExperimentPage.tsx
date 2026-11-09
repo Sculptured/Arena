@@ -13,6 +13,7 @@ import { useTasks } from '../home/useHome';
 import { experiment as fetchExperiment, stopExperiment } from './api';
 import { columnOf } from './model';
 import { Checks, Columns } from './Results';
+import { SuiteWhatMatters } from '../review/WhatMatters';
 import type { Experiment } from './types';
 
 /** While an experiment runs, it is read again this often. */
@@ -76,7 +77,7 @@ function Header({ list, reload }: { list: Experiment[]; reload: () => void }) {
   return (
     <PageHeader width="wide" title={one ? one.name : 'Comparison'}
       status={one && <StatusMark mark={experimentMark(one.status)} title={one.error ?? undefined} />}
-      meta={one ? <ScenarioLine e={one} /> : <span>{list.map((e) => e.name).join(' · ')}</span>}
+      meta={<ScenarioLine e={list[0]} />}
       actions={running && one && <><span className="font-mono text-xs text-muted">{ended(one)} / {total(one)} runs</span><StopButton id={one.id} onStopped={reload} /></>} />
   );
 }
@@ -93,6 +94,7 @@ function View({ ids }: { ids: string[] }) {
       <PageBody width="wide">
         {error && <ErrorState error={error} hint="Showing the last results read." onRetry={reload} />}
         {list.filter((e) => e.error && e.error !== 'stopped').map((e) => <ErrorState key={e.id} error={e.error!} hint="The experiment stopped early. The runs that ended are scored." />)}
+        {reports.length === 2 && list.every((e) => e.status !== 'running') && <SuiteWhatMatters a={reports[0].id} b={reports[1].id} />}
         <Columns cols={reports.map(columnOf)} />
         <Checks reports={reports} />
       </PageBody>

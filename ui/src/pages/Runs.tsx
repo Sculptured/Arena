@@ -60,7 +60,7 @@ const openOf = (r: BranchRow) => `/run?run=${encodeURIComponent(r.run.id)}&branc
 /** The run's name (its team is the tooltip); a rerun is "↳ Rerun", its note the tooltip. */
 function NameCell({ row, name }: { row: BranchRow; name: string }) {
   const team = row.branch.team.name;
-  if (row.depth === 0) return <span className="block truncate font-medium" title={`${name} · ${team}`}>{name}</span>;
+  if (row.depth === 0) return <span className="block truncate" title={`${name} · ${team}`}>{name}</span>;
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-muted" style={{ paddingLeft: (row.depth - 1) * 14 }} title={[row.branch.fork_note, team].filter(Boolean).join(' · ')}>
       <span aria-hidden="true" className="font-mono">↳</span><span>Rerun</span>
@@ -72,6 +72,7 @@ function NameCell({ row, name }: { row: BranchRow; name: string }) {
 function columns(nameOf: (r: BranchRow) => string, onDelete: (r: RunSummary) => void): ColumnDef<BranchRow, unknown>[] {
   return [
     { id: 'name', header: 'Name', enableSorting: false, cell: ({ row }) => <NameCell row={row.original} name={nameOf(row.original)} />, meta: { className: 'w-full max-w-0' } },
+    { id: 'team', header: 'Team', enableSorting: false, cell: ({ row }) => <span className="block max-w-48 truncate text-xs text-muted">{row.original.branch.team.name}</span>, meta: { className: 'hidden md:table-cell' } },
     { id: 'result', header: 'Result', accessorFn: (r) => r.branch.status, cell: ({ row }) => <StatusChip status={row.original.branch.status} />, meta: { className: 'w-32' } },
     {
       id: 'when', header: 'When', accessorFn: (r) => r.branch.created_at, meta: { className: 'w-28 text-right' },
@@ -117,8 +118,8 @@ export default function Runs() {
   const newRun = <Button variant="primary" asChild><Link to="/run"><Play />Run once</Link></Button>;
   return (
     <>
-      <PageHeader title="History" className="mx-auto w-full max-w-5xl" />
-      <PageBody className="mx-auto w-full max-w-5xl">
+      <PageHeader title="Runs" width="default" actions={runs?.length ? newRun : null} />
+      <PageBody width="default">
         {error && runs && <ErrorState error={error} onRetry={refresh} />}
         <Panel>
           <DataTable label="Runs" columns={cols} data={rows} getRowId={(r) => r.branch.id} loadingLabel="Loading runs…"

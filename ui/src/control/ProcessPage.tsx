@@ -6,6 +6,8 @@ import { Panel, PanelHeader } from '../components/ui/panel';
 import { Split } from '../components/ui/split';
 import { ErrorState, LoadingState } from '../components/ui/state';
 import { taskOf } from '../run/runStats';
+import { taskName } from '../home/summary';
+import { useTasks } from '../home/useHome';
 import ActionTimeline from '../run/ActionTimeline';
 import Inspector from '../run/Inspector';
 import { stepOrder } from '../run/timelineLayout';
@@ -48,14 +50,16 @@ export default function ProcessPage() {
   const { runId = '', branchId = '' } = useParams();
   const { detail: d, error, reload } = useBranch(branchId);
   const [models, setModels] = useState(true);
+  const { tasks } = useTasks();
   const order = useMemo(() => (d ? stepOrder(buildLanes(d.events, d.team, d.start_seq), models) : []), [d, models]);
   const [selected, setSelected] = useSelection(order);
   if (!d) return <><PageHeader title="Process" /><PageBody>{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the run…" rows={5} /></Panel>}</PageBody></>;
   const task = taskOf(d.events);
+  const nameOf = (id: string) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : id || 'Run'; };
   const info = worldInfo(d.events);
   return (
     <>
-      <PageHeader title={task ? `Process · ${task}` : 'Process'} status={<StatusChip status={d.status} />}
+      <PageHeader title={`Process · ${nameOf(task)}`} status={<StatusChip status={d.status} />}
         meta={!info.known && 'Recorded before Arena kept each tool\'s system and effect: those are shown as unknown.'}
         actions={<RunMenu runId={runId} d={d} page="process" step={selected} />} />
       <PageBody>

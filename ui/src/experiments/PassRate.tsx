@@ -23,7 +23,7 @@ export default function PassRate({ c }: { c: Column }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline gap-2">
-        <span className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{pct(c.rate)}</span>
+        <span className="text-2xl font-semibold tracking-tight tabular-nums">{pct(c.rate)}</span>
         <span className="text-xs text-muted">{c.passed} of {c.scored} passed</span>
       </div>
       <RangeBar rate={c.rate} range={c.range} />

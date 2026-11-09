@@ -33,16 +33,16 @@ function useList() {
 }
 
 /** A setup in a row: its name and a bar of how many of its runs passed, out of all it asked for. */
-function SetupBar({ s }: { s: SetupLine }) {
+function SetupBar({ s, label }: { s: SetupLine; label: string }) {
   const w = (n: number) => `${s.runs ? (n / s.runs) * 100 : 0}%`;
   return (
     <div className="flex min-w-0 items-center gap-2" title={`${s.name} · ${s.passed} of ${s.ended} ended runs passed (${s.runs} asked)`}>
-      <span className="w-28 truncate text-xs text-muted">{s.name}</span>
+      <span className="w-32 truncate text-xs text-muted">{label}</span>
       <span className="relative h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-sunken">
         <span className="absolute inset-y-0 left-0 bg-line-strong/60" style={{ width: w(s.ended) }} />
         <span className="absolute inset-y-0 left-0 bg-ok" style={{ width: w(s.passed) }} />
       </span>
-      <span className="w-9 font-mono text-2xs text-muted tabular-nums">{s.passed}/{s.runs}</span>
+      <span className="w-9 text-xs text-muted tabular-nums">{s.passed}/{s.runs}</span>
     </div>
   );
 }
@@ -57,7 +57,7 @@ function ExperimentRow({ e, picked, onPick, picking, task }: { e: ListedExperime
           <span className="truncate text-sm font-medium">{e.name}</span>
           <span className="truncate text-xs text-muted">{task}</span>
         </span>
-        <span className="hidden flex-col gap-1 md:flex">{e.setups.map((s) => <SetupBar key={s.suite_id} s={s} />)}</span>
+        <span className="hidden flex-col gap-1 md:flex">{e.setups.map((s) => <SetupBar key={s.suite_id} s={s} label={s.name === e.name ? s.team_name : s.name} />)}</span>
         <span className="flex w-36 items-center justify-end gap-3">
           {e.status !== 'finished' && <StatusMark mark={experimentMark(e.status)} />}
           <span className="text-xs text-faint" title={formatTime(e.created_at)}>{ago(e.created_at)}</span>

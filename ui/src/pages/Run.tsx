@@ -18,6 +18,7 @@ import MetricsPanel from '../run/Metrics';
 import { pausesOf } from '../run/flow';
 import { checkMark, runStats, safetyLine, taskOf } from '../run/runStats';
 import { formatCost, summarize } from '../run/timeline';
+import { duration } from '@/lib/format';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
@@ -51,12 +52,12 @@ function Stats({ detail }: { detail: BranchDetail }) {
   const st = runStats(detail.events, detail.start_seq);
   const cost = formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown));
   return (
-    <div className="grid grid-cols-3 gap-x-8 gap-y-2 pt-1 sm:flex sm:flex-wrap sm:items-end">
-      <Stat label={`Seconds${sm.live ? ' so far' : ''}`} value={sm.seconds != null ? sm.seconds.toFixed(1) : '–'} />
-      <Stat label="Cost" value={cost} title={cost} />
+    <div className="grid grid-cols-3 gap-x-8 gap-y-2 pt-2 sm:flex sm:flex-wrap sm:items-end">
+      <Stat label={sm.live ? 'Time so far' : 'Time'} value={duration(sm.seconds)} />
+      <Stat label="Cost" value={cost.replace(/ \(.*\)$/, '')} title={cost} />
       {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={checkMark(st.check)} />} />}
       {st.safety && <Stat label="Safety" value={safetyLine(st.safety)} abnormal={st.safety.violated > 0} />}
-      {st.abnormal > 0 && <Stat label="Refused / errors" value={`⚠ ${st.abnormal}`} abnormal />}
+      {st.abnormal > 0 && <Stat label="Refused or failed actions" value={`⚠ ${st.abnormal}`} abnormal />}
     </div>
   );
 }

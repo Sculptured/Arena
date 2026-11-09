@@ -10,8 +10,8 @@ export function StatusMark({ mark, className, title }: { mark: Mark; className?:
     <span
       title={title}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-sm px-1 text-xs whitespace-nowrap',
-        mark.abnormal ? 'bg-alarm-soft font-medium text-alarm' : 'text-muted',
+        'inline-flex shrink-0 items-center gap-1 text-xs whitespace-nowrap',
+        mark.abnormal ? 'font-medium text-alarm' : 'text-muted',
         className,
       )}
     >

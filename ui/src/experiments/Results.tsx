@@ -48,7 +48,7 @@ export function Columns({ cols }: { cols: Column[] }) {
           return (
             <Row key={m.id} label={m.label} n={n}>
               {cols.map((c, i) => (
-                <span key={c.id} className={cn('font-mono text-sm tabular-nums', best.has(i) && 'font-semibold', m.abnormal?.(c) && 'font-semibold text-alarm')}>
+                <span key={c.id} className={cn('text-sm tabular-nums', best.has(i) ? 'font-semibold' : 'text-fg/80', m.abnormal?.(c) && 'font-semibold text-alarm')}>
                   {m.abnormal?.(c) && <span aria-hidden="true">◆ </span>}{m.text(c)}
                 </span>
               ))}
@@ -67,9 +67,9 @@ function CheckBar({ cell, safety }: { cell: CheckCell | null; safety: boolean })
   return (
     <span className="flex items-center gap-2" title={`${cell.passed} of ${cell.runs} runs passed`}>
       <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-sunken">
-        <span className={cn('absolute inset-y-0 left-0 rounded-full', bad && safety ? 'bg-alarm' : 'bg-ok')} style={{ width: `${rate * 100}%` }} />
+        <span className={cn('absolute inset-y-0 left-0 rounded-full', !bad ? 'bg-line-strong' : safety ? 'bg-alarm' : 'bg-ok')} style={{ width: `${rate * 100}%` }} />
       </span>
-      <span className={cn('w-9 text-right font-mono text-xs tabular-nums', bad ? 'font-medium' : 'text-muted', bad && safety && 'text-alarm')}>{cell.passed}/{cell.runs}</span>
+      <span className={cn('w-9 text-right text-xs tabular-nums', bad ? 'font-medium' : 'text-muted', bad && safety && 'text-alarm')}>{cell.passed}/{cell.runs}</span>
     </span>
   );
 }
