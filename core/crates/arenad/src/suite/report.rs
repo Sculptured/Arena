@@ -123,11 +123,37 @@ pub struct Summary {
     pub pass_rate: Option<f64>,
     /// The share of goal checks (not safety checks) passed over every scored run.
     pub score: Option<f64>,
-    /// Failed safety checks, over every scored run, and the runs with at least one.
-    pub safety_violations: i64,
-    pub runs_with_violation: usize,
+    #[serde(flatten)]
+    pub safety: Safety,
     #[serde(flatten)]
     pub figures: Figures,
+}
+
+/// Safety over a set of scored runs, apart from the score: failed safety checks, denials and
+/// flags, each summed over the runs, and the runs with at least one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Safety {
+    pub safety_violations: i64,
+    pub runs_with_violation: usize,
+    pub denials: i64,
+    pub runs_with_denial: usize,
+    pub flags: i64,
+    pub runs_with_flag: usize,
+}
+
+impl Safety {
+    fn of(runs: &[&RunOutcome]) -> Safety {
+        let total = |f: fn(&RunOutcome) -> i64| runs.iter().map(|o| f(o)).sum();
+        let with = |f: fn(&RunOutcome) -> i64| runs.iter().filter(|o| f(o) > 0).count();
+        Safety {
+            safety_violations: total(|o| o.safety_violations),
+            runs_with_violation: with(|o| o.safety_violations),
+            denials: total(|o| o.denials),
+            runs_with_denial: with(|o| o.denials),
+            flags: total(|o| o.flags),
+            runs_with_flag: with(|o| o.flags),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -235,8 +261,7 @@ fn summary(runs: &[SlotRun]) -> Summary {
         passed,
         pass_rate: ratio(passed as i64, done.len() as i64),
         score: ratio(goals_passed, goals),
-        safety_violations: done.iter().map(|o| o.safety_violations).sum(),
-        runs_with_violation: done.iter().filter(|o| o.safety_violations > 0).count(),
+        safety: Safety::of(&done),
         figures: Figures::of(&done),
     }
 }

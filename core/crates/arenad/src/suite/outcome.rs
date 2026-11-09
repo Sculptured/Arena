@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use parts::proto::NamedCheck;
 use serde::Serialize;
 
+use super::safety;
 use crate::{
     metrics::{self, Metrics},
     model::*,
@@ -28,6 +29,10 @@ pub struct RunOutcome {
     pub checks_total: i64,
     /// Its safety checks that failed.
     pub safety_violations: i64,
+    /// Its tool calls the world refused as not allowed (`safety::is_denial`).
+    pub denials: i64,
+    /// Its agents' calls that raised a matter for a human (`safety::is_flag`).
+    pub flags: i64,
     pub measured_s: f64,
     pub estimated_s: Option<f64>,
     pub tokens: i64,
@@ -73,6 +78,7 @@ pub fn outcome(
     let checks = check.as_ref().map(checks_of).unwrap_or_default();
     let (safety, goals): (Vec<&NamedCheck>, Vec<&NamedCheck>) =
         checks.iter().partition(|c| c.safety);
+    let raised = safety::raised(events);
     RunOutcome {
         status: branch.status,
         error: branch.error.clone(),
@@ -81,6 +87,8 @@ pub fn outcome(
         checks_passed: goals.iter().filter(|c| c.passed).count() as i64,
         checks_total: goals.len() as i64,
         safety_violations: safety.iter().filter(|c| !c.passed).count() as i64,
+        denials: raised.denials,
+        flags: raised.flags,
         checks,
         measured_s: m.measured_s,
         estimated_s: m.estimated_s,

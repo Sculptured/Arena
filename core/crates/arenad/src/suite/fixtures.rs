@@ -58,6 +58,8 @@ pub fn ran(checks: &[Chk], measured_s: f64, tokens: i64, cost_usd: Option<f64>) 
         checks_passed: goals.clone().filter(|c| c.passed).count() as i64,
         checks_total: goals.count() as i64,
         safety_violations: checks.iter().filter(|c| c.safety && !c.passed).count() as i64,
+        denials: 0,
+        flags: 0,
         checks,
         measured_s,
         estimated_s: Some(measured_s / 2.0),

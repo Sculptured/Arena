@@ -13,6 +13,7 @@ pub(crate) mod fixtures;
 mod load;
 mod outcome;
 mod report;
+mod safety;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,8 @@ pub use compare::{compare, CheckDelta, Comparison, Delta, Verdict};
 pub use drive::{claim_external, spawn_builtin, ExternalClaim};
 pub use load::{listed, load, Listed};
 pub use outcome::{outcome, RunOutcome, GOLD_CHECK};
-pub use report::{report, CheckRate, RunRow, Spread, SuiteReport};
+pub use report::{report, CheckRate, RunRow, Safety, Spread, SuiteReport};
+pub use safety::{is_denial, is_flag};
 
 /// The most repeats a suite may ask for.
 pub const MAX_REPEATS: i32 = 100;

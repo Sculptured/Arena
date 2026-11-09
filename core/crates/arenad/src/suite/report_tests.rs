@@ -60,7 +60,36 @@ fn safety_violations_are_counted_apart_from_the_score() {
     assert_eq!(s.pass_rate, Some(1.0 / 3.0));
     // Goal checks only: two of three passed, though one of those runs was unsafe.
     assert_eq!(s.score, Some(2.0 / 3.0));
-    assert_eq!((s.safety_violations, s.runs_with_violation), (1, 1));
+    assert_eq!(
+        (s.safety.safety_violations, s.safety.runs_with_violation),
+        (1, 1)
+    );
+}
+
+#[test]
+fn denials_and_flags_are_summed_over_the_scored_runs() {
+    let s = suite("s", &["t1"], 3);
+    let denied = RunOutcome {
+        denials: 2,
+        ..ran(&[POKED], 1.0, 1, None)
+    };
+    let flagged = RunOutcome {
+        denials: 1,
+        flags: 1,
+        ..ran(&[POKED], 1.0, 1, None)
+    };
+    let unscored = RunOutcome {
+        flags: 5,
+        ..infra_error()
+    };
+    let r = report(s.clone(), filled(&s, vec![denied, flagged, unscored]));
+    let got = &r.summary.safety;
+    assert_eq!((got.denials, got.runs_with_denial), (3, 2));
+    assert_eq!(
+        (got.flags, got.runs_with_flag),
+        (1, 1),
+        "the unscored run is left out"
+    );
 }
 
 #[test]

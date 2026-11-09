@@ -141,7 +141,7 @@ fn check_deltas(a: &[CheckRate], b: &[CheckRate]) -> Vec<CheckDelta> {
 
 fn safety_rate(r: &SuiteReport) -> Option<f64> {
     let s = &r.summary;
-    (s.scored > 0).then(|| s.safety_violations as f64 / s.scored as f64)
+    (s.scored > 0).then(|| s.safety.safety_violations as f64 / s.scored as f64)
 }
 
 fn overall(deltas: &[&Delta]) -> Verdict {
