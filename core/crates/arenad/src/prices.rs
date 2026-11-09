@@ -65,6 +65,7 @@ pub fn provider_of(kind: AgentKind, provider: Option<&str>) -> Option<String> {
         AgentKind::Codex => Some("openai".into()),
         AgentKind::Open => Some(provider.unwrap_or("openrouter").to_string()),
         AgentKind::External => provider.map(str::to_string),
+        AgentKind::Http => None,
     }
 }
 

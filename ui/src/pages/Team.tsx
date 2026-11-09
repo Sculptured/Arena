@@ -7,7 +7,7 @@ import { Checkbox, Field, Input, NativeSelect, Textarea } from '../components/ui
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel } from '../components/ui/panel';
 import { ErrorState, LoadingState } from '../components/ui/state';
-import { MODE_LABEL, providerOf, useProviderList } from '../providers';
+import { MODE_LABEL, agentModelLine, agentModelTip, providerOf, useProviderList } from '../providers';
 import { clearStoredTeam, loadTeam, saveTeam, slug, withSlugIds } from '../team';
 import type { AgentKind, AgentSpec, ProviderStatus, Team as TeamT } from '../types';
 
@@ -23,6 +23,14 @@ export function AgentFields({ agent: a, index: i, openOk, list, patch }: {
   patch: (p: Partial<AgentSpec>) => void;
 }) {
   const provider = a.kind === 'open' ? providerOf(a) : null;
+  // An HTTP agent runs where it is deployed: nothing here to choose (Connect your agent sets it up).
+  if (a.kind === 'http') {
+    return (
+      <Field label="Mode" className="w-full">
+        <span className="flex h-7 items-center truncate text-sm" title={agentModelTip(a)}>{agentModelLine(a)}</span>
+      </Field>
+    );
+  }
   return (
     <>
       <div className="flex flex-wrap items-end gap-2">

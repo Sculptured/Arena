@@ -1,3 +1,4 @@
+import type { CheckAnswer, CheckBody } from './connect/connect';
 import { api } from './core';
 import type { ScenarioChoice } from './scenario/types';
 import type { BranchView } from './world/types';
@@ -43,6 +44,8 @@ export const defaultTeam = () => call<Team>('/api/team/default');
 export const suggestedTeams = () => call<Team[]>('/api/teams');
 export const startRun = (task_id: string, team: Team, runner: Runner = 'chain', scenario?: ScenarioChoice) =>
   post<NewRunResponse>('/api/runs', scenario ? { task_id, team, runner, scenario } : { task_id, team, runner });
+/** The Connect screen's handshake: arenad says hello to an HTTP agent, or makes a 1-token Bedrock call. */
+export const checkAgent = (body: CheckBody) => post<CheckAnswer>('/api/agents/check', body);
 export const runs = () => call<RunSummary[]>('/api/runs');
 export const branch = (id: string) => call<BranchDetail>(`/api/branches/${encodeURIComponent(id)}`);
 export const rows = (id: string, seq: number, keys: string[]) =>

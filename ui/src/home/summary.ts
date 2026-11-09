@@ -1,7 +1,7 @@
 // The Run screen's words: the world and task in plain words, the one line on what will run, and
 // what is missing before a team can run (a CLI not installed, a key not set). Never a stand-in.
-import { modelOf, providerOf, runsOn } from '../providers';
-import type { AgentKind, Health, TaskSummary, Team } from '../types';
+import { isBedrock, modelOf, providerOf, runsOn } from '../providers';
+import type { AgentKind, Health, Runner, TaskSummary, Team } from '../types';
 
 const capital = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
@@ -31,9 +31,17 @@ export function missingFor(team: Team, h: Health | null): string[] {
   if (!h) return [];
   const kinds = new Set(team.agents.map((a) => a.kind));
   const cli = CLI.filter(([kind, found]) => kinds.has(kind) && !h[found]).map(([, , why]) => why);
-  const providers = [...new Set(team.agents.filter((a) => a.kind === 'open').map(providerOf))].map((id) => providerProblem(id, h));
+  // Bedrock is called with the machine's AWS credentials and listed nowhere: Test connection checked it.
+  const providers = [...new Set(team.agents.filter((a) => a.kind === 'open').map(providerOf))].filter((id) => !isBedrock(id)).map((id) => providerProblem(id, h));
   const external = kinds.has('external') ? ['This team is driven by an external system: start it from that system, or change the agents to Claude Code or Codex.'] : [];
   return [...cli, ...providers.filter((p): p is string => !!p), ...external];
+}
+
+/** Why the team can't run this way, or null: arenad gives no HTTP agent a lead's work. */
+export function runnerProblem(team: Team, runner: Runner): string | null {
+  return runner === 'dispatch' && team.agents.some((a) => a.kind === 'http')
+    ? "An HTTP agent can't run with a lead dispatching: pick one after another or all at once."
+    : null;
 }
 
 /** A task's name in plain words: its one-line reason, up to the first colon. */

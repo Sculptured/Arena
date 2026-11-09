@@ -47,6 +47,8 @@ fn spec(model: Option<&str>) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 
@@ -322,6 +324,8 @@ fn agent_spec(id: &str, kind: AgentKind, prompt: &str) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

@@ -48,6 +48,13 @@ secondary metadata lines, few borders, plenty of whitespace.
 - **A run's ⋯** (`run/RunMenu.tsx`, on the run page, the world view, the process view and the live
   result): its other views, Compare with another run, its reruns, and under **Advanced** the only way
   to rewind: "Rewind to step N and rerun…" opens the fork panel in the step panel (`?fork=1`).
+- **Connect your agent** (`/connect`, `connect/`): from a setup's team picker ("Connect your agent…") or
+  Run once's Options (**Connect**). **HTTP | Bedrock**; a URL and optional headers (one `Name: value`
+  per line, masked unless focused), or a Bedrock model and region; **Test connection**
+  (`POST /api/agents/check`: the agent's name and round trip, or the reason with ⚠), then **Use this
+  agent** goes back with a one-agent team selected. Any edit means testing again. This browser keeps
+  the agent arenad answered (`arena.connected.v1`; header values only as arenad's secret references,
+  never the values), listed as "<name> (connected)" in both pickers.
 - **Compare runs** (`/compare/:a/:b`), **World view** (`/world/…`), **Process view** (`/control/…`)
   and the **Team editor** (`/team`) are one click away under ⋯ and ⌘K.
 

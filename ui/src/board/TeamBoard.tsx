@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Tag } from '../components/ui/status';
 import { cn } from '@/lib/cn';
 import type { AgentSpec, Runner, Team } from '../types';
-import { agentModelLine } from '../providers';
+import { agentModelLine, agentModelTip } from '../providers';
 import { type BoardGroup, CARD_H, CARD_W, boardSize, jobLine, layoutBoard, openingView } from './board';
 
 type CardData = { agent: AgentSpec; decides: string[]; selected: boolean };
@@ -22,9 +22,9 @@ function AgentCard({ data }: NodeProps<CardNode>) {
       style={{ width: CARD_W, height: CARD_H }} title={`${a.name}: click for its prompt`}>
       <Handle type="target" position={Position.Left} className={HANDLE} isConnectable={false} />
       <span className="truncate text-sm font-medium">{a.name}</span>
-      <span className="line-clamp-2 text-xs leading-4 text-muted">{jobLine(a) || 'No prompt yet.'}</span>
+      <span className="line-clamp-2 text-xs leading-4 text-muted">{jobLine(a) || (a.kind === 'http' ? 'Your deployed agent, called over HTTP.' : 'No prompt yet.')}</span>
       <span className="mt-auto flex min-w-0 flex-wrap gap-1 overflow-hidden" style={{ maxHeight: 18 }}>
-        <Tag>{agentModelLine(a)}</Tag>
+        <Tag title={agentModelTip(a)}>{agentModelLine(a)}</Tag>
         {a.read_only && <Tag>Read-only</Tag>}
         {decides.map((d) => <Tag key={d} title="A decision this agent owns">◆ {d}</Tag>)}
       </span>

@@ -8,7 +8,9 @@ use axum::Router;
 use parts::{proto::BenchDescribe, Hub};
 
 use crate::{
-    agents::{claude::ClaudeDriver, codex::CodexDriver, open::OpenDriver, Driver},
+    agents::{
+        claude::ClaudeDriver, codex::CodexDriver, http::HttpDriver, open::OpenDriver, Driver,
+    },
     exec::BranchCtx,
     model::AgentKind,
     providers::ProviderConfig,
@@ -32,6 +34,11 @@ pub struct Config {
     /// browser, such as a UI served from elsewhere: env `ARENA_CORS_ORIGIN`, comma-separated.
     /// Empty: same origin only.
     pub cors_origins: Vec<String>,
+    /// The base URL an `http` agent is told to reach its MCP endpoint at: env
+    /// `ARENA_AGENT_BASE` (for an agent elsewhere, through a tunnel); empty means `self_base`.
+    pub agent_base: String,
+    /// How long arenad waits for an `http` agent to answer a run (time paused left out).
+    pub http_agent_timeout: Duration,
 }
 
 pub const DEFAULT_MAX_DB_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -59,6 +66,8 @@ impl Config {
             cors_origins: cors_origins_from(
                 &std::env::var("ARENA_CORS_ORIGIN").unwrap_or_default(),
             ),
+            agent_base: std::env::var("ARENA_AGENT_BASE").unwrap_or_default(),
+            http_agent_timeout: Duration::from_secs(crate::agents::CLI_TIMEOUT_SECS),
         }
     }
 
@@ -173,6 +182,16 @@ pub fn install_default_drivers(state: &Arc<AppState>) -> bool {
         AgentKind::ClaudeCode,
         Arc::new(ClaudeDriver::new(base.clone())),
     );
+    let agent_base = match state.config.agent_base.trim() {
+        "" => base.clone(),
+        b => b.to_string(),
+    };
+    let http = HttpDriver::new(
+        agent_base,
+        state.store.clone(),
+        state.config.http_agent_timeout,
+    );
+    m.insert(AgentKind::Http, Arc::new(http));
     m.insert(AgentKind::Codex, Arc::new(CodexDriver::new(base)));
     state.install_drivers(m)
 }
