@@ -1,4 +1,4 @@
-import { ListTree, Pause, Play, Square } from 'lucide-react';
+import { ListTree, Pause, Play, CircleStop } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { setPaused, stopBranch } from '../api';
@@ -55,7 +55,7 @@ function Toolbar({ flow, seconds, title, main, setMain, onPause, onStop, busy, r
       {live && (flow === 'paused'
         ? <Button variant="primary" onClick={() => onPause(false)} disabled={busy}><Play />Resume</Button>
         : <Button onClick={() => onPause(true)} disabled={busy || flow === 'starting'}><Pause />Pause</Button>)}
-      {live && <Button variant="ghost" onClick={onStop} disabled={busy || flow === 'starting'}><Square />Stop</Button>}
+      {live && <Button variant="ghost" onClick={onStop} disabled={busy || flow === 'starting'}><CircleStop />Stop</Button>}
       {result ?? <StatusMark mark={flowMark(flow)} className="text-sm" title={title} />}
       {seconds != null && <span className="font-mono text-sm text-muted" title={title}>{clockText(seconds)}</span>}
       <MainSwitch main={main} setMain={setMain} />

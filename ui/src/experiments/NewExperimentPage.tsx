@@ -4,13 +4,13 @@ import { useNavigate } from 'react-router-dom';
 import ImportDialog from '../board/ImportDialog';
 import { useHealth } from '../components';
 import { Button } from '../components/ui/button';
-import { NativeSelect } from '../components/ui/input';
 import { PageBody } from '../components/ui/page';
 import { Segmented } from '../components/ui/segmented';
 import { ErrorState } from '../components/ui/state';
 import DisruptionPicker from '../home/DisruptionPicker';
-import { missingFor, taskName, ticketTitle, worldName } from '../home/summary';
-import { type Task, useSuggestedTeams, useTasks, useTeam, useWorldPreview } from '../home/useHome';
+import { missingFor, worldName } from '../home/summary';
+import { TaskPicker } from '../home/WorldCard';
+import { useSuggestedTeams, useTasks, useTeam, useWorldPreview } from '../home/useHome';
 import { useScenario } from '../scenario/ScenarioBuilder';
 import { teamForRun } from '../team';
 import type { Health, Team } from '../types';
@@ -86,16 +86,6 @@ function useStart() {
     try { nav(`/experiments/${(await createExperiment(body)).id}`); } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };
   return { busy, error, start };
-}
-
-function TaskPicker({ tasks, task, onTask, busy }: { tasks: Task[] | null; task: Task | null; onTask: (id: string) => void; busy: boolean }) {
-  return (
-    <NativeSelect value={task?.id ?? ''} onChange={(e) => onTask(e.target.value)} disabled={busy || !tasks?.length} aria-label="Task" className="h-10 text-base"
-      title={task ? [ticketTitle(task.ticket), task.reason].filter(Boolean).join('\n') : undefined}>
-      {!tasks && <option>Loading…</option>}
-      {tasks?.map((t) => <option key={t.id} value={t.id}>{taskName(t)}</option>)}
-    </NativeSelect>
-  );
 }
 
 function Scenario({ f, world, busy }: { f: Form; world: string; busy: boolean }) {

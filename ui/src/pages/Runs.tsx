@@ -5,8 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { deleteRun, runs as fetchRuns } from '../api';
 import { ApproximateMark, DISK_CHANGED, StatusChip, ago, formatTime } from '../components';
-import { taskName } from '../home/summary';
-import { useTasks } from '../home/useHome';
+import { useTaskNames } from '../home/useHome';
 import { Button } from '../components/ui/button';
 import { DataTable } from '../components/ui/data-table';
 import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
@@ -100,10 +99,10 @@ function DeleteRunDialog({ run, onClose, onDone }: { run: RunSummary | null; onC
 export default function Runs() {
   const nav = useNavigate();
   const { runs, error, refresh } = useRuns();
-  const { tasks } = useTasks();
+  const taskNames = useTaskNames();
   const [deleting, setDeleting] = useState<RunSummary | null>(null);
   const rows = useMemo(() => (runs ? branchRows(runs) : null), [runs]);
-  const nameOf = useCallback((r: BranchRow) => runTitle(r.run, (id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : ''; }), [tasks]);
+  const nameOf = useCallback((r: BranchRow) => runTitle(r.run, taskNames), [taskNames]);
   const cols = useMemo(() => columns(nameOf, setDeleting), [nameOf]);
   const newRun = <Button variant="primary" asChild><Link to="/run"><Play />Run once</Link></Button>;
   return (

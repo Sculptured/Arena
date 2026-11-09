@@ -9,8 +9,7 @@ import { Panel } from '../components/ui/panel';
 import { ErrorState, LoadingState } from '../components/ui/state';
 import { StatusMark } from '../components/ui/status';
 import { experimentMark } from '@/lib/mark';
-import { taskName } from '../home/summary';
-import { useTasks } from '../home/useHome';
+import { useTaskNames } from '../home/useHome';
 import { cn } from '@/lib/cn';
 import { usePolled } from '@/lib/usePolled';
 import { experiments as fetchExperiments } from './api';
@@ -76,10 +75,10 @@ function Empty() {
 export default function ExperimentsPage() {
   const nav = useNavigate();
   const { data: list, error, reload: load } = usePolled(fetchExperiments, anyRunning, POLL_MS, 'experiments');
-  const { tasks } = useTasks();
+  const nameOf = useTaskNames();
   const [picked, setPicked] = useState<string[]>([]);
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id].slice(-4)));
-  const taskOf = (e: ListedExperiment) => e.tasks.map((id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : id; }).join(', ');
+  const taskOf = (e: ListedExperiment) => e.tasks.map(nameOf).join(', ');
   const compare = picked.length >= 2 && (
     <Button onClick={() => nav(`/experiments/compare?ids=${picked.map(encodeURIComponent).join(',')}`)}><GitCompare />Compare {picked.length}</Button>
   );

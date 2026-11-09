@@ -1,4 +1,4 @@
-import { Square } from 'lucide-react';
+import { CircleStop } from 'lucide-react';
 import { useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/button';
@@ -8,8 +8,7 @@ import { Panel } from '../components/ui/panel';
 import { ErrorState, LoadingState } from '../components/ui/state';
 import { StatusMark } from '../components/ui/status';
 import { experimentMark } from '@/lib/mark';
-import { taskName } from '../home/summary';
-import { useTasks } from '../home/useHome';
+import { useTaskNames } from '../home/useHome';
 import { usePolled } from '@/lib/usePolled';
 import { experiment as fetchExperiment, stopExperiment } from './api';
 import { columnOf } from './model';
@@ -30,12 +29,11 @@ function useExperiments(ids: string[]) {
 
 /** "Larchmont batch on hold · ▼ Usual courier loses capacity": the scenario in a line. */
 function ScenarioLine({ e }: { e: Experiment }) {
-  const { tasks } = useTasks();
-  const names = e.tasks.map((id) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : id; });
+  const names = e.tasks.map(useTaskNames());
   const disruptions = (e.setups[0]?.scenario?.disruptions ?? []).map((d) => d.label).filter(Boolean);
   return (
     <>
-      <span>{names.join(', ')}</span>
+      <span className="max-w-3xl truncate" title={names.join(', ')}>{names.join(', ')}</span>
       {disruptions.map((d) => <span key={d}><span aria-hidden="true" className="text-warn">▼ </span>{d}</span>)}
     </>
   );
@@ -47,7 +45,7 @@ function StopButton({ id, onStopped }: { id: string; onStopped: () => void }) {
   const stop = () => { setOpen(false); stopExperiment(id).then(onStopped, (e) => setError(String(e.message ?? e))); };
   return (
     <>
-      <Button variant="ghost" onClick={() => setOpen(true)} title={error ?? undefined}><Square />Stop</Button>
+      <Button variant="ghost" onClick={() => setOpen(true)} title={error ?? undefined}><CircleStop />Stop</Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent title="Stop this experiment?" description="The run in progress stops now and no more runs start. Runs that ended stay scored.">
           <DialogActions onCancel={() => setOpen(false)} onGo={stop} danger label="Stop" />
@@ -67,7 +65,7 @@ function Header({ list, reload }: { list: Experiment[]; reload: () => void }) {
     <PageHeader width="wide" title={one ? one.name : 'Comparison'}
       status={one && <StatusMark mark={experimentMark(one.status)} title={one.error ?? undefined} />}
       meta={<ScenarioLine e={list[0]} />}
-      actions={running && one && <><span className="font-mono text-xs text-muted">{ended(one)} / {total(one)} runs</span><StopButton id={one.id} onStopped={reload} /></>} />
+      actions={running && one && <><span className="text-xs text-muted tabular-nums">{ended(one)} of {total(one)} runs</span><StopButton id={one.id} onStopped={reload} /></>} />
   );
 }
 

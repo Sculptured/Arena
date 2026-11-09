@@ -23,8 +23,7 @@ import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
 import { useStepParam } from '../run/useStepParam';
-import { taskName } from '../home/summary';
-import { type Task, useTasks } from '../home/useHome';
+import { useTaskNames } from '../home/useHome';
 import { type ForkChoice, forkChoiceOf } from '../run/architecture';
 import { recordedLine } from '../scenario/scenario';
 import { drivenLine } from '../world/page';
@@ -152,18 +151,11 @@ function useRunView(branchId: string, order: number[]) {
   return { selected, setSelected, forking: sp.get('fork') === '1', setForking, notice, setNotice, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
 }
 
-/** The task in plain words, or its id when the benchmark no longer lists it. */
-function runTitleOf(detail: BranchDetail, tasks: Task[] | null): string {
-  const id = taskOf(detail.events);
-  const t = tasks?.find((x) => x.id === id);
-  return t ? taskName(t) : id || 'Run';
-}
-
 export default function Run() {
   const { runId = '', branchId = '' } = useParams();
   const { detail, siblings, error, reload } = useBranch(branchId, runId);
   const [models, setModels] = useState(true);
-  const { tasks } = useTasks();
+  const nameOf = useTaskNames();
   const order = useMemo(() => (detail ? stepOrder(buildLanes(detail.events, detail.team, detail.start_seq), models) : []), [detail, models]);
   const v = useRunView(branchId, order);
   if (!detail) {
@@ -172,7 +164,7 @@ export default function Run() {
   const event = detail.events.find((e) => e.seq === v.selected) ?? null;
   return (
     <>
-      <Header runId={runId} detail={detail} siblings={siblings} title={runTitleOf(detail, tasks)} step={v.selected} />
+      <Header runId={runId} detail={detail} siblings={siblings} title={nameOf(taskOf(detail.events)) || 'Run'} step={v.selected} />
       <PageBody>
         {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
         {error && <ErrorState error={error} onRetry={reload} />}
