@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { duration, fmt } from '@/lib/format';
 import type { RunOutcome, RunRow, Spread, SuiteReport } from '../control/types';
 import type { Team } from '../types';
-import { METRICS, bestOf, checkLabel, checkMatrix, columnOf, setupTeam, setupsProblem, wilson } from './model';
+import { METRICS, bestOf, checkLabel, checkMatrix, columnOf, settleDrafts, setupTeam, setupsProblem, wilson } from './model';
 
 const outcome = (passed: boolean, over: Partial<RunOutcome> = {}): RunOutcome => ({
   status: passed ? 'passed' : 'failed', error: null, checks: [], scored: true,
@@ -97,5 +97,18 @@ describe('figures', () => {
   it('formats money, tokens and time one way', () => {
     expect([fmt(0.0412, 'usd'), fmt(0.56, 'usd'), fmt(12_400, 'tok'), fmt(3, 's'), fmt(null, 'n')]).toEqual(['$0.041', '$0.56', '12.4k', '3.0 s', '–']);
     expect([duration(45.4), duration(188), duration(null)]).toEqual(['45 s', '3.1 min', '–']);
+  });
+});
+
+describe('settleDrafts', () => {
+  const d = (teamId: string) => ({ key: 'k', name: 'Setup A', teamId, model: '', rules: '' });
+  it('moves a setup off a team key that vanished when the suggested teams arrived after yours', () => {
+    // First paint: only yours ('yours'); then the benchmark's teams load and replace that key with 's:t1'.
+    expect(settleDrafts([d('yours')], ['yours'], 'yours')[0].teamId).toBe('yours');
+    expect(settleDrafts([d('yours')], ['s:t1', 's:t2'], 's:t1')[0].teamId).toBe('s:t1');
+  });
+  it('leaves setups on a team still offered, and returns the same list when nothing moves', () => {
+    const l = [d('s:t2')];
+    expect(settleDrafts(l, ['s:t1', 's:t2'], 's:t1')).toBe(l);
   });
 });

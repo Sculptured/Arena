@@ -16,7 +16,7 @@ import { useScenario } from '../scenario/ScenarioBuilder';
 import { teamForRun } from '../team';
 import type { Health, Team } from '../types';
 import { createExperiment } from './api';
-import { DEFAULT_RUNS, MAX_SETUPS, RUN_CHOICES, type SetupDraft, newDraft, setupTeam, setupsProblem } from './model';
+import { DEFAULT_RUNS, MAX_SETUPS, RUN_CHOICES, type SetupDraft, newDraft, settleDrafts, setupTeam, setupsProblem } from './model';
 import SetupCard, { type TeamChoices } from './SetupCard';
 import type { NewExperiment } from './types';
 
@@ -64,9 +64,12 @@ function useTeamChoices(returned: Team | undefined) {
 }
 
 /** The setups being written, starting with one on the first team offered; each new one copies the last. */
-function useDrafts(firstTeam: string | undefined, initial: SetupDraft[]) {
+function useDrafts(firstTeam: string | undefined, initial: SetupDraft[], keys: string[]) {
   const [drafts, setDrafts] = useState<SetupDraft[]>(initial);
   useEffect(() => { if (firstTeam && !drafts.length) setDrafts([newDraft(0, firstTeam)]); }, [firstTeam, drafts.length]);
+  // The offered teams change while loading; a setup left on a vanished one would say "Loading the team…" forever.
+  const offered = keys.join('|');
+  useEffect(() => { setDrafts((l) => settleDrafts(l, offered ? offered.split('|') : [], firstTeam)); }, [offered, firstTeam]);
   return {
     drafts,
     set: (i: number, d: SetupDraft) => setDrafts((l) => l.map((x, j) => (j === i ? d : x))),
@@ -81,7 +84,7 @@ function useNewExperiment(health: Health | null) {
   const back = useReturned();
   const teams = useTeamChoices(back.connected);
   // A new setup starts on the benchmark's team (or yours), not on an agent connected earlier.
-  const drafts = useDrafts(teams.choices.find((c) => !/^[ci]:/.test(c.key))?.key, initialDrafts(back));
+  const drafts = useDrafts(teams.choices.find((c) => !/^[ci]:/.test(c.key))?.key, initialDrafts(back), teams.choices.map((c) => c.key));
   const kept = back.kept ?? { name: '', taskId: '', runs: DEFAULT_RUNS };
   const [taskId, setTaskId] = useState(kept.taskId);
   const [name, setName] = useState(kept.name);

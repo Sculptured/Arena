@@ -231,6 +231,16 @@ export function newDraft(i: number, teamId: string, from?: SetupDraft): SetupDra
   return { key: `${Date.now()}-${i}`, name: `Setup ${setupLetter(i)}`, teamId, model: from?.model ?? '', rules: from?.rules ?? '' };
 }
 
+/**
+ * Setups whose team is no longer offered move to the first one. The offered list changes while the
+ * page loads (yours arrives first as 'yours', then the benchmark's teams replace that key), and a setup
+ * left on a vanished key would never find its team. Returns the same array when nothing needs moving.
+ */
+export function settleDrafts(drafts: SetupDraft[], keys: string[], first: string | undefined): SetupDraft[] {
+  if (!first || !drafts.some((d) => !keys.includes(d.teamId))) return drafts;
+  return drafts.map((d) => (keys.includes(d.teamId) ? d : { ...d, teamId: first }));
+}
+
 /** The team a setup runs: each Claude Code agent on the chosen model, the rules added to every prompt. */
 export function setupTeam(base: Team, d: Pick<SetupDraft, 'model' | 'rules'>): Team {
   return {
