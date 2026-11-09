@@ -10,10 +10,10 @@ def _item(iid, label, status, abnormal, **extra):
 def _upstream(erp):
     apex = erp.get("supplier/APEX", {})
     return {"id": "upstream", "label": "Upstream", "kind": "carriers", "items": [
-        _item("sup:APEX", "Apex Motors", apex.get("status", "?"), apex.get("status") == "delayed",
+        _item("sup:APEX", "Apex Steel", apex.get("status", "?"), apex.get("status") == "delayed",
               detail=apex.get("note") or ""),
-        _item("sup:BOLT", "Bolt Drives", "expedite possible, over the PO limit", False,
-              detail="M-15 motors, arrive Thursday at the earliest")]}
+        _item("sup:BOLT", "Bolt Metals", "expedite possible, over the PO limit", False,
+              detail="CB-15 coil blanks, arrive Thursday at the earliest")]}
 
 
 def _plan_text(segments, n=4):
@@ -27,8 +27,8 @@ def _lines(plant, setpoints):
     for lid, ln in p.get("lines", {}).items():
         sp = setpoints.get("lines", {}).get(lid, {})
         idle = not sp.get("queue")
-        items.append(_item(f"line:{lid}", f"{lid} · {'/'.join(sp.get('queue', [])) or 'no queue'}",
-                           f"{ln['output']} units · OEE {ln['oee']:.0%}" + (f" · {sp['mode']}" if lid == "L1" else ""),
+        items.append(_item(f"line:{lid}", f"Press {lid} · {'/'.join(sp.get('queue', [])) or 'no queue'}",
+                           f"{ln['output']} units · OEE {ln['oee']:.0%}" + (f" · {sp['mode']}" if lid == "A" else ""),
                            idle, qty=ln["output"], unit="units", detail=_plan_text(ln["segments"])))
     cell = setpoints.get("cell", {})
     items.append(_item("cell:R1", "Robot weld cell R1", "FAULT · LOTO" if cell.get("fault") else "ready",
@@ -85,7 +85,7 @@ def view(config, docs):
     plant, erp = docs.get("plant", {}), docs.get("erp", {})
     flags = erp.get("flags/all", {}).get("flags", [])
     setpoints = plant.get("plant/setpoints", {})
-    flows = [{"id": "flow:motors", "from": "sup:APEX", "to": "line:L1", "label": "M-15 motors · none before Friday",
+    flows = [{"id": "flow:blanks", "from": "sup:APEX", "to": "line:A", "label": "CB-15 coil blanks · none before Friday",
               "status": "delayed", "abnormal": True}]
     return {"title": f"Plant floor · {config['plant']['site']}", "clock": config["plant"]["start_label"],
             "areas": [_upstream(erp), _lines(plant, setpoints), _orders(plant, {f["order_id"] for f in flags}),

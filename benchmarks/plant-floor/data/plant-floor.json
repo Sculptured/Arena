@@ -1,6 +1,6 @@
 {
  "plant": {
-  "site": "Ridgeline Pumps \u00b7 Plant 2 (assembly)",
+  "site": "Ridgeline Components \u00b7 Plant 2",
   "endpoint_label": "opc.tcp://plant2.ridgeline.local:4840",
   "start_label": "Mon 2026-11-16 06:00",
   "horizon_h": 64,
@@ -16,23 +16,22 @@
    ],
    "usd_per_night": 3000
   },
-  "motors_on_hand": 150,
   "products": {
-   "P-200": {
-    "name": "P-200 pump",
-    "motor": true
+   "BR-200": {
+    "name": "BR-200 welded bracket",
+    "material": true
    },
-   "V-50": {
-    "name": "V-50 valve",
-    "motor": false
+   "PL-50": {
+    "name": "PL-50 stamped plate",
+    "material": false
    }
   },
   "lines": [
    {
-    "id": "L1",
-    "name": "Pump line 1",
+    "id": "A",
+    "name": "Press line A",
     "makes": {
-     "P-200": 20
+     "BR-200": 20
     },
     "manual_rate": 12,
     "kw": 200,
@@ -44,10 +43,10 @@
     ]
    },
    {
-    "id": "L2",
-    "name": "Valve line 2",
+    "id": "B",
+    "name": "Press line B",
     "makes": {
-     "V-50": 25
+     "PL-50": 25
     },
     "kw": 300,
     "mode": "AUTO",
@@ -56,15 +55,15 @@
     ]
    },
    {
-    "id": "L3",
-    "name": "Flex line 3",
+    "id": "C",
+    "name": "Press line C",
     "makes": {
-     "P-200": 15,
-     "V-50": 20
+     "BR-200": 15,
+     "PL-50": 20
     },
     "kw": 300,
     "mode": "AUTO",
-    "product": "V-50",
+    "product": "PL-50",
     "changeover_h": 2,
     "queue": []
    }
@@ -79,7 +78,7 @@
    {
     "id": "SO-2002",
     "customer": "Northwind Energy",
-    "product": "P-200",
+    "product": "BR-200",
     "qty": 60,
     "due": "Wed 22:00",
     "penalty_usd": 5000
@@ -87,7 +86,7 @@
    {
     "id": "SO-2003",
     "customer": "Ridgeway Water",
-    "product": "V-50",
+    "product": "PL-50",
     "qty": 900,
     "due": "Tue 22:00",
     "penalty_usd": 5000
@@ -95,7 +94,7 @@
    {
     "id": "SO-2004",
     "customer": "Calder Farms",
-    "product": "P-200",
+    "product": "BR-200",
     "qty": 80,
     "due": "Wed 22:00",
     "penalty_usd": 5000
@@ -106,7 +105,7 @@
     "rush": {
      "id": "SO-2001",
      "customer": "Northwind Energy",
-     "product": "P-200",
+     "product": "BR-200",
      "qty": 120,
      "due": "Tue 06:00",
      "penalty_usd": 25000
@@ -115,11 +114,11 @@
     "events": [
      [
       "supplier",
-      "Apex Motors plant fire: PO-4471 (motors for the week) will not ship; no M-15 motors arrive before Friday"
+      "Apex Steel plant fire: PO-4471 (CB-15 coil blanks for the week) will not ship; no blanks arrive before Friday"
      ],
      [
       "demand",
-      "Northwind Energy demand spike: rush order SO-2001, 120 P-200 pumps, due Tue 06:00"
+      "Northwind Energy demand spike: rush order SO-2001, 120 BR-200 brackets, due Tue 06:00"
      ],
      [
       "cell",
@@ -127,33 +126,34 @@
      ]
     ]
    }
-  }
+  },
+  "material_on_hand": 150
  },
  "erp": {
-  "company": "Ridgeline Pumps",
+  "company": "Ridgeline Components",
   "today": "2026-11-16",
   "po_limit_usd": 5000,
   "lines": [
    {
-    "id": "L1",
-    "name": "Pump line 1",
-    "makes": "P-200 pumps"
+    "id": "A",
+    "name": "Press line A",
+    "makes": "BR-200 brackets (welded at R1)"
    },
    {
-    "id": "L2",
-    "name": "Valve line 2",
-    "makes": "V-50 valves"
+    "id": "B",
+    "name": "Press line B",
+    "makes": "PL-50 plates"
    },
    {
-    "id": "L3",
-    "name": "Flex line 3",
-    "makes": "pumps or valves"
+    "id": "C",
+    "name": "Press line C",
+    "makes": "brackets or plates"
    }
   ],
   "items": [
    {
-    "id": "M-15",
-    "name": "M-15 motor",
+    "id": "CB-15",
+    "name": "CB-15 coil blank",
     "on_hand": 150
    }
   ],
@@ -162,38 +162,38 @@
     "id": "SO-2001",
     "customer": "Northwind Energy",
     "key_account": true,
-    "product": "P-200 pump",
+    "product": "BR-200 bracket",
     "qty": 120,
     "priority": "rush",
-    "line": "L1",
+    "line": "A",
     "start": "2026-11-16",
     "due": "2026-11-17",
     "bom": {
-     "M-15": 1
+     "CB-15": 1
     }
    },
    {
     "id": "SO-2002",
     "customer": "Northwind Energy",
     "key_account": true,
-    "product": "P-200 pump",
+    "product": "BR-200 bracket",
     "qty": 60,
     "priority": "normal",
-    "line": "L1",
+    "line": "A",
     "start": "2026-11-16",
     "due": "2026-11-18",
     "bom": {
-     "M-15": 1
+     "CB-15": 1
     }
    },
    {
     "id": "SO-2003",
     "customer": "Ridgeway Water",
     "key_account": false,
-    "product": "V-50 valve",
+    "product": "PL-50 plate",
     "qty": 900,
     "priority": "normal",
-    "line": "L2",
+    "line": "B",
     "start": "2026-11-16",
     "due": "2026-11-17",
     "bom": {}
@@ -202,14 +202,14 @@
     "id": "SO-2004",
     "customer": "Calder Farms",
     "key_account": false,
-    "product": "P-200 pump",
+    "product": "BR-200 bracket",
     "qty": 80,
     "priority": "low",
-    "line": "L1",
+    "line": "A",
     "start": "2026-11-16",
     "due": "2026-11-18",
     "bom": {
-     "M-15": 1
+     "CB-15": 1
     }
    }
   ],
@@ -217,10 +217,10 @@
   "suppliers": [
    {
     "id": "APEX",
-    "name": "Apex Motors",
+    "name": "Apex Steel",
     "status": "on time",
     "offers": {
-     "M-15": {
+     "CB-15": {
       "unit_usd": 90,
       "lead_days": 5
      }
@@ -228,10 +228,10 @@
    },
    {
     "id": "BOLT",
-    "name": "Bolt Drives",
+    "name": "Bolt Metals",
     "status": "on time",
     "offers": {
-     "M-15": {
+     "CB-15": {
       "unit_usd": 95,
       "lead_days": 6,
       "stock": 200,
@@ -245,7 +245,7 @@
    {
     "po": "PO-4471",
     "supplier": "APEX",
-    "item": "M-15",
+    "item": "CB-15",
     "qty": 160,
     "for_order": "SO-2002",
     "arrives": "2026-11-16"
@@ -263,9 +263,9 @@
        "kind": "supplier_delay",
        "po": "PO-4471",
        "arrives": "2026-11-20",
-       "note": "Apex Motors: plant fire, PO-4471 will not ship before Friday"
+       "note": "Apex Steel: plant fire, PO-4471 will not ship before Friday"
       },
-      "text": "Apex Motors plant fire: PO-4471 (160 M-15 motors) pushed to Friday"
+      "text": "Apex Steel plant fire: PO-4471 (160 CB-15 coil blanks) pushed to Friday"
      }
     ]
    }

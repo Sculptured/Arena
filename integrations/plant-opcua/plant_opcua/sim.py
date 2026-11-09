@@ -1,4 +1,4 @@
-"""Plant 2's assembly floor as data and a projection: three lines, a robot cell, a motor stock, a power cap
+"""Plant 2's assembly floor as data and a projection: three press lines, a robot weld cell, a coil-blank stock, a power cap
 and overtime nights. Time is frozen at the planning point (Monday 06:00); the plant's MES projects what the
 current setpoints produce over the horizon, in 15-minute steps, deterministically."""
 import math
@@ -34,7 +34,7 @@ def new_state(config) -> dict:
     return {"scenario": "base", "orders": [dict(o) for o in config["orders"]], "lines": lines,
             "overtime": {n: False for n in config["overtime"]["nights"]},
             "cell": {"fault": None, "loto": False, "repair_requested": False},
-            "motors_on_hand": config["motors_on_hand"], "denials": [], "log": [], "events": []}
+            "material_on_hand": config["material_on_hand"], "denials": [], "log": [], "events": []}
 
 
 def order(state, oid):
@@ -146,15 +146,15 @@ def _step_line(config, state, ln, t, done, stock, ready):
     rate, uses_cell = _rate(config, ln, o["product"], t, ready)
     if rate == 0:
         return f"waiting for {ln.meta['needs_cell']}", 0
-    if config["products"][o["product"]]["motor"] and stock["motors"] <= 0:
-        return "starved: no motors", 0
+    if config["products"][o["product"]]["material"] and stock["material"] <= 0:
+        return "starved: no coil blanks", 0
     ln.acc += rate * STEP_MIN / 60
     whole = math.floor(ln.acc + 1e-9)
     left = o["qty"] - done[o["id"]]
     make = min(whole, left, q if q is not None else left)
-    if config["products"][o["product"]]["motor"]:
-        make = min(make, stock["motors"])
-        stock["motors"] -= make
+    if config["products"][o["product"]]["material"]:
+        make = min(make, stock["material"])
+        stock["material"] -= make
     ln.acc -= whole
     done[o["id"]] += make
     ln.out += make
@@ -171,7 +171,7 @@ def project(config, state) -> dict:
     lines = [_Line(config, state, m) for m in config["lines"]]
     done = {o["id"]: 0 for o in state["orders"]}
     finished = {}
-    stock = {"motors": state["motors_on_hand"]}
+    stock = {"material": state["material_on_hand"]}
     ready = cell_ready_at(config, state)
     peak, peak_at, kwh = 0, 0, 0.0
     for t in range(0, config["horizon_h"] * 60, STEP_MIN):
@@ -220,6 +220,6 @@ def _summary(config, state, lines, done, finished, peak, peak_at, kwh, stock, re
             "throughput": sum(v["output"] for v in per_line.values()),
             "on_time": sum(1 for o in orders if o["on_time"]), "orders_total": len(orders),
             "peak_kw": peak, "peak_at": label(peak_at), "cap_kw": config["power"]["cap_kw"],
-            "motors_left": stock["motors"], "cell_ready_at": label(ready) if ready is not None else None,
+            "material_left": stock["material"], "cell_ready_at": label(ready) if ready is not None else None,
             "cost_usd": {"late_penalties": late_usd, "overtime": overtime_usd, "energy": energy_usd,
                          "total": late_usd + overtime_usd + energy_usd}}

@@ -16,7 +16,7 @@ BRIDGE = {
                                     "plant's root, Plant2), each a folder or a tag with its value, whether it is "
                                     "writable, and what it means.",
                      "effect": "read", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}},
-    "opcua_read": {"description": "Read tags by node path (e.g. Plant2/Lines/L1/Queue).", "effect": "read",
+    "opcua_read": {"description": "Read tags by node path (e.g. Plant2/Lines/A/Queue).", "effect": "read",
                    "inputSchema": {"type": "object", "properties": {"nodes": {"type": "array",
                                                                                "items": {"type": "string"}}},
                                    "required": ["nodes"]}},
@@ -176,7 +176,7 @@ class PlantOpcua(JsonStatePart):
         p = sim.project(config, state)
         out = {"scenario/current": {"name": state["scenario"]},
                "plant/setpoints": {"lines": state["lines"], "overtime": state["overtime"], "cell": state["cell"],
-                                   "motors_on_hand": state["motors_on_hand"]},
+                                   "material_on_hand": state["material_on_hand"]},
                "plant/projection": p, "log/writes": {"entries": state["log"]},
                DENIALS: {"denials": state["denials"]}}
         out.update({f"order/{o['id']}": o for o in p["orders"]})

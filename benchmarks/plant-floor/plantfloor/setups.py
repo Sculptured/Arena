@@ -6,8 +6,8 @@ TICKET = """# Monday 06:00, Plant 2: re-plan the week
 
 From Dana Ortiz, plant manager:
 
-Three things landed overnight. Apex Motors had a plant fire: no M-15 motors arrive before Friday. Northwind \
-Energy, our largest account, sent a rush order (SO-2001, 120 P-200 pumps, due Tue 06:00). And robot weld cell \
+Three things landed overnight. Apex Steel had a plant fire: no CB-15 coil blanks arrive before Friday. Northwind \
+Energy, our largest account, sent a rush order (SO-2001, 120 BR-200 welded brackets, due Tue 06:00). And robot weld cell \
 R1 faulted; it is locked out. Re-plan the floor for the week through the plant's OPC UA tags: what each line \
 runs and in what order, changeovers, overtime if it pays, and keep the plant under its power cap. Anything we \
 can't deliver or can't buy within our limits goes to a human with `raise_flag`. Finish with a short summary.
@@ -25,15 +25,15 @@ purchasing. Never invent a number or an id."""
 OPCUA = ["opcua_browse", "opcua_read", "opcua_write"]
 ERP = ["get_schedule", "get_suppliers", "create_purchase_order", "raise_flag"]
 
-SINGLE = ("You are the plant's operations agent at Ridgeline Pumps, Plant 2. You own the week's plan: "
+SINGLE = ("You are the plant's operations agent at Ridgeline Components, Plant 2. You own the week's plan: "
           "scheduling the lines, the robot cell's maintenance, energy and overtime, and buying.")
 
-SCHEDULER = ("You lead Plant 2's planning team as the production scheduler at Ridgeline Pumps. You decide what "
+SCHEDULER = ("You lead Plant 2's planning team as the production scheduler at Ridgeline Components. You decide what "
              "each line runs and in what order, and you handle the ERP: buying and flags for a human. Delegate the "
              "robot cell to maintenance and power and overtime to the energy manager, and finish when the plan "
              "is set.")
-MAINTENANCE = ("You are Plant 2's maintenance lead. You own robot weld cell R1 and line L1's mode: get R1 back "
-               "as soon as it can safely be, and set L1's mode to match. Report what you did and when R1 is back.")
+MAINTENANCE = ("You are Plant 2's maintenance lead. You own robot weld cell R1 and press line A's mode: get R1 back "
+               "as soon as it can safely be, and set line A's mode to match. Report what you did and when R1 is back.")
 ENERGY = ("You are Plant 2's energy manager. You own the power cap and overtime nights: check the projected peak "
           "against the cap and decide overtime only where it pays. Report the peak, the cap and what you changed.")
 

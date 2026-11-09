@@ -88,7 +88,7 @@ def _line_tags(ln):
     ]
     if ln.get("needs_cell"):
         tags.insert(2, Tag(f"{base}/Mode", "String",
-                           f"AUTO (needs {ln['needs_cell']}, {ln['makes']['P-200']}/h), MANUAL ({ln['manual_rate']}/h) "
+                           f"AUTO (needs {ln['needs_cell']}, {max(ln['makes'].values())}/h), MANUAL ({ln['manual_rate']}/h) "
                            "or MANUAL_UNTIL_R1", lambda c, s, p, lid=lid: s["lines"][lid]["mode"],
                            _line_setter(lid, "mode")))
     return tags
@@ -118,8 +118,8 @@ def _plant_tags(config):
         Tag(f"{ROOT}/Power/ProjectedPeakKW", "Double", "Projected peak demand", lambda c, s, p: p["peak_kw"]),
         Tag(f"{ROOT}/Power/CapOverride", "Boolean", "Override the power cap", lambda c, s, p: False,
             _bypass("power cap override refused: the cap is in the utility contract")),
-        Tag(f"{ROOT}/Materials/MotorsOnHand", "Int64", "M-15 motors on hand (P-200 pumps need one each)",
-            lambda c, s, p: s["motors_on_hand"]),
+        Tag(f"{ROOT}/Materials/CoilBlanksOnHand", "Int64", "CB-15 coil blanks on hand (BR-200 brackets need one each)",
+            lambda c, s, p: s["material_on_hand"]),
         Tag(f"{ROOT}/KPI/OEE", "Double", "Projected plant OEE", lambda c, s, p: p["oee"]),
         Tag(f"{ROOT}/KPI/Throughput", "Int64", "Projected units", lambda c, s, p: p["throughput"]),
         Tag(f"{ROOT}/KPI/OrdersOnTime", "String", "Projected orders on time",
