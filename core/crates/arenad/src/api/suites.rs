@@ -207,10 +207,8 @@ async fn compare(
     State(state): State<Arc<AppState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Comparison> {
-    let (Some(a), Some(b)) = (q.get("a"), q.get("b")) else {
-        return Err(ApiError::bad("a and b are required"));
-    };
-    let a = suite::load(&state.store, find(&state, a).await?).await?;
-    let b = suite::load(&state.store, find(&state, b).await?).await?;
+    let (a, b) = super::pair(&q)?;
+    let a = suite::load(&state.store, find(&state, &a).await?).await?;
+    let b = suite::load(&state.store, find(&state, &b).await?).await?;
     Ok(Json(suite::compare(&a, &b)))
 }
