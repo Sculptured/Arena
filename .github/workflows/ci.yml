@@ -77,6 +77,10 @@ jobs:
       - name: Test the Python kit
         working-directory: kits/python
         run: uv run --with pytest pytest -q
+      - name: Test the plant floor (its OPC UA part and its benchmark)
+        run: |
+          (cd integrations/plant-opcua && uv run --with pytest pytest -q)
+          (cd benchmarks/plant-floor && uv run --with pytest --with asyncua==2.1.0 pytest -q)
       - name: Test Factory-01 (its ERP part and its benchmark)
         run: |
           (cd integrations/factory-01-erp && uv run --with pytest pytest -q)
