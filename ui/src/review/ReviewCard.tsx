@@ -1,9 +1,9 @@
-import { Sparkles, Undo2 } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Button } from '../components/ui/button';
 import { Tag } from '../components/ui/status';
-import type { BranchDetail, Change } from '../types';
-import { KIND_LABEL, SEVERITY_LABEL, canTry, prefillOf, smallPrint, tryStep } from './present';
+import type { BranchDetail } from '../types';
+import { KIND_LABEL, SEVERITY_LABEL, smallPrint } from './present';
 import { useReviewEnabled } from './setting';
 import type { RunReview, StoredReview, Suggestion, WentWrong } from './types';
 import { useReview } from './useReview';
@@ -47,10 +47,8 @@ function Wrong({ w, onStep }: { w: WentWrong; onStep: (seq: number) => void }) {
   );
 }
 
-function Tip({ s, d, onTry }: { s: Suggestion; d: BranchDetail; onTry?: (seq: number, prefill: Record<string, Change>) => void }) {
+function Tip({ s, d }: { s: Suggestion; d: BranchDetail }) {
   const agent = s.agent ? d.team.agents.find((a) => a.id === s.agent)?.name ?? s.agent : null;
-  const prefill = prefillOf(s, d.team);
-  const seq = canTry(s) ? tryStep(s, d.events) : null;
   return (
     <li className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -59,22 +57,17 @@ function Tip({ s, d, onTry }: { s: Suggestion; d: BranchDetail; onTry?: (seq: nu
       <p className="text-sm font-medium leading-5">{s.change}</p>
       <p className="text-sm leading-5 text-muted">{s.why}</p>
       {s.prompt_text && <blockquote className="border-l-2 border-line-strong pl-2 text-xs text-muted">{s.prompt_text}</blockquote>}
-      {onTry && prefill && seq != null && (
-        <Button size="sm" className="self-start" onClick={() => onTry(seq, prefill)} title={`Open "Change and rerun" at step ${seq} with this added to the prompt`}>
-          <Undo2 />Rewind and try this
-        </Button>
-      )}
     </li>
   );
 }
 
-export function RunReviewBody({ r, d, onStep, onTry }: { r: RunReview; d: BranchDetail; onStep: (seq: number) => void; onTry?: (seq: number, prefill: Record<string, Change>) => void }) {
+export function RunReviewBody({ r, d, onStep }: { r: RunReview; d: BranchDetail; onStep: (seq: number) => void }) {
   return (
     <div className="flex flex-col gap-4 px-4 pb-3">
       <p className="text-base leading-6 font-medium">{r.verdict}</p>
       <div className="grid gap-5 lg:grid-cols-2">
         {r.went_wrong.length > 0 && <Section title="Where it went wrong"><ul className="flex flex-col gap-3">{r.went_wrong.map((w, i) => <Wrong key={i} w={w} onStep={onStep} />)}</ul></Section>}
-        {r.suggestions.length > 0 && <Section title="Suggestions"><ul className="flex flex-col gap-3">{r.suggestions.map((s, i) => <Tip key={i} s={s} d={d} onTry={onTry} />)}</ul></Section>}
+        {r.suggestions.length > 0 && <Section title="Suggestions"><ul className="flex flex-col gap-3">{r.suggestions.map((s, i) => <Tip key={i} s={s} d={d} />)}</ul></Section>}
       </div>
       {r.went_well.length > 0 && (
         <Section title="What went well">
@@ -110,11 +103,10 @@ function Offer({ onStart }: { onStart: () => void }) {
  * suggestions (prompt and team changes can be tried from the step they name) and what went well.
  * Hidden when AI review is off. With `auto`, a run without a review is reviewed at once.
  */
-export default function ReviewCard({ d, auto, onStep, onTry }: {
+export default function ReviewCard({ d, auto, onStep }: {
   d: BranchDetail;
   auto: boolean;
   onStep: (seq: number) => void;
-  onTry?: (seq: number, prefill: Record<string, Change>) => void;
 }) {
   const enabled = useReviewEnabled();
   const ended = d.status !== 'running';
@@ -122,6 +114,6 @@ export default function ReviewCard({ d, auto, onStep, onTry }: {
   if (!enabled || !ended || !h.loaded) return null;
   return (
     <ReviewFrame label="AI review" h={h} what="the run's record" retryHint="Nothing else changed. Try again, or turn AI review off under ⋯."
-      empty={<Offer onStart={() => h.start()} />} headline={(r) => r.verdict} done={(r) => <RunReviewBody r={r} d={d} onStep={onStep} onTry={onTry} />} footer={(s) => <Footer s={s} />} />
+      empty={<Offer onStart={() => h.start()} />} headline={(r) => r.verdict} done={(r) => <RunReviewBody r={r} d={d} onStep={onStep} />} footer={(s) => <Footer s={s} />} />
   );
 }

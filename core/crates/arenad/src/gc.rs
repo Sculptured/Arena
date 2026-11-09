@@ -19,11 +19,12 @@ use crate::{
 };
 
 /// Bytes the arena keeps: the `usage` of each integration `benchmark`'s world uses, plus the
-/// save folders.
+/// save folders. An integration that is not installed keeps nothing and is skipped.
 pub async fn usage(hub: &Hub, benchmark: &str) -> Result<u64> {
     let mut bytes = hub.saves_bytes();
-    for i in integrations(hub, benchmark).await? {
-        bytes += saves::usage(hub, &i).await?;
+    let world = integrations(hub, benchmark).await?;
+    for i in world.iter().filter(|i| hub.registry().get(i).is_some()) {
+        bytes += saves::usage(hub, i).await?;
     }
     Ok(bytes)
 }

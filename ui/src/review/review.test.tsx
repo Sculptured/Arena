@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import type { BranchDetail, Event } from '../types';
 import { reviewPath } from './api';
-import { modelName, prefillOf, smallPrint, tryStep } from './present';
+import { modelName, smallPrint } from './present';
 import { RunReviewBody } from './ReviewCard';
 import { parseOn } from './setting';
 import type { CompareReview, RunReview, StoredReview, Suggestion } from './types';
@@ -26,20 +26,6 @@ const detail = { id: 'b', run_id: 'r', team, events, status: 'failed' } as unkno
 const tip = (over: Partial<Suggestion>): Suggestion => ({ change: 'c', why: 'w', kind: 'prompt', ...over });
 
 describe('review presentation', () => {
-  it('pre-fills the prompt of the agent a suggestion names, or of every agent', () => {
-    expect(prefillOf(tip({ agent: 'production', prompt_text: 'Update the work order.' }), team))
-      .toEqual({ production: { prompt: 'Bring the next batch forward.\n\nUpdate the work order.' } });
-    expect(Object.keys(prefillOf(tip({ prompt_text: 'Be careful.' }), team) ?? {})).toEqual(['quality', 'production']);
-    expect(prefillOf(tip({ kind: 'tool', prompt_text: 'x' }), team)).toBeNull();
-    expect(prefillOf(tip({ prompt_text: '  ' }), team)).toBeNull();
-    expect(prefillOf(tip({ agent: 'ghost', prompt_text: 'x' }), team)).toBeNull();
-  });
-  it('reruns from the suggestion\'s step, else its agent\'s start, moved to a step a rerun can start from', () => {
-    expect(tryStep(tip({ step: 215 }), events)).toBe(215);
-    expect(tryStep(tip({ agent: 'production' }), events)).toBe(212);
-    expect(tryStep(tip({ step: 304 }), events)).toBeNull();
-    expect(tryStep(tip({}), events)).toBe(3);
-  });
   it('says who reviewed, what it cost and how long it took', () => {
     const s = { model: 'claude_code:sonnet', cost_usd: 0.0412, cost_source: 'api_equivalent_estimate', tokens: 30000, seconds: 41.4 } as StoredReview;
     expect(smallPrint(s)).toBe('Reviewed by Claude Code sonnet · $0.041 (API-equivalent) · 41 s');
@@ -62,12 +48,12 @@ describe('review cards', () => {
     went_well: ['No safety check failed'],
     confidence: 'high',
   };
-  it('shows the verdict, steps, suggestions and "Rewind and try this" only where it can pre-fill', () => {
-    const html = text(renderToStaticMarkup(<RunReviewBody r={review} d={detail} onStep={() => {}} onTry={() => {}} />));
+  it('shows the verdict, steps and suggestions, and never offers a rewind', () => {
+    const html = text(renderToStaticMarkup(<RunReviewBody r={review} d={detail} onStep={() => {}} />));
     for (const s of ['The next batch was never brought forward.', 'Where it went wrong', 'Goal', 'Step 215', 'Suggestions', 'Production planner', 'What went well', '✓ No safety check failed', "its steps weren't in the run"]) {
       expect(html).toContain(s);
     }
-    expect(html.match(/Rewind and try this/g)).toHaveLength(1);
+    expect(html).not.toContain('Rewind');
   });
   it('shows what matters between two runs with links to each side\'s steps', () => {
     const r: CompareReview = { headline: 'B opened the deviation.', which_is_better: 'b', why: 'Fewer failed checks.',

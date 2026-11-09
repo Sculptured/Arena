@@ -1,10 +1,8 @@
-import { ChevronLeft, ChevronRight, Pause, Play, Undo2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
 import { type PointerEvent, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { cn } from '@/lib/cn';
 import { type Happening, type Track, type TrackMark, nearestStop, trackAt } from './scrub';
-import type { Rewind } from './page';
 import type { ItemChange } from './twin';
 
 const MARK: Record<TrackMark['kind'], { glyph: string; word: string; cls: string }> = {
@@ -66,7 +64,6 @@ export interface ScrubberProps {
   onPlay: () => void;
   onStep: (seq: number) => void;
   onMove: (dir: 'prev' | 'next') => void;
-  rewind: Rewind;
 }
 
 function Controls(p: ScrubberProps) {
@@ -78,14 +75,11 @@ function Controls(p: ScrubberProps) {
         <Button size="icon" onClick={() => p.onMove('next')} aria-label="Next step" title="Next view (→)"><ChevronRight /></Button>
       </div>
       <span className="min-w-0 flex-1 truncate text-sm font-medium" title={`View ${p.index + 1} of ${p.track.stops.length}`}>{p.headline}</span>
-      {p.rewind.href
-        ? <Button size="md" variant="default" asChild title={p.rewind.why}><Link to={p.rewind.href}><Undo2 />Rewind here</Link></Button>
-        : <Button size="md" disabled title={p.rewind.why}><Undo2 />Rewind here</Button>}
     </div>
   );
 }
 
-/** The scrubber over the branch's steps: play and pause, step through the views, rewind from the one on screen. */
+/** The scrubber over the branch's steps: play and pause, and step through the views. */
 export default function Scrubber(p: ScrubberProps) {
   return (
     <div className="flex flex-col gap-1 pb-1">

@@ -200,14 +200,7 @@ mod tests {
     use serde_json::json;
 
     fn ev(seq: i64, kind: EventKind, payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq,
-            at: chrono::Utc::now(),
-            agent: None,
-            kind,
-            payload,
-        }
+        crate::testkit::event(seq, None, kind, payload)
     }
 
     fn write(seq: i64, part: &str, saves: Value) -> Event {

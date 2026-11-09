@@ -146,3 +146,19 @@ def test_describe_over_the_protocol_lists_the_agents_tools():
     tools = [t["name"] for t in json.loads(out.stdout)["result"]["tools"]]
     assert tools == ["get_inventory", "get_schedule", "get_suppliers", "reserve_stock", "reschedule_order",
                      "create_purchase_order", "raise_flag", "erp_scenario"]
+
+
+DENIAL_WORDS = ("refused", "denied", "not allowed", "forbidden")  # docs/protocol.md, "Denials and flags"
+
+
+def test_denials_and_flags_follow_the_counting_convention():
+    part, _ = started()
+    denial = call(part, "create_purchase_order", supplier="BOLT", item="M-15", qty=16, expedite=True)["error"]
+    assert any(w in denial.lower() for w in DENIAL_WORDS)
+    ordinary = [call(part, "reserve_stock", order_id="SO-1001", item="M-15", qty=99)["error"],
+                call(part, "create_purchase_order", supplier="APEX", item="SK-2", qty=1)["error"],
+                call(part, "reschedule_order", order_id="SO-9", start_date="2026-11-20")["error"]]
+    for e in ordinary:
+        low = e.lower()
+        assert not any(w in low for w in DENIAL_WORDS) and not ("exceeds" in low and "limit" in low), e
+    assert "flag" in "raise_flag"

@@ -8,7 +8,7 @@ import type { Strip } from './divergence';
 import { type Figure, type OutcomeRow, type SideInput, outcomeRows, verdict } from './outcomes';
 
 function Value({ f, better }: { f: Figure; better: boolean }) {
-  return <span title={f.title} className={cn('font-mono text-sm', f.abnormal && 'font-semibold text-alarm', better && !f.abnormal && 'font-semibold')}>{f.text}</span>;
+  return <span title={f.title} className={cn('text-sm tabular-nums', f.abnormal && 'font-semibold text-alarm', better && !f.abnormal && 'font-semibold')}>{f.text}</span>;
 }
 
 function Row({ r }: { r: OutcomeRow }) {

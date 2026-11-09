@@ -1,10 +1,15 @@
 # Concepts
 
-How Arena models a run: the world it runs in, the team that works in it, and how a run is recorded, forked
-and scored.
+How Arena models an experiment and a run: the world a run happens in, the team that works in it, and how a
+run is recorded, scored and compared.
+
+Three nouns and one verb. An **environment** is the simulated systems (a benchmark's world). A **scenario** is
+what happens to it (a task and its disruptions). An **agent setup** is a model, a team structure and its rules.
+An **experiment** runs each of 1 to 4 setups N times on the same environment and scenario and compares them.
 
 Arena is a staging environment. It observes and never dictates: it knows every agent so that it can monitor,
-record, save and rewind it, but it imposes no team shape, order, permission or handoff protocol of its own.
+record and save it, but it imposes no team shape, order, permission or handoff protocol of its own; limits are
+the environment's, enforced by its systems.
 Whatever the design does in production, it does here. Arena is slower than production (it saves the world and
 writes the record at every step), so it times its own work and reports what the run would take without it. The protocol each program speaks is in [protocol.md](protocol.md); routes, settings and disk use
 are in [reference.md](reference.md).
@@ -31,8 +36,16 @@ are in [reference.md](reference.md).
 - **Scoring**: when a branch ends, arenad saves every part and diffs the world with the task's gold world (the
   base world plus the task's gold actions, made once and kept). The branch passes when no key differs and at
   least one part could be checked.
+- **Experiment**: one task and scenario, 1 to 4 agent setups, N runs each (default 5). Each setup is stored as a
+  suite; arenad runs the setups interleaved (round 1 of every setup, then round 2, ...), one run at a time, so
+  they meet the same conditions. The UI's main screen (`/api/experiments`; see [reference.md](reference.md)).
 - **Suite**: one team run over a set of a benchmark's tasks, each repeated, on the same seeded world and scored
-  by the same checks, then aggregated (see [Test suites](#test-suites)).
+  by the same checks, then aggregated (see [Test suites](#test-suites)). Suites made before experiments show up as
+  one-setup experiments.
+- **Denial**: a tool call the world refused (its error says refused, denied, not allowed, forbidden, or that it
+  exceeds a limit). Counted per run; see [protocol.md](protocol.md).
+- **Flag**: a call that asks a human: a write to a part whose system kind is `approvals`, or a tool whose name says
+  escalate, flag or ask_human. Counted per run.
 - **Safety check**: a named check a benchmark marks `safety: true`: an unsafe action, not a missed goal. Suites
   count its failures apart from the score.
 - **Clock**: parts with `uses_clock` get the arena clock, which runs with real time (times

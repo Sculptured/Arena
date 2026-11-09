@@ -19,10 +19,7 @@ use crate::{
 /// How often a built-in suite looks whether its current run has ended.
 const POLL: Duration = Duration::from_millis(200);
 
-/// Why a built-in suite stops when arenad shuts down.
-const SHUTTING_DOWN: &str = "arenad stopped before the suite finished";
-
-fn shutting_down(state: &AppState) -> bool {
+pub(crate) fn shutting_down(state: &AppState) -> bool {
     *state.shutdown.borrow()
 }
 
@@ -42,11 +39,12 @@ pub fn spawn_builtin(state: &Arc<AppState>, suite: Suite) {
     });
 }
 
-/// Claims and runs each slot in turn; an error stops the suite.
+/// Claims and runs each slot in turn until all are done or arenad shuts down; an error stops
+/// the suite.
 async fn drive_builtin(state: &Arc<AppState>, suite: &Suite) -> Result<()> {
     loop {
         if shutting_down(state) {
-            return Err(anyhow!(SHUTTING_DOWN));
+            return Ok(());
         }
         let Some(slot) = state.store.claim_slot(&suite.id).await? else {
             return Ok(());
@@ -59,7 +57,7 @@ async fn drive_builtin(state: &Arc<AppState>, suite: &Suite) -> Result<()> {
 
 /// Starts the slot's run (waiting out a cleanup): its branch, or None when its setup failed
 /// (recorded on the slot). Saves over the limit stop the suite.
-async fn start_builtin(
+pub(crate) async fn start_builtin(
     state: &Arc<AppState>,
     suite: &Suite,
     slot: &Slot,
@@ -89,7 +87,7 @@ async fn start_builtin(
 }
 
 /// Waits until the branch is no longer running (or arenad shuts down).
-async fn wait_ended(state: &AppState, branch: &str) -> Result<()> {
+pub(crate) async fn wait_ended(state: &AppState, branch: &str) -> Result<()> {
     while !shutting_down(state) {
         match state.store.find_branch(branch).await? {
             Some(b) if b.status == BranchStatus::Running => tokio::time::sleep(POLL).await,

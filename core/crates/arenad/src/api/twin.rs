@@ -73,9 +73,7 @@ async fn branch_views(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<Vec<Value>> {
-    if state.store.find_branch(&id).await?.is_none() {
-        return Err(ApiError::not_found(format!("there is no branch \"{id}\"")));
-    }
+    super::branch_or_404(&state, &id).await?;
     let events = state.store.events(&id).await?;
     Ok(Json(views(&events)))
 }

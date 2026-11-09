@@ -11,7 +11,7 @@ export default function KpiStrip({ kpis, before, clock }: { kpis: TwinKpi[]; bef
           <div key={k.id} className="flex min-w-0 flex-col">
             <span className="truncate text-2xs font-medium text-muted">{k.label}</span>
             <span className="flex min-w-0 items-baseline gap-2">
-              <span className={cn('font-mono text-lg font-semibold whitespace-nowrap', k.abnormal && 'text-alarm', was != null && !k.abnormal && 'text-accent')}>{k.abnormal ? '⚠ ' : ''}{k.value}</span>
+              <span className={cn('text-lg font-semibold tabular-nums whitespace-nowrap', k.abnormal && 'text-alarm', was != null && !k.abnormal && 'text-accent')}>{k.abnormal ? '⚠ ' : ''}{k.value}</span>
               {was != null && <span className="truncate text-xs font-medium text-accent">was {was}</span>}
             </span>
           </div>
@@ -20,7 +20,7 @@ export default function KpiStrip({ kpis, before, clock }: { kpis: TwinKpi[]; bef
       {clock && (
         <div className="flex min-w-0 flex-col" title={clock}>
           <span className="text-2xs font-medium text-muted">World clock</span>
-          <span className="font-mono text-lg font-semibold">{clock.split(' ')[1] ?? clock}</span>
+          <span className="text-lg font-semibold tabular-nums">{clock.split(' ')[1] ?? clock}</span>
         </div>
       )}
     </div>

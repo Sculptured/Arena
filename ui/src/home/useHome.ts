@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, runs as fetchRuns, suggestedTeams, tasks as fetchTasks, views as fetchViews } from '../api';
 import { loadTeam, saveTeam } from '../team';
+import { taskName } from './summary';
 import type { BenchmarkDescription, TaskSummary, Team } from '../types';
 import type { TwinView } from '../world/types';
 
@@ -14,6 +15,12 @@ export function useTasks() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { fetchTasks().then((t) => setTasks(t as Task[])).catch((e) => setError(String(e.message ?? e))); }, []);
   return { tasks, error };
+}
+
+/** A task id in plain words (its one-line reason); the id itself while the tasks load or once the benchmark no longer lists it. */
+export function useTaskNames(): (id: string) => string {
+  const { tasks } = useTasks();
+  return useCallback((id: string) => { const t = tasks?.find((x) => x.id === id); return t ? taskName(t) : id; }, [tasks]);
 }
 
 /** The team new runs use (kept in this browser), and a way to replace it (an import). */
