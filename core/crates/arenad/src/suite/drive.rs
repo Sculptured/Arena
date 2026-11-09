@@ -19,9 +19,6 @@ use crate::{
 /// How often a built-in suite looks whether its current run has ended.
 const POLL: Duration = Duration::from_millis(200);
 
-/// Why a built-in suite stops when arenad shuts down.
-const SHUTTING_DOWN: &str = "arenad stopped before the suite finished";
-
 pub(crate) fn shutting_down(state: &AppState) -> bool {
     *state.shutdown.borrow()
 }
@@ -42,11 +39,12 @@ pub fn spawn_builtin(state: &Arc<AppState>, suite: Suite) {
     });
 }
 
-/// Claims and runs each slot in turn; an error stops the suite.
+/// Claims and runs each slot in turn until all are done or arenad shuts down; an error stops
+/// the suite.
 async fn drive_builtin(state: &Arc<AppState>, suite: &Suite) -> Result<()> {
     loop {
         if shutting_down(state) {
-            return Err(anyhow!(SHUTTING_DOWN));
+            return Ok(());
         }
         let Some(slot) = state.store.claim_slot(&suite.id).await? else {
             return Ok(());
