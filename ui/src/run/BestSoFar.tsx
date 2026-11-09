@@ -3,7 +3,7 @@ import { Panel, PanelHeader } from '../components/ui/panel';
 import { type Candidate, type Study, objectiveText, ticks } from './candidates';
 
 const H = 184;
-const M = { l: 40, r: 92, t: 14, b: 24 };
+const M = { l: 40, r: 108, t: 14, b: 24 };
 
 function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
@@ -101,7 +101,7 @@ function Dot({ c, s, f, selected, onSelect }: { c: Candidate; s: Study; f: Frame
   );
 }
 
-function Chart({ s, width, selected, onSelect }: { s: Study; width: number; selected: number | null; onSelect: (seq: number) => void }) {
+export function Chart({ s, width, selected, onSelect }: { s: Study; width: number; selected: number | null; onSelect: (seq: number) => void }) {
   const f = frameOf(s, width);
   const steps = s.candidates.filter((c) => c.best != null);
   const path = steps.map((c, i) => `${i ? `H${f.x(c.n)}V` : `M${f.x(c.n)},`}${f.y(c.best!)}`).join('') + (steps.length ? `H${f.x(f.xMax + 0.5)}` : '');

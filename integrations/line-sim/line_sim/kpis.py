@@ -39,7 +39,9 @@ def _line_kpis(spec: dict, r: dict, measured: float) -> dict:
            f"{spec['id']}.good_per_week": float(r["good"])}
     if len(spec["variants"]) > 1:
         flow = r["flow_mean_s"] or 0.0
-        wait = (r["campaign_cycle_s"] or 0.0) / 2  # an order waits on average half a campaign cycle
+        # An order waits on average half a campaign cycle; a week with under two campaign starts of the
+        # first variant counts the whole week as the cycle.
+        wait = (r["campaign_cycle_s"] or measured) / 2
         out.update({f"{spec['id']}.quality": 100.0 * r["good"] / made if made else 0.0,
                     f"{spec['id']}.wip": r["wip_mean"],
                     f"{spec['id']}.lead_time_h": (flow + wait) / HOUR})

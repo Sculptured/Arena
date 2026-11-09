@@ -6,6 +6,8 @@ import type { Measure } from '../types';
 
 export interface MeasureDot {
   value: number;
+  /** Its lane on the strip, so dots that would overlap sit side by side: 0 on the line, then 1, -1, 2, -2. */
+  lane: number;
   /** The run's page; null before it started. */
   href: string | null;
   title: string;
@@ -48,7 +50,7 @@ function cellOf(r: SuiteReport, name: string, better: MeasureRow['better'], unit
   r.runs.forEach((run, i) => {
     const m = run.outcome?.scored ? run.outcome.checks.find((c) => c.name === name)?.measure : undefined;
     if (!m) return;
-    dots.push({ value: m.value, href: run.run_id && run.branch_id ? `/runs/${run.run_id}/${run.branch_id}` : null, title: `Run ${i + 1} · ${measureText(m.value, unit)}` });
+    dots.push({ value: m.value, lane: 0, href: run.run_id && run.branch_id ? `/runs/${run.run_id}/${run.branch_id}` : null, title: `Run ${i + 1} · ${measureText(m.value, unit)}` });
   });
   const vals = dots.map((d) => d.value);
   const top = !vals.length ? null : better === 'higher' ? Math.max(...vals) : better === 'lower' ? Math.min(...vals) : mean(vals);
@@ -81,6 +83,17 @@ function measuresIn(reports: SuiteReport[]): Map<string, Measure> {
   return out;
 }
 
+const LANES = [0, 1, -1, 2, -2];
+
+/** Puts each dot in the first lane where no dot within `gap` (in value) sits already. */
+export function dodge(dots: MeasureDot[], gap: number): void {
+  const placed: MeasureDot[] = [];
+  for (const d of [...dots].sort((a, b) => a.value - b.value)) {
+    d.lane = LANES.find((l) => !placed.some((p) => p.lane === l && Math.abs(p.value - d.value) < gap)) ?? 0;
+    placed.push(d);
+  }
+}
+
 /** One row per measured check, a cell per setup, on a shared scale. */
 export function measureRows(reports: SuiteReport[]): MeasureRow[] {
   return [...measuresIn(reports)].map(([name, m]) => {
@@ -89,7 +102,9 @@ export function measureRows(reports: SuiteReport[]): MeasureRow[] {
     const cells = reports.map((r) => cellOf(r, name, better, unit));
     markBest(cells, better);
     const marks = [...cells.flatMap((c) => c.dots.map((d) => d.value)), ...(m.target != null ? [m.target] : []), ...(m.reference ? [m.reference.value] : [])];
-    return { name, label: m.label, unit, better, target: m.target ?? null, reference: m.reference ?? null, domain: domainOf(marks, !better), cells };
+    const domain = domainOf(marks, !better);
+    for (const c of cells) dodge(c.dots, (domain[1] - domain[0]) * 0.03);
+    return { name, label: m.label, unit, better, target: m.target ?? null, reference: m.reference ?? null, domain, cells };
   });
 }
 

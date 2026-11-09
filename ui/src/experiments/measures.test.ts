@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunOutcome, RunRow, SuiteReport } from '../control/types';
 import type { NamedCheck } from '../types';
-import { measureRows, measureText, position } from './measures';
+import { dodge, measureRows, measureText, position } from './measures';
 
 const OEE = { label: 'Line 2 OEE', unit: '%', better: 'higher' as const, target: 85, reference: { label: 'Random search, 30 simulations', value: 77.2 } };
 
@@ -40,7 +40,7 @@ describe('measures per setup', () => {
   it('counts only scored runs that measured it, and links each dot to its run', () => {
     expect(oee.cells[0].dots.map((d) => d.value)).toEqual([87.5, 83.1]);
     expect(oee.cells[1].dots).toHaveLength(1); // the unscored run is left out
-    expect(oee.cells[0].dots[0]).toEqual({ value: 87.5, href: '/runs/r1/b1', title: 'Run 1 · 87.5%' });
+    expect(oee.cells[0].dots[0]).toEqual({ value: 87.5, lane: 0, href: '/runs/r1/b1', title: 'Run 1 · 87.5%' });
   });
 
   it('marks the best setup only for a measure with a better way', () => {
@@ -56,6 +56,12 @@ describe('measures per setup', () => {
     expect(position(oee, lo)).toBe(0);
     expect(position(oee, hi)).toBe(100);
     expect(position({ domain: [5, 5] }, 5)).toBe(50);
+  });
+
+  it('moves dots that would overlap into lanes beside the line', () => {
+    const dots = [86.2, 86.3, 88.5, 86.25].map((value) => ({ value, lane: 0, href: null, title: '' }));
+    dodge(dots, 0.4);
+    expect(dots.map((d) => d.lane)).toEqual([0, -1, 0, 1]); // by value: 86.2 on the line, 86.25 above, 86.3 below
   });
 
   it('has no rows when no check measures anything', () => {

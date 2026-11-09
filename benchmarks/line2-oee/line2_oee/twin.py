@@ -23,7 +23,7 @@ def _line(config: dict, line: dict, latest: dict | None) -> dict:
         losses = ", ".join(f"{k} {r[k]:.0f}%" for k in ("changeover", "down", "pm", "blocked", "starved")
                            if r[k] >= 1)
         items.append(_item(iid, st["name"], f"{r['working']:.0f}% working", r["down"] >= 10,
-                           detail=losses or "no losses", qty=r["working"], unit="% working"))
+                           detail=losses or "no losses"))
     return {"id": line["id"], "label": f"{line['name']} · {line['product']}", "kind": "plant", "items": items}
 
 
@@ -67,8 +67,6 @@ def view(config: dict, docs: dict) -> dict:
     sims = _sims(sim)
     rec = sim.get("recommendation/final")
     denials = sim.get("_audit/denials", {}).get("denials", [])
-    latest = sims[-1] if sims else None
+    latest = sims[-1] if sims else None  # the stations as the latest simulation saw them
     areas = [_line(config, ln, latest) for ln in config["lines"]] + [_study(sims, rec, denials)]
-    return {"title": f"{config['company']} · Line 2 OEE study",
-            "clock": f"Simulation {latest['simulation']}" if latest else "No simulation yet",
-            "areas": areas, "flows": [], "kpis": _kpis(config, sims, rec, sim.get("study/budget", {}))}
+    return {"title": f"{config['company']} · Line 2 OEE study", "areas": areas, "flows": [], "kpis": _kpis(config, sims, rec, sim.get("study/budget", {}))}

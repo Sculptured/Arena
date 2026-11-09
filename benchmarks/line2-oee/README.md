@@ -58,6 +58,24 @@ deny), 5 replications each, then the best feasible one verified on 20 new replic
 random configs rarely beat today's. It is a number beside the score (`goal_reached`'s
 `measure.reference`), never a run.
 
+## Results
+
+One experiment, 2026-11-09, recorded by arenad on this branch: the three designs, 5 runs each, every agent
+Claude Code on Haiku (`claude-haiku-5-5`), runs interleaved. Verified OEE is the recommendation's, re-simulated
+on 20 new replications. Cost is Claude Code's own API-equivalent estimate.
+
+| Setup | Passed | Verified Line 2 OEE: best · mean · worst | Simulations per run (range) | Cost per run | Time per run | Denied calls |
+|---|---|---|---|---|---|---|
+| Single optimiser | 5 of 5 | 88.5% · 87.2% · 86.2% | 19.8 (12–25) | USD 0.015 | 72 s | 0 |
+| Planner and analyst | 4 of 5 | 86.8% · 85.9% · 84.2% | 26.0 (23–30) | USD 0.056 | 126 s | 5 |
+| Optimiser with a search strategy | 5 of 5 | 88.4% · 87.4% · 86.7% | 18.0 (16–21) | USD 0.014 | 67 s | 2 |
+
+13 of the 15 recommendations moved Line 1's second packer to Line 2's machining, all with bigger campaigns
+(170–240). Of the planner and analyst's other two, one moved the packer to Line 2's test (85.7%), and the one
+failure kept today's crews (verified 84.2%). No run sped the line up beyond 106%. The two-agent team used more simulations, cost about four
+times as much and took longer, for a lower result. All 15 runs together cost USD 0.43 (plus USD 0.013 for one
+earlier trial run). Five runs per setup is a small sample: the pass rates' 95% ranges overlap widely.
+
 ## Run it
 
 ```

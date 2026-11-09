@@ -7,15 +7,15 @@ import { type MeasureRow, measureText, position } from './measures';
 function Dots({ row, i }: { row: MeasureRow; i: number }) {
   const cell = row.cells[i];
   return (
-    <div className="relative h-5" role="img" aria-label={`${row.label}: ${cell.dots.map((d) => measureText(d.value, row.unit)).join(', ') || 'no runs yet'}`}>
+    <div className="relative h-7" role="img" aria-label={`${row.label}: ${cell.dots.map((d) => measureText(d.value, row.unit)).join(', ') || 'no runs yet'}`}>
       <span className="absolute inset-x-0 top-1/2 h-px bg-line" aria-hidden="true" />
       {row.target != null && <span className="absolute inset-y-0 w-px bg-line-strong" style={{ left: `${position(row, row.target)}%` }} aria-hidden="true" />}
       {row.reference && <span className="absolute inset-y-0.5 border-l border-dashed border-faint" style={{ left: `${position(row, row.reference.value)}%` }} aria-hidden="true" />}
       {cell.dots.map((d, k) => {
-        const dot = <span className="block size-2.5 rounded-full bg-fg/60 ring-2 ring-surface transition-transform hover:scale-125 hover:bg-fg" />;
+        const dot = <span className="block size-2 rounded-full bg-fg/60 ring-1 ring-surface transition-transform hover:scale-150 hover:bg-fg" />;
         return (
           <Tooltip key={k} content={d.title}>
-            <span className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ left: `${position(row, d.value)}%` }}>
+            <span className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ left: `${position(row, d.value)}%`, marginTop: d.lane * -9 }}>
               {d.href ? <Link to={d.href} aria-label={d.title}>{dot}</Link> : dot}
             </span>
           </Tooltip>
