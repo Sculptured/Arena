@@ -28,5 +28,7 @@ pub mod saves;
 pub mod scenario;
 pub mod store;
 pub mod suite;
+#[cfg(test)]
+pub(crate) mod testkit;
 pub mod ticker;
 pub mod world;

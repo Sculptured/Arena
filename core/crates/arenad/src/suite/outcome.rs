@@ -101,40 +101,19 @@ pub fn outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit;
     use serde_json::{json, Value};
 
     fn branch(status: BranchStatus) -> Branch {
-        let at = Utc::now();
+        let b = testkit::branch(status);
         Branch {
-            id: "b".into(),
-            run_id: "r".into(),
-            parent_id: None,
-            start_seq: None,
-            team: Team {
-                id: "t".into(),
-                name: "T".into(),
-                agents: vec![],
-            },
-            changes: json!([]),
-            fork_note: None,
-            status,
-            error: None,
-            created_at: at,
-            ended_at: Some(at + chrono::Duration::seconds(3)),
-            restore_mode: None,
-            restored: vec![],
+            ended_at: Some(b.created_at + chrono::Duration::seconds(3)),
+            ..b
         }
     }
 
     fn check_event(payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq: 9,
-            at: Utc::now(),
-            agent: None,
-            kind: EventKind::Check,
-            payload,
-        }
+        testkit::event(9, None, EventKind::Check, payload)
     }
 
     #[test]

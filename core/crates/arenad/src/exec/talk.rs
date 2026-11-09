@@ -247,14 +247,7 @@ mod tests {
     use super::*;
 
     fn ev(agent: &str, kind: EventKind, payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq: 1,
-            at: chrono::Utc::now(),
-            agent: Some(agent.into()),
-            kind,
-            payload,
-        }
+        crate::testkit::event(1, Some(agent), kind, payload)
     }
 
     #[test]

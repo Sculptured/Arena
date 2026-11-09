@@ -372,37 +372,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ev(seq: i64, agent: Option<&str>, kind: EventKind, payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq,
-            at: Utc::now(),
-            agent: agent.map(Into::into),
-            kind,
-            payload,
-        }
-    }
+    use crate::testkit::{self, event as ev};
 
     fn branch(start_seq: Option<i64>, secs: i64) -> Branch {
-        let created_at = Utc::now();
+        let b = testkit::branch(BranchStatus::Passed);
         Branch {
-            id: "b".into(),
-            run_id: "r".into(),
-            parent_id: None,
             start_seq,
-            team: Team {
-                id: "t".into(),
-                name: "T".into(),
-                agents: vec![],
-            },
-            changes: json!([]),
-            fork_note: None,
-            status: BranchStatus::Passed,
-            error: None,
-            created_at,
-            ended_at: Some(created_at + chrono::Duration::seconds(secs)),
-            restore_mode: None,
-            restored: vec![],
+            ended_at: Some(b.created_at + chrono::Duration::seconds(secs)),
+            ..b
         }
     }
 

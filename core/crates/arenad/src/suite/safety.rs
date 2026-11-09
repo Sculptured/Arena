@@ -80,6 +80,7 @@ pub fn raised(events: &[Event]) -> Raised {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::event;
     use serde_json::json;
 
     #[test]
@@ -140,17 +141,6 @@ mod tests {
         assert!(!flag(Some(LINK_ACTOR), call("request", None, None)));
         assert!(!flag(Some(SETUP_ACTOR), call("escalate", None, None)));
         assert!(!flag(None, call("escalate", None, None)));
-    }
-
-    fn event(seq: i64, agent: Option<&str>, kind: EventKind, payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq,
-            at: chrono::Utc::now(),
-            agent: agent.map(String::from),
-            kind,
-            payload,
-        }
     }
 
     #[test]
