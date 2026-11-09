@@ -225,6 +225,7 @@ mod tests {
 
     fn team() -> Team {
         let spec = |id: &str| AgentSpec {
+            tools: Vec::new(),
             id: id.into(),
             name: id.into(),
             kind: AgentKind::ClaudeCode,

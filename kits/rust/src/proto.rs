@@ -335,6 +335,9 @@ pub struct TeamRole {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+    /// The world tools the role may see and call (empty: every tool).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
 }
 
 /// A link between two parts: an event of `from` of kind `event` calls `to`'s `tool`. In `args`, a

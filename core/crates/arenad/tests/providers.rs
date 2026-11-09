@@ -52,6 +52,7 @@ fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) 
 
 fn agent(id: &str, provider: Option<&str>, model: Option<&str>) -> AgentSpec {
     AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,

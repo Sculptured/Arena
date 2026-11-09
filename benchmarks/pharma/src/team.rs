@@ -92,6 +92,7 @@ pub fn bench_team(id: &str) -> BenchTeam {
     let last = d.roles.len().saturating_sub(1);
     let chain = d.runner.as_deref() == Some("chain");
     let agent = |(i, r): (usize, &Role)| TeamRole {
+        tools: Vec::new(),
         id: r.id.clone(),
         name: r.name.clone(),
         prompt: format!(

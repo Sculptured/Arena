@@ -46,6 +46,7 @@ fn idle_team() -> Team {
         id: "t".into(),
         name: "T".into(),
         agents: vec![AgentSpec {
+            tools: Vec::new(),
             id: "solo".into(),
             name: "solo".into(),
             kind: AgentKind::ClaudeCode,

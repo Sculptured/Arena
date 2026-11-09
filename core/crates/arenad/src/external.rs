@@ -90,6 +90,7 @@ pub struct Join {
 impl Join {
     pub fn spec(&self) -> AgentSpec {
         AgentSpec {
+            tools: Vec::new(),
             id: self.id.clone(),
             name: self.name.clone().unwrap_or_else(|| self.id.clone()),
             kind: self.kind.unwrap_or(AgentKind::External),

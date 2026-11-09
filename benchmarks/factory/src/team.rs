@@ -84,6 +84,7 @@ facts with their numbers and the ids of the changes you proposed or decided.";
 
 fn role(id: &str, name: &str, work: &str) -> TeamRole {
     TeamRole {
+        tools: Vec::new(),
         id: id.into(),
         name: name.into(),
         prompt: format!("You are {name} at Ridgeline Components. {work}{HANDOFF}"),
@@ -124,6 +125,7 @@ with a short summary of what the team did.";
 
 pub fn team() -> BenchTeam {
     let lead = TeamRole {
+        tools: Vec::new(),
         id: "lead".into(),
         name: "Incident lead".into(),
         prompt: LEAD.into(),
@@ -187,6 +189,7 @@ ids of the changes you proposed and anything the lead must decide or pass on.";
 
 fn shift_role(id: &str, name: &str, work: &str) -> TeamRole {
     TeamRole {
+        tools: Vec::new(),
         id: id.into(),
         name: name.into(),
         prompt: format!(
@@ -202,6 +205,7 @@ fn shift_role(id: &str, name: &str, work: &str) -> TeamRole {
 /// while the plant runs.
 pub fn shift_team() -> BenchTeam {
     let lead = TeamRole {
+        tools: Vec::new(),
         id: "lead".into(),
         name: "Shift lead".into(),
         prompt: SHIFT_LEAD.into(),

@@ -182,6 +182,11 @@ impl BranchCtx {
         self.agent(agent).is_none_or(|a| a.read_only)
     }
 
+    /// True when `agent`'s setup lets it use the world tool `name` (an unknown agent uses none).
+    pub fn may_use(&self, agent: &str, name: &str) -> bool {
+        self.agent(agent).is_some_and(|a| a.may_use(name))
+    }
+
     pub fn has_agent(&self, agent: &str) -> bool {
         self.agent(agent).is_some()
     }
@@ -272,14 +277,15 @@ pub struct ToolExec {
 }
 
 /// The tools `agent` gets on `branch`, in MCP shape (`name`, `description`, `inputSchema`): the
-/// world's (only its read tools when the agent's team made it read-only), and the tools agents
-/// talk with (see `talk`).
+/// world's (only its read tools when the agent's team made it read-only, only those its setup lists
+/// when it lists some), and the tools agents talk with (see `talk`).
 pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
     let read_only = branch.read_only(agent);
     let mut list: Vec<Value> = branch
         .world
         .tools()
         .filter(|t| !read_only || t.effect != Effect::Write)
+        .filter(|t| branch.may_use(agent, &t.name))
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
         .collect();
     list.extend(talk::schemas(branch, agent));
@@ -391,11 +397,16 @@ fn part_events(part: Option<&str>, events: Box<[WorldEvent]>, clock_ms: i64) -> 
         .collect()
 }
 
-/// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent's team
-/// made it read-only.
+/// Why `agent` may not run `name` now: the branch can't go on, its setup doesn't give it the tool,
+/// or it writes and the agent's team made it read-only.
 fn refusal(branch: &BranchCtx, agent: &str, name: &str) -> Option<String> {
     if let Some(f) = branch.fatal() {
         return Some(f);
+    }
+    if branch.world.has_tool(name) && branch.has_agent(agent) && !branch.may_use(agent, name) {
+        return Some(format!(
+            "{name} is not available to this agent: its setup does not list it"
+        ));
     }
     (branch.world.is_write(name) && branch.read_only(agent)).then(|| {
         "Write tools are not available to this agent: its team made it read-only".to_string()

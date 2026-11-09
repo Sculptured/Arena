@@ -35,6 +35,17 @@ pub struct AgentSpec {
     /// True for the agent that leads a `dispatch` run (absent: the team's first agent leads).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lead: bool,
+    /// The world tools this agent may see and call, by name (empty: every tool). A restriction
+    /// of the setup, like `read_only`; the talk tools of its runner are always offered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+}
+
+impl AgentSpec {
+    /// True when the agent's setup lets it see and call the world tool `name`.
+    pub fn may_use(&self, name: &str) -> bool {
+        self.tools.is_empty() || self.tools.iter().any(|t| t == name)
+    }
 }
 
 /// The agents of a run. How they run (in order, at once) is the run's runner, not the team's.

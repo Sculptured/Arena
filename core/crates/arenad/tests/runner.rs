@@ -72,6 +72,7 @@ async fn setup(tag: &str, extra: &[PathBuf], bench: &str, providers: Option<Prov
 /// A team on no reachable model: open agents on the local server nothing answers on.
 fn unreachable_team() -> Team {
     let agent = |id: &str| AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
