@@ -1,6 +1,6 @@
 kind = "integration"
 name = "factory-01-erp"
-version = "0.1.0"
+version = "0.2.0"
 protocol = 1
 run = { command = ["uv", "run", "--project", ".", "python", "-m", "factory01_erp"] }
 needs = { gpu_vram_gb = 0, services = [] }

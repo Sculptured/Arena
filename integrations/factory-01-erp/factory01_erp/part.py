@@ -6,7 +6,7 @@ from arena_part.jsonstate import JsonStatePart, event
 from . import disrupt, erp
 from .tools import TOOLS, Denied
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DENIALS = "_audit/denials"
 
 

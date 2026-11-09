@@ -77,6 +77,10 @@ jobs:
       - name: Test the Python kit
         working-directory: kits/python
         run: uv run --with pytest pytest -q
+      - name: Test Factory-01 (its ERP part and its benchmark)
+        run: |
+          (cd integrations/factory-01-erp && uv run --with pytest pytest -q)
+          (cd benchmarks/factory-01 && uv run --with pytest pytest -q)
       # Without an arenad build and Postgres the SDK's integration tests skip; the unit tests run.
       - name: Test the Python SDK
         working-directory: sdk/python

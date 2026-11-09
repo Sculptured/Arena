@@ -33,7 +33,7 @@ def _schedule(config, state, args):
 
 def _suppliers(config, state, args):
     rows = [erp.supplier_doc(config, state, s["id"]) for s in config["suppliers"]]
-    return Done({"today": config["today"], "po_limit_usd": config["po_limit_usd"], "suppliers": rows},
+    return Done({"today": config["today"], "suppliers": rows},
                 reads=[f"supplier/{s['id']}" for s in rows])
 
 
@@ -157,7 +157,7 @@ TOOLS = {t.name: t for t in [
          "dates, what is reserved for it, what it is short by its start, and its status.", "read", (),
          _schedule),
     Tool("get_suppliers", "Each supplier's status, its offers (unit price, lead time, expedite surcharge, "
-         "stock) and its open purchase orders, and your purchase limit per order.", "read", (), _suppliers),
+         "stock) and its open purchase orders.", "read", (), _suppliers),
     Tool("reserve_stock", "Reserve on-hand stock of an item for an order.", "write",
          (Param("order_id", "string"), Param("item", "string"), Param("qty", "integer")), _reserve),
     Tool("reschedule_order", "Move an order's production start to another date (YYYY-MM-DD).", "write",

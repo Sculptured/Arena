@@ -1,6 +1,6 @@
 [project]
 name = "factory-01"
-version = "0.1.0"
+version = "0.2.0"
 description = "arena-part/1 benchmark: Factory-01, a supplier delay and a purchase limit (scored by named checks)"
 requires-python = ">=3.10"
 dependencies = ["arena-part"]
