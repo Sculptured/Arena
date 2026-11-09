@@ -23,6 +23,7 @@ Use only the tools you have been given; do not edit the database in any other wa
 
 fn role(id: &str, name: &str, prompt: &str, read_only: bool) -> TeamRole {
     TeamRole {
+        tools: Vec::new(),
         id: id.into(),
         name: name.into(),
         prompt: prompt.into(),

@@ -1,0 +1,17 @@
+[project]
+name = "plant-floor"
+version = "0.2.0"
+description = "arena-part/1 benchmark: a supplier fire, a rush order and a faulted robot cell land on the plant floor; re-planned over OPC UA"
+requires-python = ">=3.10"
+dependencies = ["arena-part"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+arena-part = { path = "../../kits/python", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: needs services or hardware not always present"]

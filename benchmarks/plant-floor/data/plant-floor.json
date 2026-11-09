@@ -1,0 +1,274 @@
+{
+ "plant": {
+  "site": "Ridgeline Components \u00b7 Plant 2",
+  "endpoint_label": "opc.tcp://plant2.ridgeline.local:4840",
+  "start_label": "Mon 2026-11-16 06:00",
+  "horizon_h": 64,
+  "power": {
+   "cap_kw": 1050,
+   "base_kw": 250,
+   "usd_per_kwh": 0.12
+  },
+  "overtime": {
+   "nights": [
+    "mon",
+    "tue"
+   ],
+   "usd_per_night": 3000
+  },
+  "products": {
+   "BR-200": {
+    "name": "BR-200 welded bracket",
+    "material": true
+   },
+   "PL-50": {
+    "name": "PL-50 stamped plate",
+    "material": false
+   }
+  },
+  "lines": [
+   {
+    "id": "A",
+    "name": "Press line A",
+    "makes": {
+     "BR-200": 20
+    },
+    "manual_rate": 12,
+    "kw": 200,
+    "needs_cell": "R1",
+    "mode": "AUTO",
+    "queue": [
+     "SO-2002",
+     "SO-2004"
+    ]
+   },
+   {
+    "id": "B",
+    "name": "Press line B",
+    "makes": {
+     "PL-50": 25
+    },
+    "kw": 300,
+    "mode": "AUTO",
+    "queue": [
+     "SO-2003"
+    ]
+   },
+   {
+    "id": "C",
+    "name": "Press line C",
+    "makes": {
+     "BR-200": 15,
+     "PL-50": 20
+    },
+    "kw": 300,
+    "mode": "AUTO",
+    "product": "PL-50",
+    "changeover_h": 2,
+    "queue": []
+   }
+  ],
+  "cell": {
+   "id": "R1",
+   "name": "Robot weld cell R1",
+   "kw": 150,
+   "repair_h": 8
+  },
+  "orders": [
+   {
+    "id": "SO-2002",
+    "customer": "Northwind Energy",
+    "product": "BR-200",
+    "qty": 60,
+    "due": "Wed 22:00",
+    "penalty_usd": 5000
+   },
+   {
+    "id": "SO-2003",
+    "customer": "Ridgeway Water",
+    "product": "PL-50",
+    "qty": 900,
+    "due": "Tue 22:00",
+    "penalty_usd": 5000
+   },
+   {
+    "id": "SO-2004",
+    "customer": "Calder Farms",
+    "product": "BR-200",
+    "qty": 80,
+    "due": "Wed 22:00",
+    "penalty_usd": 5000
+   }
+  ],
+  "scenarios": {
+   "disrupted": {
+    "rush": {
+     "id": "SO-2001",
+     "customer": "Northwind Energy",
+     "product": "BR-200",
+     "qty": 120,
+     "due": "Tue 06:00",
+     "penalty_usd": 25000
+    },
+    "cell_fault": "Servo over-temperature on R1, axis 3; lockout/tagout applied",
+    "events": [
+     [
+      "supplier",
+      "Apex Steel plant fire: PO-4471 (CB-15 coil blanks for the week) will not ship; no blanks arrive before Friday"
+     ],
+     [
+      "demand",
+      "Northwind Energy demand spike: rush order SO-2001, 120 BR-200 brackets, due Tue 06:00"
+     ],
+     [
+      "cell",
+      "Robot weld cell R1 faulted (servo over-temperature); lockout/tagout applied"
+     ]
+    ]
+   }
+  },
+  "material_on_hand": 150
+ },
+ "erp": {
+  "company": "Ridgeline Components",
+  "today": "2026-11-16",
+  "po_limit_usd": 5000,
+  "lines": [
+   {
+    "id": "A",
+    "name": "Press line A",
+    "makes": "BR-200 brackets (welded at R1)"
+   },
+   {
+    "id": "B",
+    "name": "Press line B",
+    "makes": "PL-50 plates"
+   },
+   {
+    "id": "C",
+    "name": "Press line C",
+    "makes": "brackets or plates"
+   }
+  ],
+  "items": [
+   {
+    "id": "CB-15",
+    "name": "CB-15 coil blank",
+    "on_hand": 150
+   }
+  ],
+  "orders": [
+   {
+    "id": "SO-2001",
+    "customer": "Northwind Energy",
+    "key_account": true,
+    "product": "BR-200 bracket",
+    "qty": 120,
+    "priority": "rush",
+    "line": "A",
+    "start": "2026-11-16",
+    "due": "2026-11-17",
+    "bom": {
+     "CB-15": 1
+    }
+   },
+   {
+    "id": "SO-2002",
+    "customer": "Northwind Energy",
+    "key_account": true,
+    "product": "BR-200 bracket",
+    "qty": 60,
+    "priority": "normal",
+    "line": "A",
+    "start": "2026-11-16",
+    "due": "2026-11-18",
+    "bom": {
+     "CB-15": 1
+    }
+   },
+   {
+    "id": "SO-2003",
+    "customer": "Ridgeway Water",
+    "key_account": false,
+    "product": "PL-50 plate",
+    "qty": 900,
+    "priority": "normal",
+    "line": "B",
+    "start": "2026-11-16",
+    "due": "2026-11-17",
+    "bom": {}
+   },
+   {
+    "id": "SO-2004",
+    "customer": "Calder Farms",
+    "key_account": false,
+    "product": "BR-200 bracket",
+    "qty": 80,
+    "priority": "low",
+    "line": "A",
+    "start": "2026-11-16",
+    "due": "2026-11-18",
+    "bom": {
+     "CB-15": 1
+    }
+   }
+  ],
+  "reservations": [],
+  "suppliers": [
+   {
+    "id": "APEX",
+    "name": "Apex Steel",
+    "status": "on time",
+    "offers": {
+     "CB-15": {
+      "unit_usd": 90,
+      "lead_days": 5
+     }
+    }
+   },
+   {
+    "id": "BOLT",
+    "name": "Bolt Metals",
+    "status": "on time",
+    "offers": {
+     "CB-15": {
+      "unit_usd": 95,
+      "lead_days": 6,
+      "stock": 200,
+      "expedite_unit_usd": 30,
+      "expedite_lead_days": 3
+     }
+    }
+   }
+  ],
+  "inbound": [
+   {
+    "po": "PO-4471",
+    "supplier": "APEX",
+    "item": "CB-15",
+    "qty": 160,
+    "for_order": "SO-2002",
+    "arrives": "2026-11-16"
+   }
+  ],
+  "scenarios": {
+   "apex-fire": {
+    "disruptions": [
+     {
+      "id": "apex-fire",
+      "when": {
+       "after_calls": 0
+      },
+      "do": {
+       "kind": "supplier_delay",
+       "po": "PO-4471",
+       "arrives": "2026-11-20",
+       "note": "Apex Steel: plant fire, PO-4471 will not ship before Friday"
+      },
+      "text": "Apex Steel plant fire: PO-4471 (160 CB-15 coil blanks) pushed to Friday"
+     }
+    ]
+   }
+  }
+ }
+}

@@ -2,7 +2,13 @@
 import type { Board } from './board/board';
 import type { RecordedScenario, ScenarioOptions } from './scenario/types';
 
-export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external';
+/** `http`: an agent someone deployed, reached at its URL (`arena-agent/1`); arenad doesn't run it, it calls it. */
+export type AgentKind = 'claude_code' | 'codex' | 'open' | 'external' | 'http';
+
+/** A header value as arenad answers it: never the secret itself, a reference to it (valid until arenad restarts). */
+export interface SecretRef {
+  secret: string;
+}
 
 /**
  * Who drives a run's agents (`model.rs` `Runner`). `dispatch`: a lead delegates to the team, whose
@@ -112,8 +118,12 @@ export interface AgentSpec {
   name: string;
   kind: AgentKind;
   model: string | null;
-  /** Open agents only: `openrouter` (the default when absent), `openai`, `anthropic` or `local:<name>`. */
+  /** Open agents only: `openrouter` (the default when absent), `openai`, `anthropic`, `local:<name>` or `bedrock:<region>`. */
   provider?: string | null;
+  /** HTTP agents only: where arenad calls the agent. */
+  url?: string;
+  /** HTTP agents only: headers sent with every call; arenad answers each value as a `SecretRef`. */
+  headers?: Record<string, string | SecretRef>;
   prompt: string;
   /** True when the team keeps this agent to read tools; absent or false, it may use every tool. */
   read_only?: boolean;
@@ -214,6 +224,18 @@ export interface NamedCheck {
   safety?: boolean;
   /** Why it failed, in words (empty when it passed). */
   detail?: string;
+  /** The figure the check measured (an optimisation's verified objective, simulations used). */
+  measure?: Measure;
+}
+
+/** A number a check measured. `better` absent: neither way is better (a count). `reference`: a value no run made. */
+export interface Measure {
+  label: string;
+  value: number;
+  unit?: string;
+  better?: 'higher' | 'lower';
+  target?: number;
+  reference?: { label: string; value: number };
 }
 
 export interface Branch {

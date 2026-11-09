@@ -1,0 +1,19 @@
+version = 1
+revision = 3
+requires-python = ">=3.10"
+
+[[package]]
+name = "arena-part"
+version = "0.1.0"
+source = { editable = "../../kits/python" }
+
+[[package]]
+name = "line-sim"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "arena-part" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "arena-part", editable = "../../kits/python" }]

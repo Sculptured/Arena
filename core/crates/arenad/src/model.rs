@@ -3,6 +3,10 @@ use parts::proto::Mode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::secrets::Headers;
+
+mod agent_in;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
@@ -12,9 +16,16 @@ pub enum AgentKind {
     /// Driven by an external system (a design's own code), not by arenad: it reaches the world
     /// through its MCP endpoint and its models through the gateway.
     External,
+    /// An agent deployed anywhere, behind a URL: arenad POSTs it the run (the task, its MCP
+    /// endpoint and a token) and it answers when it is done (see `crate::agents::http`).
+    Http,
 }
 
+/// A team member. Read through [`agent_in::AgentSpecIn`], which also takes a Bedrock agent
+/// (`{kind: "bedrock", model_id, region}`) and makes it an `open` agent on provider
+/// `bedrock:<region>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "agent_in::AgentSpecIn")]
 pub struct AgentSpec {
     pub id: String,
     pub name: String,
@@ -35,6 +46,24 @@ pub struct AgentSpec {
     /// True for the agent that leads a `dispatch` run (absent: the team's first agent leads).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lead: bool,
+    /// Where an `http` agent answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The headers an `http` agent's requests carry; their values are secrets, never written
+    /// out (see [`crate::secrets`]).
+    #[serde(default, skip_serializing_if = "Headers::is_empty")]
+    pub headers: Headers,
+    /// The world tools this agent may see and call, by name (empty: every tool). A restriction
+    /// of the setup, like `read_only`; the talk tools of its runner are always offered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+}
+
+impl AgentSpec {
+    /// True when the agent's setup lets it see and call the world tool `name`.
+    pub fn may_use(&self, name: &str) -> bool {
+        self.tools.is_empty() || self.tools.iter().any(|t| t == name)
+    }
 }
 
 /// The agents of a run. How they run (in order, at once) is the run's runner, not the team's.

@@ -155,6 +155,7 @@ impl Live {
     /// An agent `id` on this model with `prompt`.
     pub fn agent(&self, id: &str, prompt: &str) -> AgentSpec {
         AgentSpec {
+            tools: Vec::new(),
             id: id.into(),
             name: id.into(),
             kind: self.kind(),
@@ -163,6 +164,8 @@ impl Live {
             provider: self.provider().map(str::to_string),
             read_only: false,
             lead: false,
+            url: None,
+            headers: Default::default(),
         }
     }
 

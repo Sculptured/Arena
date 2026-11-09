@@ -6,6 +6,8 @@ import { cn } from '@/lib/cn';
 import type { SuiteReport } from '../control/types';
 import PassRate from './PassRate';
 import RunStrip from './RunStrip';
+import { MeasureFigure, MeasureLegend } from './Measures';
+import type { MeasureRow } from './measures';
 import { type CheckCell, type CheckRow, type Column, METRICS, type Metric, SAFETY_METRICS, bestOf, checkLabel, checkMatrix, safetyQuiet } from './model';
 
 /** The checks' label column, then one column per setup. */
@@ -33,8 +35,8 @@ function Figure({ m, c, best }: { m: Metric; c: Column; best: boolean }) {
   );
 }
 
-/** One setup: its name and team, the pass rate large, a square per run, then its figures. */
-function SetupCard({ c, figures, best, quiet }: { c: Column; figures: Metric[]; best: (m: Metric) => boolean; quiet: boolean }) {
+/** One setup: its name and team, the pass rate large, a square per run, any measures, then its figures. */
+function SetupCard({ c, i, measures, figures, best, quiet }: { c: Column; i: number; measures: MeasureRow[]; figures: Metric[]; best: (m: Metric) => boolean; quiet: boolean }) {
   return (
     <Panel className="flex flex-col gap-5 p-5">
       <header className="flex min-h-10 flex-col">
@@ -43,6 +45,7 @@ function SetupCard({ c, figures, best, quiet }: { c: Column; figures: Metric[]; 
       </header>
       <PassRate c={c} />
       <RunStrip runs={c.runs} />
+      {measures.length > 0 && <div className="flex flex-col gap-4">{measures.map((r) => <MeasureFigure key={r.name} row={r} i={i} />)}</div>}
       <dl className="flex flex-col border-t border-line pt-2">
         {figures.map((m) => <Figure key={m.id} m={m} c={c} best={best(m)} />)}
         {quiet && <p className="pt-1.5 text-xs text-muted"><span aria-hidden="true">✓ </span>No safety violations, denied actions or flags</p>}
@@ -51,14 +54,17 @@ function SetupCard({ c, figures, best, quiet }: { c: Column; figures: Metric[]; 
   );
 }
 
-/** A card per setup: the pass rate first, then the runs, then the figures, the best of each in bold. */
-export function Setups({ cols }: { cols: Column[] }) {
+/** A card per setup: the pass rate first, then the runs and measures, then the figures, the best of each in bold. */
+export function Setups({ cols, measures = [] }: { cols: Column[]; measures?: MeasureRow[] }) {
   const quiet = safetyQuiet(cols);
   const figures = quiet ? METRICS.filter((m) => !SAFETY_METRICS.includes(m.id)) : METRICS;
   const bests = new Map(figures.map((m) => [m.id, bestOf(cols, m)]));
   return (
-    <div className={cn('grid gap-4', COLS[cols.length])}>
-      {cols.map((c, i) => <SetupCard key={c.id} c={c} figures={figures} quiet={quiet} best={(m) => !!bests.get(m.id)?.has(i)} />)}
+    <div className="flex flex-col gap-2">
+      <div className={cn('grid gap-4', COLS[cols.length])}>
+        {cols.map((c, i) => <SetupCard key={c.id} c={c} i={i} measures={measures} figures={figures} quiet={quiet} best={(m) => !!bests.get(m.id)?.has(i)} />)}
+      </div>
+      <MeasureLegend rows={measures} />
     </div>
   );
 }

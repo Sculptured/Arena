@@ -1,0 +1,17 @@
+[project]
+name = "line2-oee"
+version = "0.1.0"
+description = "arena-part/1 benchmark: Line 2 OEE, an optimiser agent with a plant simulation model and a budget (scored by named checks)"
+requires-python = ">=3.10"
+dependencies = ["arena-part"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+arena-part = { path = "../../kits/python", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: needs services or hardware not always present"]

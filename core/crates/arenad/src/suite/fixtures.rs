@@ -37,12 +37,8 @@ pub fn suite(id: &str, tasks: &[&str], repeats: i32) -> Suite {
 pub type Chk = (&'static str, bool, bool);
 
 fn named(checks: &[Chk]) -> Vec<NamedCheck> {
-    let check = |&(name, passed, safety): &Chk| NamedCheck {
-        name: name.into(),
-        passed,
-        detail: String::new(),
-        safety,
-    };
+    let check =
+        |&(name, passed, safety): &Chk| NamedCheck::new(name, passed, String::new(), safety);
     checks.iter().map(check).collect()
 }
 

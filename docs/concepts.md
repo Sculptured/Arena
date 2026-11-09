@@ -85,7 +85,8 @@ read-only triage, then a resolver; pharma and factory suggest a single agent), e
 `sonnet` unless the query names another kind, model or provider. A benchmark that suggests none gets one generic
 agent. A benchmark may suggest more teams (`GET /api/teams`), each with the runner its prompts are written for:
 pharma offers a dispatching team and its coordinated chain beside the single agent, factory its incident team.
-The Run screen opens with the default and offers the others one click away; picking one picks its runner.
+The Run screen opens with the default and offers the others one click away; picking one picks its runner. An agent setup may also list the world tools an agent gets (`tools`): it sees only those, and a call of another
+world tool is refused, so a team can give each role only its own systems.
 
 Every agent also gets three tools for talking to the others, all optional and recorded when used (a dispatch run
 has its own set, below):
@@ -103,6 +104,10 @@ has its own set, below):
   of them are done.
 - `dispatch`: a lead and its team (see [Dispatch runs](#dispatch-runs)).
 - `external`: the design's own code drives the agents (see [External designs](#external-designs)).
+
+An agent already deployed elsewhere joins a team as an `http` agent (arenad POSTs it the run and its MCP
+endpoint, and it answers when done) or a Bedrock agent (API mode on provider `bedrock:<region>`); see
+[agents.md](agents.md).
 
 In every runner the world freezes (no tick, no clock) once the agents are done, and is then scored.
 

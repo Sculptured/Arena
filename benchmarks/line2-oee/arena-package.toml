@@ -1,0 +1,7 @@
+kind = "benchmark"
+name = "line2-oee"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "line2_oee"] }
+needs = { gpu_vram_gb = 0, services = [] }
+opt_in = true

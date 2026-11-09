@@ -26,6 +26,7 @@ pub mod review;
 pub mod runner;
 pub mod saves;
 pub mod scenario;
+pub mod secrets;
 pub mod store;
 pub mod suite;
 #[cfg(test)]

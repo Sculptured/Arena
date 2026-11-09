@@ -1,0 +1,15 @@
+kind = "integration"
+name = "plant-opcua"
+version = "0.2.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "plant_opcua"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { site = { type = "string" }, endpoint = { type = "string" }, endpoint_label = { type = "string" }, lines = { type = "array" }, orders = { type = "array" }, power = { type = "object" }, cell = { type = "object" }, scenarios = { type = "object" } } }
+
+[[example]]
+tool = "opcua_browse"
+args = {}
+
+[[example]]
+tool = "opcua_read"
+args = { nodes = ["Plant2/KPI/OEE"] }

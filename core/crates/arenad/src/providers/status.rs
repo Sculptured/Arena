@@ -38,6 +38,10 @@ fn label(p: &Provider) -> String {
             p.id.trim_start_matches(super::LOCAL_PREFIX),
             host_of(&p.endpoint.base)
         ),
+        ProviderKind::Bedrock => format!(
+            "Amazon Bedrock ({})",
+            p.id.trim_start_matches(super::BEDROCK_PREFIX)
+        ),
     }
 }
 

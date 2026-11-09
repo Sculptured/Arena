@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
     Json, Router,
@@ -49,19 +49,41 @@ async fn reply_to(
     })
 }
 
+/// The live branch whose `agent` may call: 404 when there is no such branch or agent, 401 when
+/// the agent was given a token and the call doesn't carry it.
+fn admitted(
+    state: &AppState,
+    branch: &str,
+    agent: &str,
+    headers: &HeaderMap,
+) -> Result<Arc<BranchCtx>, (StatusCode, Json<Value>)> {
+    let refuse = |status, code, msg| (status, Json(rpc_error(Value::Null, code, msg)));
+    let ctx: Option<Arc<BranchCtx>> = state.live.read().unwrap().get(branch).cloned();
+    let Some(ctx) = ctx.filter(|c| c.has_agent(agent)) else {
+        return Err(refuse(
+            StatusCode::NOT_FOUND,
+            -32000,
+            "unknown branch or agent",
+        ));
+    };
+    let authorization = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+    if !ctx.token_ok(agent, authorization) {
+        let why = "this endpoint wants the run's bearer token";
+        return Err(refuse(StatusCode::UNAUTHORIZED, -32001, why));
+    }
+    Ok(ctx)
+}
+
 async fn handle(
     State(state): State<Arc<AppState>>,
     Path((branch, agent)): Path<(String, String)>,
+    headers: HeaderMap,
     body: String,
 ) -> Response {
     let since = Instant::now();
-    let ctx: Option<Arc<BranchCtx>> = state.live.read().unwrap().get(&branch).cloned();
-    let Some(ctx) = ctx.filter(|c| c.has_agent(&agent)) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(rpc_error(Value::Null, -32000, "unknown branch or agent")),
-        )
-            .into_response();
+    let ctx = match admitted(&state, &branch, &agent, &headers) {
+        Ok(ctx) => ctx,
+        Err(refused) => return refused.into_response(),
     };
     let req: Value = match serde_json::from_str(&body) {
         Ok(v) => v,

@@ -18,6 +18,7 @@ fn team() -> Team {
         id: "t".into(),
         name: "T".into(),
         agents: vec![AgentSpec {
+            tools: Vec::new(),
             id: "a".into(),
             name: "A".into(),
             kind: AgentKind::Open,
@@ -26,6 +27,8 @@ fn team() -> Team {
             provider: None,
             read_only: false,
             lead: false,
+            url: None,
+            headers: Default::default(),
         }],
     }
 }

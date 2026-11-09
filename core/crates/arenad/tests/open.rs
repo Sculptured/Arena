@@ -46,6 +46,7 @@ fn run_live<F: Future<Output = ()>>(live: Option<Live>, body: impl FnOnce(Live) 
 /// An open agent on the default provider that names `model`.
 fn agent(id: &str, model: Option<&str>) -> AgentSpec {
     AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind: AgentKind::Open,
@@ -54,6 +55,8 @@ fn agent(id: &str, model: Option<&str>) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

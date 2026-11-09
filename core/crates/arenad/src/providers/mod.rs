@@ -5,6 +5,7 @@
 //! the agent loop, replay and fork only ever see the canonical form.
 
 mod anthropic;
+pub(crate) mod bedrock;
 mod config;
 mod listing;
 mod openai;
@@ -26,6 +27,8 @@ pub const OPENROUTER: &str = "openrouter";
 pub const OPENAI: &str = "openai";
 pub const ANTHROPIC: &str = "anthropic";
 pub const LOCAL_PREFIX: &str = "local:";
+/// Amazon Bedrock in one AWS region: `bedrock:<region>`.
+pub const BEDROCK_PREFIX: &str = "bedrock:";
 /// The local provider the old single-upstream override becomes.
 pub const CUSTOM_LOCAL: &str = "custom";
 /// The model of an OpenRouter agent that names none.
@@ -39,6 +42,7 @@ pub enum ProviderKind {
     OpenAi,
     Anthropic,
     Local,
+    Bedrock,
 }
 
 /// Why a provider can't take calls, judged from the configuration alone.
@@ -46,6 +50,8 @@ pub enum ProviderKind {
 pub enum Unavailable {
     /// The env var holding its key is not set.
     MissingKey(&'static str),
+    /// No AWS credentials in the environment and no AWS CLI to find them.
+    NoAwsCredentials,
 }
 
 impl Unavailable {
@@ -53,6 +59,7 @@ impl Unavailable {
     pub fn why(&self) -> String {
         match self {
             Unavailable::MissingKey(env) => format!("{env} is not set"),
+            Unavailable::NoAwsCredentials => bedrock::credentials::NO_CREDENTIALS.into(),
         }
     }
 
@@ -60,6 +67,9 @@ impl Unavailable {
     pub fn refusal(&self) -> String {
         match self {
             Unavailable::MissingKey(env) => format!("open mode needs {env}"),
+            Unavailable::NoAwsCredentials => {
+                format!("Bedrock needs {}", bedrock::credentials::NO_CREDENTIALS)
+            }
         }
     }
 }
@@ -100,6 +110,7 @@ impl Provider {
     pub async fn send(&self, http: &reqwest::Client, request: &Value) -> Result<Upstream, String> {
         match self.kind {
             ProviderKind::Anthropic => anthropic::send(self, http, request).await,
+            ProviderKind::Bedrock => bedrock::send(self, http, request).await,
             _ => openai::send(self, http, request).await,
         }
     }
@@ -117,6 +128,9 @@ impl Provider {
             ProviderKind::OpenAi => missing("OPENAI_API_KEY"),
             ProviderKind::Anthropic => missing("ANTHROPIC_API_KEY"),
             ProviderKind::Local => None,
+            ProviderKind::Bedrock => {
+                (!bedrock::credentials::some_source()).then_some(Unavailable::NoAwsCredentials)
+            }
         }
     }
 
@@ -126,7 +140,7 @@ impl Provider {
         match self.kind {
             ProviderKind::OpenRouter => usage.get("cost").and_then(Value::as_f64),
             ProviderKind::Local => Some(0.0),
-            ProviderKind::OpenAi | ProviderKind::Anthropic => None,
+            ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::Bedrock => None,
         }
     }
 
@@ -135,7 +149,7 @@ impl Provider {
         match self.kind {
             ProviderKind::OpenRouter => Some(OPENROUTER),
             ProviderKind::Local => Some(LOCAL_COST_SOURCE),
-            ProviderKind::OpenAi | ProviderKind::Anthropic => None,
+            ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::Bedrock => None,
         }
     }
 
@@ -157,6 +171,7 @@ impl ProviderConfig {
             )),
             OPENAI => Some(Provider::new(id, ProviderKind::OpenAi, &self.openai)),
             ANTHROPIC => Some(self.anthropic()),
+            _ if id.starts_with(BEDROCK_PREFIX) => Self::bedrock(id)?,
             _ => id
                 .strip_prefix(LOCAL_PREFIX)
                 .and_then(|name| self.local(name))
@@ -166,6 +181,18 @@ impl ProviderConfig {
             let known: Vec<String> = self.all().into_iter().map(|p| p.id).collect();
             format!("unknown provider {id:?} (known: {})", known.join(", "))
         })
+    }
+
+    /// Bedrock in the region `id` names (`Ok(None)` never: a bad region is an error).
+    fn bedrock(id: &str) -> Result<Option<Provider>, String> {
+        let region = id.strip_prefix(BEDROCK_PREFIX).unwrap_or_default();
+        if !bedrock::valid_region(region) {
+            return Err(format!(
+                "{id:?} names no AWS region (for example bedrock:us-east-1)"
+            ));
+        }
+        let endpoint = Endpoint::new(&bedrock::base_url(region), None);
+        Ok(Some(Provider::new(id, ProviderKind::Bedrock, &endpoint)))
     }
 
     fn anthropic(&self) -> Provider {

@@ -18,6 +18,7 @@ pub fn team() -> BenchTeam {
         id: "single".into(),
         name: "Single agent".into(),
         agents: vec![TeamRole {
+            tools: Vec::new(),
             id: "incident".into(),
             name: "Incident team".into(),
             prompt: PROMPT.into(),

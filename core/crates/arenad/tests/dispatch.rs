@@ -58,6 +58,7 @@ async fn setup(tag: &str, providers: Option<ProviderConfig>) -> Fx {
 
 fn spec(id: &str, kind: AgentKind) -> AgentSpec {
     AgentSpec {
+        tools: Vec::new(),
         id: id.into(),
         name: id.into(),
         kind,
@@ -66,6 +67,8 @@ fn spec(id: &str, kind: AgentKind) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

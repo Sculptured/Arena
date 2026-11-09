@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod compare;
+mod connect;
 mod experiments;
 mod external;
 mod flow;
@@ -62,6 +63,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/usage", get(world::usage))
         .route("/api/gc", post(world::gc))
         .merge(external::router())
+        .merge(connect::router())
         .merge(flow::router())
         .merge(suites::router())
         .merge(experiments::router())
@@ -235,6 +237,12 @@ fn validate_dispatch_team(team: &Team) -> Result<(), ApiError> {
     if team.agents.iter().filter(|a| a.lead).count() > 1 {
         return Err(ApiError::bad("mark at most one agent as the lead"));
     }
+    if let Some(a) = team.agents.iter().find(|a| a.kind == AgentKind::Http) {
+        return Err(ApiError::bad(format!(
+            "agent {:?} is an http agent, which answers one run at a time and can't take turns: a dispatch run needs Claude Code or arenad's own loop (open)",
+            a.id
+        )));
+    }
     if let Some(a) = team.agents.iter().find(|a| a.kind == AgentKind::Codex) {
         return Err(ApiError::bad(format!(
             "agent {:?} is a Codex agent, which can't keep a session across turns yet: a dispatch run needs Claude Code or arenad's own loop (open)",
@@ -255,8 +263,20 @@ fn validate_agents(state: &AppState, agents: &[AgentSpec]) -> Result<(), ApiErro
         if a.kind == AgentKind::Open {
             open_check(state, a.provider.as_deref(), a.model.as_deref())?;
         }
+        if a.kind == AgentKind::Http {
+            validate_http(a)?;
+        }
     }
     Ok(())
+}
+
+/// 400 unless an `http` agent has an http(s) URL and every header's value is still held.
+fn validate_http(a: &AgentSpec) -> Result<(), ApiError> {
+    let named = |why: String| ApiError::bad(format!("agent {:?}: {why}", a.id));
+    if let Some(why) = crate::agents::http::bad_url(a.url.as_deref()) {
+        return Err(named(why));
+    }
+    a.headers.reveal().map(|_| ()).map_err(named)
 }
 
 /// 400 unless `id` matches `^[a-z0-9_-]+$` and isn't the links' actor.

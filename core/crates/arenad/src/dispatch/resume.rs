@@ -225,6 +225,7 @@ mod tests {
 
     fn team() -> Team {
         let spec = |id: &str| AgentSpec {
+            tools: Vec::new(),
             id: id.into(),
             name: id.into(),
             kind: AgentKind::ClaudeCode,
@@ -233,6 +234,8 @@ mod tests {
             provider: None,
             read_only: false,
             lead: false,
+            url: None,
+            headers: Default::default(),
         };
         Team {
             id: "t".into(),

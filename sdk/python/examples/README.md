@@ -13,6 +13,7 @@ defaults use the cheapest Claude model (`haiku`).
 |---|---|---|
 | `quickstart.py [task] [model]` | Run the benchmark's team of Claude Code agents, stream the timeline live, print the checks and metrics | yes |
 | `bring_your_own_agent.py [task] [claude-code\|openai\|openrouter\|anthropic] [model]` | An external run your code drives: Claude Code on the agent's MCP URL, or a minimal tool loop over the gateway | yes |
+| `agent_server.py [port]` | A deployed agent behind a URL (`kind: "http"`): takes the run's POST, works the task through its MCP endpoint with the Claude API or Claude Code, answers when done ([docs/agents.md](../../../docs/agents.md)) | yes |
 | `counterfactual_fork.py [branch] [model]` | Fork at the first write with a changed prompt, the world restored; compare the branches | yes |
 | `suite.py [tasks] [repeats] [model] [compare_with]` | A suite: pass rates, safety, spread; compare two suites | yes |
 | `export_dataset.py <branch\|suite> [out]` | Export a run (with its forks) or a suite as JSONL and read it back | no |

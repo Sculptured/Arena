@@ -11,6 +11,7 @@ use crate::{
 pub mod claude;
 mod claude_session;
 pub mod codex;
+pub mod http;
 pub mod open;
 pub mod session;
 mod usage;

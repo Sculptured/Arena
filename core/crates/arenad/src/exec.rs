@@ -53,6 +53,9 @@ pub struct BranchCtx {
     tap: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Said>>>,
     /// Set once the lead of a dispatch run has finished it: every later call is refused.
     closed: std::sync::atomic::AtomicBool,
+    /// agent id -> the bearer token its MCP endpoint wants, for an agent given one (an `http`
+    /// agent, while arenad waits for it). Kept in memory only.
+    tokens: Mutex<HashMap<String, String>>,
 }
 
 impl BranchCtx {
@@ -75,6 +78,7 @@ impl BranchCtx {
             flow: FlowControl::default(),
             tap: Mutex::new(None),
             closed: Default::default(),
+            tokens: Default::default(),
         }
     }
 
@@ -182,6 +186,11 @@ impl BranchCtx {
         self.agent(agent).is_none_or(|a| a.read_only)
     }
 
+    /// True when `agent`'s setup lets it use the world tool `name` (an unknown agent uses none).
+    pub fn may_use(&self, agent: &str, name: &str) -> bool {
+        self.agent(agent).is_some_and(|a| a.may_use(name))
+    }
+
     pub fn has_agent(&self, agent: &str) -> bool {
         self.agent(agent).is_some()
     }
@@ -190,6 +199,36 @@ impl BranchCtx {
     /// one); `None` when the branch has no such agent.
     pub fn provider_of(&self, agent: &str) -> Option<Option<String>> {
         self.agent(agent).map(|a| a.provider)
+    }
+
+    /// A new bearer token for `agent`'s MCP endpoint, which takes no call without it from now on.
+    pub fn issue_token(&self, agent: &str) -> String {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        self.tokens
+            .lock()
+            .unwrap()
+            .insert(agent.into(), token.clone());
+        token
+    }
+
+    /// Takes back `agent`'s token: its endpoint answers no one until another is issued.
+    pub fn revoke_token(&self, agent: &str) {
+        self.tokens
+            .lock()
+            .unwrap()
+            .insert(agent.into(), String::new());
+    }
+
+    /// True when a call to `agent`'s endpoint with `authorization` (the header's value) may go
+    /// through: the agent was never given a token, or this is it.
+    pub fn token_ok(&self, agent: &str, authorization: Option<&str>) -> bool {
+        match self.tokens.lock().unwrap().get(agent) {
+            None => true,
+            Some(t) => {
+                let given = authorization.and_then(|a| a.strip_prefix("Bearer "));
+                !t.is_empty() && given == Some(t.as_str())
+            }
+        }
     }
 
     pub fn handoff_note(&self, agent: &str) -> Option<String> {
@@ -272,14 +311,15 @@ pub struct ToolExec {
 }
 
 /// The tools `agent` gets on `branch`, in MCP shape (`name`, `description`, `inputSchema`): the
-/// world's (only its read tools when the agent's team made it read-only), and the tools agents
-/// talk with (see `talk`).
+/// world's (only its read tools when the agent's team made it read-only, only those its setup lists
+/// when it lists some), and the tools agents talk with (see `talk`).
 pub fn tool_schemas(branch: &BranchCtx, agent: &str) -> Vec<Value> {
     let read_only = branch.read_only(agent);
     let mut list: Vec<Value> = branch
         .world
         .tools()
         .filter(|t| !read_only || t.effect != Effect::Write)
+        .filter(|t| branch.may_use(agent, &t.name))
         .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
         .collect();
     list.extend(talk::schemas(branch, agent));
@@ -391,11 +431,16 @@ fn part_events(part: Option<&str>, events: Box<[WorldEvent]>, clock_ms: i64) -> 
         .collect()
 }
 
-/// Why `agent` may not run `name` now: the branch can't go on, or it writes and the agent's team
-/// made it read-only.
+/// Why `agent` may not run `name` now: the branch can't go on, its setup doesn't give it the tool,
+/// or it writes and the agent's team made it read-only.
 fn refusal(branch: &BranchCtx, agent: &str, name: &str) -> Option<String> {
     if let Some(f) = branch.fatal() {
         return Some(f);
+    }
+    if branch.world.has_tool(name) && branch.has_agent(agent) && !branch.may_use(agent, name) {
+        return Some(format!(
+            "{name} is not available to this agent: its setup does not list it"
+        ));
     }
     (branch.world.is_write(name) && branch.read_only(agent)).then(|| {
         "Write tools are not available to this agent: its team made it read-only".to_string()
