@@ -11,9 +11,12 @@ export type TeamChoices = { key: string; label: string; team: Team }[];
 /** Picking this option opens the import dialog instead of choosing a team. */
 export const IMPORT = '__import__';
 
+/** Picking this option opens Connect your agent instead of choosing a team. */
+export const CONNECT = '__connect__';
+
 /** One agent setup: its name, team, model and rules, and what that comes to in one line. */
-export default function SetupCard({ d, teams, team, onChange, onRemove, onImport, busy }: {
-  d: SetupDraft; teams: TeamChoices; team: Team | null; onChange: (d: SetupDraft) => void; onRemove?: () => void; onImport: () => void; busy: boolean;
+export default function SetupCard({ d, teams, team, onChange, onRemove, onImport, onConnect, busy }: {
+  d: SetupDraft; teams: TeamChoices; team: Team | null; onChange: (d: SetupDraft) => void; onRemove?: () => void; onImport: () => void; onConnect: () => void; busy: boolean;
 }) {
   const set = (patch: Partial<SetupDraft>) => onChange({ ...d, ...patch });
   const claude = !!team?.agents.some((a) => a.kind === 'claude_code');
@@ -25,9 +28,10 @@ export default function SetupCard({ d, teams, team, onChange, onRemove, onImport
         {onRemove && <Button size="icon" variant="ghost" className="size-6" aria-label={`Remove ${d.name}`} onClick={onRemove} disabled={busy}><X /></Button>}
       </div>
       <Field label="Team">
-        <NativeSelect value={d.teamId} disabled={busy} onChange={(e) => (e.target.value === IMPORT ? onImport() : set({ teamId: e.target.value }))}>
+        <NativeSelect value={d.teamId} disabled={busy} onChange={(e) => (e.target.value === IMPORT ? onImport() : e.target.value === CONNECT ? onConnect() : set({ teamId: e.target.value }))}>
           {teams.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           <option value={IMPORT}>Import a team…</option>
+          <option value={CONNECT}>Connect your agent…</option>
         </NativeSelect>
       </Field>
       {claude && (

@@ -1,6 +1,6 @@
 import { Play } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { startRun } from '../api';
 import { useHealth } from '../components';
 import { Button } from '../components/ui/button';
@@ -8,7 +8,8 @@ import { Field, NativeSelect } from '../components/ui/input';
 import { PageBody } from '../components/ui/page';
 import { ErrorState } from '../components/ui/state';
 import { LiveRun, StartingRun } from '../home/LiveView';
-import { missingFor, restoringLine, runLine, taskName } from '../home/summary';
+import type { ConnectReturn } from '../connect/connect';
+import { missingFor, restoringLine, runLine, runnerProblem, taskName } from '../home/summary';
 import TeamCard, { TeamActions } from '../home/TeamCard';
 import DisruptionPicker from '../home/DisruptionPicker';
 import { RUNNER_WORDS, RUNNERS } from '../home/runners';
@@ -16,7 +17,7 @@ import { type Task, useSuggestedTeams, useTaskNames, useTasks, useTeam, useWorld
 import WorldCard from '../home/WorldCard';
 import { useScenario } from '../scenario/ScenarioBuilder';
 import { teamForRun } from '../team';
-import type { Health, Runner } from '../types';
+import type { Health, Runner, Team } from '../types';
 
 /** The runner and the disruptions, behind Options. */
 function Options({ s, busy }: { s: Setup; busy: boolean }) {
@@ -65,10 +66,23 @@ function useSetup() {
   const task: Task | null = tasks.tasks?.find((t) => t.id === taskId) ?? tasks.tasks?.[0] ?? null;
   const scenario = useScenario(true, task ? [task.id] : []);
   const nameOf = useTaskNames();
+  useConnected(team.replace);
   return { tasks, team, suggested, task, setTaskId, runner, setRunner, scenario, nameOf };
 }
 
 type Setup = ReturnType<typeof useSetup>;
+
+/** Back from Connect your agent: the connected agent becomes the team (once; a reload keeps it, not the return). */
+function useConnected(replace: (t: Team) => void) {
+  const loc = useLocation();
+  const nav = useNavigate();
+  const team = (loc.state as ConnectReturn | null)?.connected;
+  useEffect(() => {
+    if (!loc.state) return;
+    if (team) replace({ ...team, picked: true });
+    nav({ pathname: loc.pathname, search: loc.search }, { replace: true, state: null });
+  }, [loc.state, loc.pathname, loc.search, team, replace, nav]);
+}
 
 /** Starting a run: the world is restored while the request waits, then the address names the run. */
 function useStart(s: Setup, open: (run: string, branch: string) => void, back: () => void) {
@@ -88,7 +102,12 @@ function useStart(s: Setup, open: (run: string, branch: string) => void, back: (
 }
 
 /** What must be fixed before the team can run; an external system runs the agents itself, so nothing here has to be installed for it. */
-const missingOf = (s: Setup, health: Health | null) => (s.team.team && s.runner !== 'external' ? missingFor(s.team.team, health) : []);
+function missingOf(s: Setup, health: Health | null): string[] {
+  const team = s.team.team;
+  if (!team || s.runner === 'external') return [];
+  const runner = runnerProblem(team, s.runner);
+  return [...missingFor(team, health), ...(runner ? [runner] : [])];
+}
 
 /** Before a run: the world and its task, the team, and the Run button. */
 function SetupView({ s, health, start }: { s: Setup; health: Health | null; start: ReturnType<typeof useStart> }) {

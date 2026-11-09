@@ -17,6 +17,7 @@ const NewExperimentPage = lazy(() => import('./experiments/NewExperimentPage'));
 const Home = lazy(() => import('./pages/Home'));
 const ProcessPage = lazy(() => import('./control/ProcessPage'));
 const Compare = lazy(() => import('./pages/Compare'));
+const ConnectPage = lazy(() => import('./connect/ConnectPage'));
 const Run = lazy(() => import('./pages/Run'));
 const Runs = lazy(() => import('./pages/Runs'));
 const Team = lazy(() => import('./pages/Team'));
@@ -48,6 +49,7 @@ function AppRoutes() {
         <Route path="/runs" element={<Runs />} />
         <Route path="/runs/:runId/:branchId" element={<Run />} />
         <Route path="/team" element={<Team />} />
+        <Route path="/connect" element={<ConnectPage />} />
         <Route path="/compare/:a/:b" element={<Compare />} />
         <Route path="/history" element={<Navigate to="/runs" replace />} />
         <Route path="/suites" element={<Navigate to="/" replace />} />

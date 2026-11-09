@@ -57,7 +57,7 @@ export function AgentEdit({ agent: a, edit: e, list, onEdit }: {
         <strong className="w-full text-sm">{a.name}</strong>
         <Field label="Mode" className="w-36">
           <NativeSelect value={kind} onChange={(ev) => onEdit({ kind: ev.target.value as AgentKind, model: '', provider: undefined })}>
-            {MODES.map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+            {(a.kind === 'http' ? [...MODES, a.kind] : MODES).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
           </NativeSelect>
         </Field>
         {provider && (
