@@ -1,0 +1,85 @@
+{
+  "label": "Random search, 30 simulations",
+  "method": "Each search simulates today's config first, then configs drawn uniformly within the decisions' bounds, skipping any a hard limit would deny (an agent's denied call costs no simulation either): 30 in all, with 5 replications, through the same part and tools the agents use. It submits the best feasible one, which the part verifies on 20 new replications. Several searches (seeds) give the spread. Writes `data/reference.json`.",
+  "searches": 10,
+  "replications": 5,
+  "made": "2026-11-08",
+  "verified": {
+    "median": 77.2,
+    "min": 77.2,
+    "max": 80.3
+  },
+  "reached_target": 0,
+  "runs": [
+    {
+      "seed": 0,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 1,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 2,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 3,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 4,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 5,
+      "best": 16,
+      "evidence": 80.131,
+      "verified": 80.326,
+      "feasible": true
+    },
+    {
+      "seed": 6,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 7,
+      "best": 1,
+      "evidence": 76.899,
+      "verified": 77.23,
+      "feasible": true
+    },
+    {
+      "seed": 8,
+      "best": 14,
+      "evidence": 79.722,
+      "verified": 79.693,
+      "feasible": true
+    },
+    {
+      "seed": 9,
+      "best": 28,
+      "evidence": 77.56,
+      "verified": 78.218,
+      "feasible": true
+    }
+  ]
+}

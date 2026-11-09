@@ -28,6 +28,8 @@ import { type ForkChoice, forkChoiceOf } from '../run/architecture';
 import { recordedLine } from '../scenario/scenario';
 import { drivenLine } from '../world/page';
 import Waterfall from '../run/Waterfall';
+import BestSoFar from '../run/BestSoFar';
+import { studyOf } from '../run/candidates';
 import { RunReview } from '../review/RunReview';
 import RunMenu from '../run/RunMenu';
 import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
@@ -120,8 +122,10 @@ function Main({ detail, selected, onSelect, models, setModels }: {
   const now = Date.now();
   const span = spanOf(lanes);
   const pauses = useMemo(() => pausesOf(detail.events, now), [detail.events, now]);
+  const study = useMemo(() => studyOf(detail.events), [detail.events]);
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {study && <BestSoFar s={study} selected={selected} onSelect={onSelect} />}
       <Panel>
         <Tabs defaultValue="timeline">
           <div className="flex items-center gap-3 border-b border-line pl-3">

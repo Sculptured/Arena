@@ -46,12 +46,12 @@ pub struct RunOutcome {
 fn checks_of(check: &CheckPayload) -> Vec<NamedCheck> {
     match &check.checks {
         Some(named) => named.clone(),
-        None => vec![NamedCheck {
-            name: GOLD_CHECK.into(),
-            passed: check.passed,
-            detail: String::new(),
-            safety: false,
-        }],
+        None => vec![NamedCheck::new(
+            GOLD_CHECK,
+            check.passed,
+            String::new(),
+            false,
+        )],
     }
 }
 

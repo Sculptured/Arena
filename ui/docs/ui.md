@@ -25,7 +25,10 @@ secondary metadata lines, few borders, plenty of whitespace.
   and team; the pass rate at 40 px over one bar (passes in the result ink, failures in the alarm
   ink) with the 95% Wilson range as a whisker under it; a square per run (ink passed, red ✕ failed,
   ! not scored, pulsing running, dashed not run yet, a dot for a safety violation; hover shows its
-  checks and cost, click opens it); then checks passed, cost and time, the best in bold. Safety
+  checks and cost, click opens it); then any measure a check gives (`experiments/measures.ts`: the label,
+  the best run in bold across setups with the mean beside it, or the mean per run for a count, and each
+  scored run as a dot on a scale every setup shares, with the target as a solid tick and an offline
+  reference as a dashed one, named once under the cards); then checks passed, cost and time, the best in bold. Safety
   violations, denied actions and flags are rows only when some setup has one; otherwise one quiet
   "No safety violations, denied actions or flags". Under the cards, the AI comparison for two
   setups, then the checks that some run failed, side by side.
@@ -37,7 +40,10 @@ secondary metadata lines, few borders, plenty of whitespace.
   **Pause** / **Resume**, **Stop**, status and time, **Timeline | Digital Twin**; a step opens a slim
   drawer; at the end the result in one sentence, **Details** and the run's **⋯**.
 - **Run page** (`/runs/:run/:branch`): the task, its status and the run's **⋯**; time, cost, check,
-  safety and any refusal; the review line; the timeline and event log with the step panel beside
+  safety and any refusal; the review line; for an optimisation run, **Best so far** (`run/BestSoFar.tsx`,
+  `run/candidates.ts`: each candidate's objective by simulation number with its interval, ink for a new
+  best, hollow for one that missed a limit, the best feasible as a step line, the target dashed, the
+  verified value as a diamond; a dot selects its step); the timeline and event log with the step panel beside
   them; the trace once a step is picked; **More about this run**.
 - **A run's ⋯** (`run/RunMenu.tsx`, on the run page, the world view, the process view and the live
   result): its other views, Compare with another run, its reruns, and under **Advanced** the only way
