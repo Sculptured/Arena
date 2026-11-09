@@ -87,24 +87,26 @@ and an OpenAI-compatible gateway), run experiments (`POST /api/experiments`), or
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/run.png" alt="A run page: the steps of each agent on a timeline, a failed check, and the branch list with an approximately restored branch labelled"></td>
-    <td width="50%"><img src="docs/images/rerun.png" alt="The change and rerun panel at step 7: mode, model and prompt of the agent, exact or approximate restore, and how each part of the world will be restored"></td>
+    <td width="50%"><img src="docs/images/experiment.png" alt="Three agent setups side by side on the same pharma scenario: pass rate with its range, a square per run, checks passed, safety, cost and time, and the checks some run failed"></td>
+    <td width="50%"><img src="docs/images/new-experiment.png" alt="New experiment: the scenario, two agent setups (team, model, rules) and runs per setup"></td>
   </tr>
   <tr>
-    <td><sub><b>Run.</b> Every step of every agent, its branches, and which were restored approximately.</sub></td>
-    <td><sub><b>Change and rerun.</b> Edit an agent, pick a restore mode, and see how each part will be restored.</sub></td>
+    <td><sub><b>Experiment.</b> One column per setup: pass rate, every run, checks, safety, cost, time.</sub></td>
+    <td><sub><b>New experiment.</b> A scenario, 1 to 4 setups, runs per setup.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/compare.png" alt="Compare: two branches side by side with seconds, tokens and cost, a note that differences may come from the approximate restore, the first divergence at step 7, and one differing key"></td>
-    <td width="50%"><img src="docs/images/runs.png" alt="The Runs page: a task picker, a New run button, and a run with its original branch and two forks"></td>
+    <td width="50%"><img src="docs/images/run.png" alt="A run: its time, cost, checks and safety, the AI review's one line, and every step on a timeline"></td>
+    <td width="50%"><img src="docs/images/world.png" alt="The world view of a pharma run: KPIs, a scrubber over the steps, and the plant's systems as an HMI overview"></td>
   </tr>
   <tr>
-    <td><sub><b>Compare.</b> Cost, first divergent step, and the state that differs at the end.</sub></td>
-    <td><sub><b>Runs.</b> Each run with its original branch and the forks made from it.</sub></td>
+    <td><sub><b>Run.</b> Every step of every agent on one timeline.</sub></td>
+    <td><sub><b>World view.</b> The simulated systems at any step.</sub></td>
   </tr>
 </table>
 
-<sub>Captured from Arena's web UI on a small test world (a toy part and the kit's counter). The agents in these captures ran on a test model server that Arena has since removed; captures with real agents are not made yet.</sub>
+<sub>Captured from Arena's web UI on 2026-11-08: real runs of the pharma benchmark (Claude Code on Sonnet; the setups
+in the first capture are suites from before experiments, shown side by side), and the retail benchmark's New
+experiment page.</sub>
 
 ## How it works
 
