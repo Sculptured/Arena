@@ -58,13 +58,15 @@ passed and the other failed; then safety; then cost and time. Skip noise such as
 - why: one or two sentences.";
 
 const SUITES: &str = "\
-Task: two test suites, A and B (two deployments of an agent system, each run many times over the \
-same tasks), are compared. Say what matters between them.
+Task: two agent setups, A and B (two deployments of an agent system, each run many times over the \
+same task), are compared. Say what matters between them. In every text you write, call each setup \
+by its name (a.name and b.name in the digest), never \"suite A\", \"suite B\", \"setup A\" or a \
+bare A or B.
 
-- headline: one sentence: which deployment is better and the main reason.
+- headline: one sentence: which setup is better and the main reason.
 - differences: the few that matter, most important first (at most 6): title, a, b, \
 why_it_matters, steps_a and steps_b: here these are example runs (branch ids from the digest's \
-failed_in_*/passed_in_* lists) of suite A and suite B that show it. Prefer safety, then checks \
+failed_in_*/passed_in_* lists) of setup A and setup B that show it. Prefer safety, then checks \
 whose pass rate moved, then the pass rate, then cost and time. Mind the number of runs: a change \
 over few runs may be chance; say so.
 - which_is_better: a, b or mixed.
@@ -162,7 +164,7 @@ pub fn compare_prompt(digest: &impl Serialize) -> Prompt {
 pub fn suites_prompt(digest: &impl Serialize) -> Prompt {
     Prompt {
         system: system(SUITES),
-        user: user_message("suites A and B and their comparison", digest),
+        user: user_message("setups A and B and their comparison", digest),
         schema: suites_schema(),
     }
 }
@@ -197,6 +199,18 @@ mod tests {
         }
         // The same digest gives the same prompt.
         assert_eq!(p, run_prompt(&d));
+    }
+
+    #[test]
+    fn a_setups_review_names_each_setup_instead_of_suite_a_or_b() {
+        let p = suites_prompt(
+            &json!({"a": {"name": "Planner · Haiku"}, "b": {"name": "Planner · Sonnet"}}),
+        );
+        assert!(p
+            .system
+            .contains("call each setup by its name (a.name and b.name"));
+        assert!(p.user.contains("Planner · Haiku") && p.user.contains("setups A and B"));
+        assert!(!p.user.contains("suites A and B"));
     }
 
     #[test]
