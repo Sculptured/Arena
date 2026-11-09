@@ -12,7 +12,10 @@ use axum::{
     Json, Router,
 };
 
-use super::{finished_branch, sides, ApiError, ApiResult};
+use super::{
+    compare::{compared_rows, finished_branch, sides, Side},
+    pair, ApiError, ApiResult,
+};
 use crate::{
     app::AppState,
     compare,
@@ -71,13 +74,6 @@ async fn stored(state: &AppState, key: &str) -> ApiResult<StoredReview> {
 
 fn again(q: &HashMap<String, String>) -> bool {
     q.get("again").is_some_and(|v| v == "1" || v == "true")
-}
-
-fn pair(q: &HashMap<String, String>) -> Result<(String, String), ApiError> {
-    match (q.get("a"), q.get("b")) {
-        (Some(a), Some(b)) => Ok((a.clone(), b.clone())),
-        _ => Err(ApiError::bad("a and b are required")),
-    }
 }
 
 /// The stored review when there is one to keep (done or running, and not asked again), else a new
@@ -210,9 +206,9 @@ struct Compared {
     skipped: Vec<String>,
 }
 
-async fn compared(state: &AppState, a: &super::Side, b: &super::Side) -> anyhow::Result<Compared> {
+async fn compared(state: &AppState, a: &Side, b: &Side) -> anyhow::Result<Compared> {
     let skipped = compare::not_compared(&state.hub, &a.end, &b.end).await?;
-    let rows = (super::compared_rows(state, &a.end, &b.end, &skipped).await).map_err(job_err)?;
+    let rows = (compared_rows(state, &a.end, &b.end, &skipped).await).map_err(job_err)?;
     Ok(Compared {
         first_divergent_seq: compare::first_divergent_seq(&a.events, &b.events),
         rows,
@@ -220,7 +216,7 @@ async fn compared(state: &AppState, a: &super::Side, b: &super::Side) -> anyhow:
     })
 }
 
-fn record<'a>(s: &'a super::Side, ticket: Option<&'a str>) -> RunRecord<'a> {
+fn record<'a>(s: &'a Side, ticket: Option<&'a str>) -> RunRecord<'a> {
     RunRecord {
         branch: &s.branch,
         events: &s.events,

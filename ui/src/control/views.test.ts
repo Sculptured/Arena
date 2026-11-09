@@ -5,8 +5,6 @@ import { ev, events, runStart, team } from './fixtures';
 import { equipShape, flowGraph, flowLabel, flowStroke } from './flowLayout';
 import { missingPermit, permitOf } from './permit';
 import { processView } from './process';
-import { suiteCounts, suiteMatches, togglePick } from './suiteList';
-import type { ListedSuite } from './types';
 
 describe('flow graph', () => {
   const view = processView(events, actionsOf(events), team);
@@ -52,20 +50,5 @@ describe('permits', () => {
     expect(missingPermit(evs, unknown)).toBe('nope');
     expect(permitOf([runStart, write, { ...decided, seq: 30 }], write)).toBeNull();
     expect(permitOf([runStart, proposed, write], write)).toEqual({ id: 'chg-1', approved: null, decision: '', action: 'batch_hold' });
-  });
-});
-
-describe('suites list', () => {
-  const s = (id: string, status: ListedSuite['status'], name: string): ListedSuite =>
-    ({ id, name, status, team: { id: 't', name: 'Coordinated', agents: [] }, tasks: ['cvx-2611'], repeats: 2, runner: 'external', benchmark: 'pharma', created_at: '', ended_at: null, error: null, runs: 2, ended: 1, passed: 1 });
-  const list = [s('a', 'finished', 'team v1'), s('b', 'running', 'team v2')];
-  it('counts and filters by status and words', () => {
-    expect(suiteCounts(list)).toEqual({ all: 2, running: 1, finished: 1, stopped: 0 });
-    expect(list.filter((x) => suiteMatches(x, { status: 'all', text: 'v2' })).map((x) => x.id)).toEqual(['b']);
-    expect(list.filter((x) => suiteMatches(x, { status: 'finished', text: 'cvx coordinated' })).map((x) => x.id)).toEqual(['a']);
-  });
-  it('keeps at most two suites picked', () => {
-    expect(togglePick(['a', 'b'], 'c')).toEqual(['b', 'c']);
-    expect(togglePick(['a', 'b'], 'a')).toEqual(['b']);
   });
 });

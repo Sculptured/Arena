@@ -2,8 +2,8 @@ import { ArrowRight, Factory, GitCompare, Layers, ListTree, Monitor, Play } from
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { runs as fetchRuns } from '../api';
-import { suites as fetchSuites } from '../control/api';
-import type { ListedSuite } from '../control/types';
+import { experiments as fetchExperiments } from '../experiments/api';
+import type { ListedExperiment } from '../experiments/types';
 import type { RunSummary } from '../types';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Dialog, DialogContent } from '../components/ui/dialog';
@@ -24,17 +24,17 @@ export function usePaletteShortcut(toggle: () => void) {
   }, [toggle]);
 }
 
-/** Runs and suites, fetched each time the palette opens. */
+/** Runs and experiments, fetched each time the palette opens. */
 function useLists(open: boolean) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [suites, setSuites] = useState<ListedSuite[]>([]);
+  const [experiments, setExperiments] = useState<ListedExperiment[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     fetchRuns().then(setRuns).catch((e) => setError(String(e.message ?? e)));
-    fetchSuites().then(setSuites).catch((e) => setError(String(e.message ?? e)));
+    fetchExperiments().then(setExperiments).catch((e) => setError(String(e.message ?? e)));
   }, [open]);
-  return { runs, suites, error };
+  return { runs, experiments, error };
 }
 
 function iconOf(item: Item) {
@@ -43,7 +43,7 @@ function iconOf(item: Item) {
   if (item.id.startsWith('cmp-') || item.group === 'Compare with') return <GitCompare aria-hidden="true" />;
   if (item.group === 'Go to') return <ArrowRight aria-hidden="true" />;
   if (item.id === 'theme') return <Monitor aria-hidden="true" />;
-  return item.id.startsWith('suite-') ? <Layers aria-hidden="true" /> : <ListTree aria-hidden="true" />;
+  return item.id.startsWith('experiment-') ? <Layers aria-hidden="true" /> : <ListTree aria-hidden="true" />;
 }
 
 function groupsOf(items: Item[]): [string, Item[]][] {
@@ -67,11 +67,11 @@ function useItems(open: boolean, start?: Mode) {
   const lists = useLists(open);
   const { pathname, search } = useLocation();
   useEffect(() => { if (open && start) setMode(start); }, [open, start]);
-  const items = useMemo(() => itemsFor(mode, lists.runs, lists.suites, hereOf(pathname, search)), [mode, lists.runs, lists.suites, pathname, search]);
+  const items = useMemo(() => itemsFor(mode, lists.runs, lists.experiments, hereOf(pathname, search)), [mode, lists.runs, lists.experiments, pathname, search]);
   return { mode, setMode, items, lists };
 }
 
-/** The palette: go to a run, suite or page; start a run or suite; compare two runs or suites. */
+/** The palette: go to an experiment, a run or a page; start one; compare two runs. */
 export default function CommandPalette({ open, onOpenChange, start }: { open: boolean; onOpenChange: (o: boolean) => void; start?: Mode }) {
   const nav = useNavigate();
   const theme = useTheme();
@@ -91,7 +91,7 @@ export default function CommandPalette({ open, onOpenChange, start }: { open: bo
         <Command loop onKeyDown={back}>
           <CommandInput value={query} onValueChange={setQuery} placeholder={placeholderOf(mode)} />
           <CommandList>
-            <CommandEmpty>{lists.error ? `Couldn't load runs and suites: ${lists.error}` : 'Nothing matches. Try a task name, an id or a status.'}</CommandEmpty>
+            <CommandEmpty>{lists.error ? `Couldn't load runs and experiments: ${lists.error}` : 'Nothing matches. Try a task name, an id or a status.'}</CommandEmpty>
             {groupsOf(items).map(([group, list]) => (
               <CommandGroup key={group} heading={group}>
                 {list.map((i) => (

@@ -204,6 +204,20 @@ fn usage_sums_parts() {
     })
 }
 
+/// A world part whose integration is not installed keeps nothing: health still answers and
+/// counts the installed parts' saves only.
+#[test]
+fn health_answers_when_an_integration_is_not_installed() {
+    run(async {
+        let one = vec![integration("toy-a", &[])];
+        let fx = setup("missing", one, &["x=toy-a", "y=toy-gone"]).await;
+        fx.save("toy-a", "s_1").await;
+        let (st, health) = fx.get("/api/health").await;
+        assert_eq!(st, 200, "{health}");
+        assert_eq!(health["disk"]["bytes"], 1, "{health}");
+    })
+}
+
 #[test]
 fn gc_keeps_referenced_saves() {
     run(async {

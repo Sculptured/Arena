@@ -27,7 +27,7 @@ async fn live(state: &AppState, id: &str) -> Result<Arc<BranchCtx>, ApiError> {
     }
     match state.store.find_branch(id).await? {
         Some(_) => Err(ApiError::conflict("the run is not running")),
-        None => Err(ApiError::not_found(format!("there is no branch \"{id}\""))),
+        None => Err(super::no_branch(id)),
     }
 }
 

@@ -51,11 +51,7 @@ async fn find(state: &AppState, id: &str) -> Result<Option<(String, PathBuf)>, A
     let Some(dir) = folder() else { return Ok(None) };
     let mut at = Some(id.to_string());
     while let Some(branch) = at {
-        let Some(b) = state.store.find_branch(&branch).await? else {
-            return Err(ApiError::not_found(format!(
-                "there is no branch \"{branch}\""
-            )));
-        };
+        let b = super::branch_or_404(state, &branch).await?;
         if let Some(path) = mp4_of(&dir, &branch) {
             return Ok(Some((branch, path)));
         }

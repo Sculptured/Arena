@@ -7,41 +7,43 @@ secondary metadata lines, few borders, plenty of whitespace.
 
 ## Screens
 
-- **Top bar** (`app/TopBar.tsx`): the wordmark, **Run**, **History**, and one **⋯** with the run on
-  screen's other views (world view, all details, process view), Suites, Compare two runs or two
-  suites, World view of a run, the Team editor, AI review on or off, the command palette, the theme
-  and which Arena core is in use.
-- **Run** (`/`, `pages/Home.tsx`, `home/`). Before a run, in one centred column: the world's name, a
-  task picker by plain name (the ticket heading is its tooltip), the team board, and one big **Run**
-  button (what will run, "6 agents · Claude Code · Sonnet" from `home/summary.ts`, is its tooltip).
-  What is missing shows under it in words ("Claude Code isn't installed"). A small **Options** link
-  opens the disruptions (the scenario builder as a picker, parameters behind **Adjust**), the runner
-  (One after another, A lead dispatches, All at once, By an external system) and the team's
-  **Suggested**, **Import** and **Edit**. A chosen disruption also shows in words under the task.
-- **The live run** is the same screen (`?run=&branch=`, `home/LiveView.tsx`): while the world is
-  restored a calm "Restoring the world: ERP, LIMS, …"; then one toolbar line with **Pause** /
-  **Resume**, **Stop** (confirmed), the status (Starting, Running, Paused; `run/flow.ts`), the time so
-  far, and a quiet **Timeline | Digital Twin** switch. The timeline fills in as steps happen and
-  follows the newest; the twin follows the latest step, with its scrubber once the run is paused or
-  done. A step opens a slim drawer: what happened in a sentence or two (`run/stepSummary.ts`), the
-  raw record behind **Details**. When the run ends, the status gives way to the result on the same
-  line: **Passed** or **Failed** and why in one sentence (`run/result.ts`), with **Rewind** (the fork
-  panel at the chosen step) and **Details** (the run page). Under it the AI review is one line, its
-  verdict, with **More**.
-- **History** (`/history`, `pages/Runs.tsx`): name (the task in plain words; the team is its
-  tooltip), result, when; reruns under their run as "↳ Rerun". A row opens on the Run screen; its
-  menu (on hover) has All details, Process view and Delete. ⌘K finds any run by name.
-- **Compare** (`/compare/:a/:b`): **What matters** as one line with **More**, and the outcome rows;
-  the divergence strip, each side's figures, the first differing step and the differing rows sit
-  behind **Details**.
-- **Run page** (`/runs/:run/:branch`, all details): the task, its status, **Branches** and **Compare
-  with…**; time, cost, check, safety and any refusal; the review line; the timeline and event log with
-  the step inspector beside them; the trace once a step is picked; and **More about this run** (the
-  world, how the agents ran, the disruption, tokens, steps, and the deployment estimate).
-- **Suites** (`/suites`): status, name (team, scenarios × repeats and runner as its tooltip),
-  passed and when; tick two to **Compare**. ⌘K finds a suite by name.
-- Suites, the team editor, the world view and the process view are under **⋯** and ⌘K. Nothing was
-  removed; it just isn't on the first screen.
+- **Top bar** (`app/TopBar.tsx`): the wordmark, **Experiments** and **Runs**, and one **⋯** with Run
+  once, Compare two runs, World view of a run, the Team editor, AI review on or off, the command
+  palette, the theme and which Arena core is in use.
+- **Experiments** (`/`, `experiments/ExperimentsPage.tsx`): newest first, each row the experiment's
+  name, its scenario in words, one small bar per setup (passed of runs asked) and when. Tick two or
+  more (the box shows on hover) to **Compare** their setups side by side. Empty: one line on what an
+  experiment is and **New experiment**.
+- **New experiment** (`/experiments/new`): the name inline as the page title; **Scenario** (the
+  task by plain name, then disruptions as a picker); **Agent setups**, 1 to 4 cards (name, team,
+  model for Claude Code agents, rules added to every prompt; a dashed card adds one, copying the
+  last); **Runs per setup** (1, 3, 5, 10; default 5); a bottom bar with "2 setups × 5 runs = 10 runs",
+  what blocks starting, and **Run experiment**.
+- **Experiment** (`/experiments/:id`, `/experiments/compare?ids=`): the name, status and scenario
+  line; **Stop** while it runs. The page is as wide as its setups need (two fit a narrow page, four a
+  wide one). One card per setup (`experiments/Results.tsx`, model in `experiments/model.ts`): name
+  and team; the pass rate at 40 px over one bar (passes in the result ink, failures in the alarm
+  ink) with the 95% Wilson range as a whisker under it; a square per run (ink passed, red ✕ failed,
+  ! not scored, pulsing running, dashed not run yet, a dot for a safety violation; hover shows its
+  checks and cost, click opens it); then checks passed, cost and time, the best in bold. Safety
+  violations, denied actions and flags are rows only when some setup has one; otherwise one quiet
+  "No safety violations, denied actions or flags". Under the cards, the AI comparison for two
+  setups, then the checks that some run failed, side by side.
+- **Runs** (`/runs`, `pages/Runs.tsx`): name, team, result, when; reruns under their run as "↳
+  Rerun". A row opens on Run once's live view; its menu has All details, Process view and Delete.
+- **Run once** (`/run`, `pages/Home.tsx`, `home/`): the world's name, a task picker, the team board
+  and one big **Run**; **Options** holds the disruptions, the runner and the team's Suggested, Import
+  and Edit. After **Run** the same screen is the live run (`?run=&branch=`, `home/LiveView.tsx`):
+  **Pause** / **Resume**, **Stop**, status and time, **Timeline | Digital Twin**; a step opens a slim
+  drawer; at the end the result in one sentence, **Details** and the run's **⋯**.
+- **Run page** (`/runs/:run/:branch`): the task, its status and the run's **⋯**; time, cost, check,
+  safety and any refusal; the review line; the timeline and event log with the step panel beside
+  them; the trace once a step is picked; **More about this run**.
+- **A run's ⋯** (`run/RunMenu.tsx`, on the run page, the world view, the process view and the live
+  result): its other views, Compare with another run, its reruns, and under **Advanced** the only way
+  to rewind: "Rewind to step N and rerun…" opens the fork panel in the step panel (`?fork=1`).
+- **Compare runs** (`/compare/:a/:b`), **World view** (`/world/…`), **Process view** (`/control/…`)
+  and the **Team editor** (`/team`) are one click away under ⋯ and ⌘K.
 
 **Which core.** The UI talks to the Arena core (arenad) it is served from. A build can name another
 with `VITE_ARENA_URL=<url>`, and the address can switch with `?core=<url>` (this browser remembers it;
@@ -76,15 +78,19 @@ Tailwind names and never raw colours.
 | Surfaces | `bg`, `surface`, `raised`, `sunken`, `hover` | canvas, panels, controls, wells and code, row hover |
 | Lines | `line`, `line-strong` | hairlines, strong borders and lane bars |
 | Text | `fg`, `muted`, `faint` | body, secondary, tertiary |
-| Accent (the only one) | `accent`, `accent-fg`, `accent-soft` | focus, selection, the primary action |
+| Accent (the only one) | `accent`, `accent-fg`, `accent-soft` | focus, selection, links |
+| Primary | `primary`, `primary-hover`, `primary-fg` | the one primary button: solid, white text, both themes |
 | Abnormal only | `alarm`, `alarm-soft`, `warn`, `warn-soft` | refused, failed, unsafe; approximate restore |
+| Result ink | `ok` | a passed run's square, a bar of passes (an ink, never a colour) |
 | Process view | `equip`, `equip-line`, `flow`, `flow-strong` | equipment shapes; read flows and write flows |
 
 - **Type.** Inter (variable) for text and JetBrains Mono (variable) for ids, numbers and JSON, both
-  bundled with `@fontsource-variable`. The scale is `text-2xs` 11 px (labels), `text-xs` 12,
-  `text-sm` 13 (body), `text-base` 14, `text-lg` 16 (page titles) and `text-xl` 20.
-- **Spacing.** Tailwind's 4 px scale. Pages use a 12 px gutter on phones and 16 px from `sm`. Panels
-  are spaced 12 px apart. Table rows are 32 px tall.
+  bundled with `@fontsource-variable`; figures use Inter's tabular digits, mono is for ids, code and
+  the timeline axis. The scale is `text-2xs` 11 px (labels), `text-xs` 12, `text-sm` 13 (body),
+  `text-base` 14, `text-lg` 16, `text-xl` 20 (page titles), `text-2xl` 28 and `text-3xl` 40 (a result's headline).
+- **Spacing.** Tailwind's 4 px scale. Pages use a 16 px gutter on phones and 24 px from `sm`, and one
+  of four widths (`PageHeader`/`PageBody` `width`: narrow 768, default 1024, wide 1280, full). Panels
+  are spaced 16 px apart. Table rows are 32 px tall.
 - **Radii.** `sm` 3 px for chips, `md` 4 px for controls, `lg` 6 px for panels and dialogs.
 - **Theme.** System, light or dark, chosen with the top bar button or the palette and kept in
   `localStorage` (`arena.theme`).
@@ -97,7 +103,7 @@ These are shadcn-style components: the code is ours, built on Radix primitives w
 - `panel`: `Panel` and `PanelHeader` (a title, a meta note, and actions).
 - `side-panel`: `SidePanel`, a slim panel beside the main area (a step, an agent's prompt).
 - `page`: `PageHeader` (title, state, actions, children; no border or panel) and `PageBody`. `Stat` is a label
-  over a mono value, with an `abnormal` option.
+  over a tabular value, with an `abnormal` option.
 - `status`: `StatusMark` shows a glyph and a word, and adds colour only when `abnormal`. `Tag` is a
   neutral label, with optional `warn` or `alarm` tones.
 - `state`: `EmptyState`, `ErrorState` (says what to try and has a retry), `LoadingState` (skeleton rows
@@ -105,7 +111,7 @@ These are shadcn-style components: the code is ours, built on Radix primitives w
 - `input`: `Input`, `Textarea`, `NativeSelect`, `Checkbox` and `Field` (a label above its control).
 - `table`: dense table primitives. `data-table` is a generic TanStack Table with sorting, a filter
   function, ↑/↓ or j/k, Home/End and Enter, and its own loading, error, empty and no-match states.
-- `filter-chips`: one-of chips with counts.
+- `filter-chips`: one-of chips with counts. `segmented`: a few exclusive choices side by side.
 - `tabs`, `tooltip`, `popover`, `dialog` (with `DialogActions`) and `dropdown-menu`: Radix.
 - `command`: cmdk, used by the palette. `toaster`: sonner.
 - `split`: a main area and a side panel that can be resized by dragging or with ←/→ on the handle.
@@ -116,13 +122,13 @@ Logic lives in pure modules with tests, and components only render. For example:
 (keyboard moves), `lib/split.ts`, `lib/chart.ts`, `app/palette.ts`, `runs/runsTable.ts`,
 `run/timelineLayout.ts`, `run/zoom.ts`, `run/flow.ts`, `run/result.ts`, `run/stepSummary.ts`,
 `run/waterfall.ts`, `run/runStats.ts`, `board/board.ts`, `board/importTeam.ts`, `home/summary.ts`, `control/flowLayout.ts`,
-`control/permit.ts` and `control/suiteList.ts`.
+`control/permit.ts`, `experiments/model.ts`, `lib/format.ts` and `lib/usePolled.ts` (one way to poll).
 
 ## Patterns
 
 - **Words.** Labels start with a capital, no all-caps; values start with a capital (Passed, Failed, Read,
   Write, Refused, One after another, Claude Code). No ids, hashes, step numbers or image tags on the
-  Run screen or History: they live behind Details and on the run page. Explanations are tooltips,
+  Experiments, Runs or Run once: they live behind Details and on the run page. Explanations are tooltips,
   not sentences on the screen.
 - **Status.** A status is always a glyph and a word: `✓ Passed`, `◐ Running`, `‖ Paused`, `✕ Failed`,
   `⚠ Infra error`, `■ Interrupted`, `■ Stopped`, `◆ unsafe`. Only abnormal states are coloured.
@@ -163,8 +169,8 @@ Logic lives in pure modules with tests, and components only render. For example:
   it), approvals as a dashed rail, items as tiles with a glyph and a word, and lot-to-order flows as
   pipes along a bus under the zones between them, one labelled lane each (ids in the tooltip). Tiles changed since the view before get an accent ring and a "what changed" line
   (`world/twin.ts`). The scrubber (`world/scrub.ts`) stops at each view, marks disruptions (▼) and
-  refusals (▲; what each is in its tooltip), plays and pauses (space), and moves with ←/→. Rewind here opens the run page's fork
-  panel at the next agent step with "Swap architecture" chosen (`run/architecture.ts`): Team v2 adds its
+  refusals (▲; what each is in its tooltip), plays and pauses (space), and moves with ←/→. The run's ⋯ → Advanced opens the run page's fork
+  panel at the next agent step; "Swap architecture" (`run/architecture.ts`): Team v2 adds its
   rules to every agent's prompt; the single agent replaces the team (a fork's `team`, which only a run
   an external system drives can take). The selected
   step is `?step=` in the address, shared by the run page, the process view and the world view. On
@@ -179,7 +185,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   order; an agent whose `data_access.writes` is empty is read-only) or an Arena team, picked, dropped
   or pasted. A kind Arena can't run (OpenCode) is refused by name. The board is kept with the team in
   this browser and never sent to arenad. **Edit** opens the team editor (`/team`).
-- **Scenario builder** (`scenario/`). On the Run screen as a picker, and in the New suite dialog, from the benchmark's
+- **Scenario builder** (`scenario/`). On Run once and New experiment as a picker, from the benchmark's
   `scenario_options` (`GET /api/benchmark`): a toggle and parameters per disruption (label and
   description filled with them, as arenad fills the template), and a plain-words preview.
 - **Outcome comparison** (`compare/`). Under What matters on the compare page: valid plan, safety
@@ -192,11 +198,11 @@ Logic lives in pure modules with tests, and components only render. For example:
   (`dev/fixtureApi.ts`), for screenshots without arenad.
 - **Trends.** Actions per minute for each system kind, tokens, cost and tool latency as sparklines,
   and context per model call as a chart. A cost the record does not give per call draws no line.
-- **Data tables.** Rows open with a click or Enter; ⌘K is the filter for runs and suites.
-- **Command palette.** Opens with ⌘K or Ctrl+K. It lists the pages (Run, History, Suites, Team
-  editor); the deeper views of the run on screen; new run and new suite (`?new=suite`); compare two
-  runs or two suites, picked in two steps (the ⋯ menu opens it at that step); the theme; and
-  every run branch and suite.
+- **Data tables.** Rows open with a click or Enter; ⌘K finds any run or experiment.
+- **Command palette.** Opens with ⌘K or Ctrl+K. It lists the pages (Experiments, Runs, Team
+  editor); the deeper views of the run on screen; New experiment and Run once; compare two runs,
+  picked in two steps (a run's ⋯ opens it at the second); the theme; and every experiment and run
+  branch.
 - **Status bar.** Only what needs attention, otherwise nothing: no model to run agents with (no agent
   CLI and no API key, with each provider, its reason and Check one click away), or saves 90% full or
   more, as a small analog bar that turns to alarm when new runs are refused. It has the class

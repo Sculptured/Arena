@@ -12,65 +12,75 @@
 
 :root {
   color-scheme: light;
-  /* Surfaces, back to front. */
-  --bg: #dfe1e3;
-  --surface: #f1f2f3;
-  --raised: #fafafa;
-  --sunken: #e8e9eb;
-  --hover: #e4e6e8;
+  /* Surfaces, back to front: a near-white canvas, white panels, a faint well for inputs at rest. */
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --raised: #ffffff;
+  --sunken: #eef0f2;
+  --hover: #f1f2f4;
   /* Lines. */
-  --line: #c7cacd;
-  --line-strong: #9fa4a9;
+  --line: #e1e4e8;
+  --line-strong: #b9bec5;
   /* Text. */
-  --fg: #1d2125;
-  --muted: #555b62;
-  --faint: #7b8188;
-  /* The one accent: interaction (focus, selection, the primary action). */
-  --accent: #2f5d8a;
+  --fg: #15181c;
+  --muted: #5a6169;
+  --faint: #8b9199;
+  /* The one accent: interaction (focus, selection, links). */
+  --accent: #2b5c94;
   --accent-fg: #ffffff;
-  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  /* The primary action: a solid fill with white text in both themes. */
+  --primary: #2b5c94;
+  --primary-hover: #234d7d;
+  --primary-fg: #ffffff;
   /* Abnormal states only. */
-  --alarm: #b3261e;
-  --alarm-soft: color-mix(in srgb, var(--alarm) 10%, transparent);
+  --alarm: #b42318;
+  --alarm-soft: color-mix(in srgb, var(--alarm) 9%, transparent);
   --warn: #8a5a00;
-  --warn-soft: color-mix(in srgb, #c98a00 16%, transparent);
+  --warn-soft: color-mix(in srgb, #c98a00 14%, transparent);
+  /* A passed result: a quiet ink, never a colour (ISA-101). */
+  --ok: #3c434b;
   /* Equipment and flows in the process view; series in trends. */
-  --equip: #d2d5d8;
-  --equip-line: #858a90;
+  --equip: #e3e6e9;
+  --equip-line: #8a9097;
   --flow: #8a9097;
   --flow-strong: #3d4349;
   --series: #4a5056;
   --series-2: #8a9097;
-  --shadow: 0 1px 2px rgb(0 0 0 / 6%);
-  --shadow-pop: 0 8px 28px rgb(0 0 0 / 16%), 0 1px 3px rgb(0 0 0 / 10%);
+  --shadow: 0 1px 2px rgb(16 24 40 / 5%);
+  --shadow-pop: 0 12px 32px rgb(16 24 40 / 14%), 0 2px 6px rgb(16 24 40 / 8%);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #17191c;
-  --surface: #1f2225;
-  --raised: #26292d;
-  --sunken: #1b1d20;
-  --hover: #2c3034;
-  --line: #363a3f;
-  --line-strong: #555b62;
-  --fg: #e2e4e7;
-  --muted: #a3a9b0;
-  --faint: #7d838a;
-  --accent: #7ea6d1;
-  --accent-fg: #0f1720;
-  --alarm: #f2726a;
-  --alarm-soft: color-mix(in srgb, var(--alarm) 14%, transparent);
+  --bg: #111315;
+  --surface: #181a1d;
+  --raised: #1f2225;
+  --sunken: #141618;
+  --hover: #24272b;
+  --line: #2b2f34;
+  --line-strong: #4a5057;
+  --fg: #e6e8eb;
+  --muted: #a1a8b0;
+  --faint: #737a82;
+  --accent: #8ab2de;
+  --accent-fg: #0d1520;
+  --primary: #3d78c2;
+  --primary-hover: #4a86d0;
+  --primary-fg: #ffffff;
+  --alarm: #f07167;
+  --alarm-soft: color-mix(in srgb, var(--alarm) 13%, transparent);
   --warn: #e3ac4a;
-  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
-  --equip: #33373c;
-  --equip-line: #737980;
+  --warn-soft: color-mix(in srgb, var(--warn) 13%, transparent);
+  --ok: #c9ced4;
+  --equip: #2a2e33;
+  --equip-line: #6f767e;
   --flow: #6b7178;
   --flow-strong: #c9cdd2;
   --series: #c2c7cc;
   --series-2: #737980;
   --shadow: none;
-  --shadow-pop: 0 8px 28px rgb(0 0 0 / 50%), 0 0 0 1px var(--line);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 55%), 0 0 0 1px var(--line);
 }
 
 @theme inline {
@@ -87,10 +97,14 @@
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
   --color-alarm: var(--alarm);
   --color-alarm-soft: var(--alarm-soft);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-ok: var(--ok);
   --color-equip: var(--equip);
   --color-equip-line: var(--equip-line);
   --color-flow: var(--flow);
@@ -102,7 +116,7 @@
 @theme {
   --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* Type scale: 11 / 12 / 13 (body) / 14 / 16 / 20 px. */
+  /* Type scale: 11 / 12 / 13 (body) / 14 / 16 / 20 px, 28 px and 40 px for a result's headline figure. */
   --text-2xs: 11px;
   --text-2xs--line-height: 16px;
   --text-xs: 12px;
@@ -115,6 +129,10 @@
   --text-lg--line-height: 24px;
   --text-xl: 20px;
   --text-xl--line-height: 28px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 40px;
+  --text-3xl--line-height: 44px;
   /* Radii: controls and chips, panels, dialogs. */
   --radius-sm: 3px;
   --radius-md: 4px;

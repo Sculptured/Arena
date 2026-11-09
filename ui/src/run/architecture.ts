@@ -2,6 +2,7 @@
 // team's shape and gives every agent its rules (prompt changes); the single agent replaces the
 // whole team, which a fork can do only for a run an external system drives.
 import type { Change, Event, RunStartPayload, Team } from '../types';
+import { withRules } from '../team';
 
 export interface Architecture {
   id: string;
@@ -33,15 +34,6 @@ export const architectureOf = (id: string) => ARCHITECTURES.find((a) => a.id ===
 export type ForkChoice = 'architecture' | 'agents';
 
 export const forkChoiceOf = (param: string | null): ForkChoice => (param === 'architecture' ? 'architecture' : 'agents');
-
-const MARK = '\n\nDeployment rules:\n';
-
-/** A prompt with the rules in place of any earlier deployment rules. */
-export function withRules(prompt: string, rules: string): string {
-  const base = prompt.includes(MARK) ? prompt.slice(0, prompt.indexOf(MARK)) : prompt;
-  const r = rules.trim();
-  return r ? `${base.trimEnd()}${MARK}${r}` : base;
-}
 
 /** The changes that give every agent the rules; agents whose prompt would not change are left out. */
 export function swapChanges(team: Team, rules: string): Record<string, Change> {

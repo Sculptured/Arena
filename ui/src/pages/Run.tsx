@@ -1,9 +1,6 @@
-import { ChevronDown, GitBranch, GitCompare } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApproximateMark, StatusChip } from '../components';
-import { Button } from '../components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { PageBody, PageHeader, Stat } from '../components/ui/page';
 import { Panel, PanelHeader } from '../components/ui/panel';
 import { Split } from '../components/ui/split';
@@ -21,19 +18,19 @@ import MetricsPanel from '../run/Metrics';
 import { pausesOf } from '../run/flow';
 import { checkMark, runStats, safetyLine, taskOf } from '../run/runStats';
 import { formatCost, summarize } from '../run/timeline';
+import { duration } from '@/lib/format';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
 import { useStepParam } from '../run/useStepParam';
-import { taskName } from '../home/summary';
-import { type Task, useTasks } from '../home/useHome';
+import { useTaskNames } from '../home/useHome';
 import { type ForkChoice, forkChoiceOf } from '../run/architecture';
 import { recordedLine } from '../scenario/scenario';
 import { drivenLine } from '../world/page';
 import Waterfall from '../run/Waterfall';
-import { branchTree } from '../runs/tree';
-import { RunPageReview, type TryState } from '../review/RunReview';
-import type { Branch, BranchDetail, Change, Event, RunStartPayload } from '../types';
+import { RunReview } from '../review/RunReview';
+import RunMenu from '../run/RunMenu';
+import type { Branch, BranchDetail, Event, RunStartPayload } from '../types';
 
 /** How the run's agents ran, from its `run_start` (old runs: a chain with a handoff required). */
 export function runnerLine(events: Event[]): string {
@@ -48,55 +45,18 @@ export function runnerLine(events: Event[]): string {
   }[rs.runner];
 }
 
-function BranchMenu({ runId, detail, siblings }: { runId: string; detail: BranchDetail; siblings: Branch[] }) {
-  const nav = useNavigate();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost"><GitBranch />Branches <span className="font-mono text-faint">{siblings.length || 1}</span><ChevronDown /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent className="w-80">
-        <DropdownMenuLabel>Branches of this run</DropdownMenuLabel>
-        {branchTree(siblings).map(({ branch: b, depth }) => (
-          <DropdownMenuItem key={b.id} onSelect={() => nav(`/runs/${runId}/${b.id}`)} className={b.id === detail.id ? 'bg-accent-soft' : ''}>
-            <span style={{ paddingLeft: depth * 12 }} className="font-mono text-2xs text-muted">{depth ? '↳' : '●'}</span>
-            <StatusChip status={b.status} /><span className="font-mono text-xs">{b.id.slice(0, 8)}</span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">{b.fork_note ?? ''}</span><ApproximateMark of={b} />
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function CompareMenu({ detail, siblings }: { detail: BranchDetail; siblings: Branch[] }) {
-  const nav = useNavigate();
-  const others = siblings.filter((b) => b.id !== detail.id && (b.status === 'passed' || b.status === 'failed'));
-  const why = detail.status === 'running' ? 'Wait for this run to finish.' : others.length === 0 ? 'No other finished branch of this run yet. Press ⌘K to compare with another run.' : '';
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" disabled={!!why} title={why}><GitCompare />Compare with…</Button></DropdownMenuTrigger>
-      <DropdownMenuContent>
-        {others.map((b) => (
-          <DropdownMenuItem key={b.id} onSelect={() => nav(`/compare/${detail.id}/${b.id}`)}>
-            <span className="font-mono text-xs">{b.id.slice(0, 8)}</span><StatusChip status={b.status} />
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 /** The figures that say how it went: time, cost, the check, safety and any refusal. */
 function Stats({ detail }: { detail: BranchDetail }) {
   const sm = summarize(detail, detail.events);
   const st = runStats(detail.events, detail.start_seq);
   const cost = formatCost(sm.cost_usd, sm.cost_source, teamProviders(detail.team).some(costIsUnknown));
   return (
-    <div className="grid grid-cols-3 gap-x-8 gap-y-2 pt-1 sm:flex sm:flex-wrap sm:items-end">
-      <Stat label={`Seconds${sm.live ? ' so far' : ''}`} value={sm.seconds != null ? sm.seconds.toFixed(1) : '–'} />
-      <Stat label="Cost" value={cost} title={cost} />
+    <div className="grid grid-cols-3 gap-x-8 gap-y-2 pt-2 sm:flex sm:flex-wrap sm:items-end">
+      <Stat label={sm.live ? 'Time so far' : 'Time'} value={duration(sm.seconds)} />
+      <Stat label="Cost" value={cost.replace(/ \(.*\)$/, '')} title={cost} />
       {st.check && <Stat className="col-span-2" label="Check" value={<StatusMark className="px-0 text-sm" mark={checkMark(st.check)} />} />}
       {st.safety && <Stat label="Safety" value={safetyLine(st.safety)} abnormal={st.safety.violated > 0} />}
-      {st.abnormal > 0 && <Stat label="Refused / errors" value={`⚠ ${st.abnormal}`} abnormal />}
+      {st.abnormal > 0 && <Stat label="Refused or failed actions" value={`⚠ ${st.abnormal}`} abnormal />}
     </div>
   );
 }
@@ -124,31 +84,26 @@ function More({ detail }: { detail: BranchDetail }) {
   );
 }
 
-function Header({ runId, detail, siblings, title }: { runId: string; detail: BranchDetail; siblings: Branch[]; title: string }) {
+function Header({ runId, detail, siblings, title, step }: { runId: string; detail: BranchDetail; siblings: Branch[]; title: string; step: number | null }) {
   return (
     <PageHeader title={title}
       status={<><StatusChip status={detail.status} /><ApproximateMark of={detail} /></>}
-      actions={<><BranchMenu runId={runId} detail={detail} siblings={siblings} /><CompareMenu detail={detail} siblings={siblings} /></>}>
+      actions={<RunMenu runId={runId} d={detail} page="details" step={step} siblings={siblings} />}>
       <Stats detail={detail} />
     </PageHeader>
   );
 }
 
-function Side({ runId, detail, event, forking, setForking, autoRows, choice, prefill }: {
+function Side({ runId, detail, event, forking, setForking, autoRows, choice }: {
   runId: string; detail: BranchDetail; event: Event | null; forking: boolean; setForking: (f: boolean) => void; autoRows: boolean; choice: ForkChoice;
-  prefill?: Record<string, Change>;
 }) {
   const nav = useNavigate();
-  const canFork = !!event && event.kind !== 'check' && event.kind !== 'run_start';
   return (
-    <Panel className="lg:sticky lg:top-[52px] lg:max-h-[calc(100vh-92px)] lg:overflow-auto">
-      <PanelHeader title="Step">
-        {event && <Button size="sm" variant={forking ? 'default' : 'primary'} onClick={() => setForking(!forking)} disabled={!canFork}
-          title={canFork ? 'Change the team and rerun from this step' : 'Pick an agent step to rerun from'}>Change and rerun from here</Button>}
-      </PanelHeader>
+    <Panel className="lg:sticky lg:top-16 lg:max-h-[calc(100vh-88px)] lg:overflow-auto">
+      <PanelHeader title="Step" />
       {forking && event && (
         <div className="border-b border-line bg-raised">
-          <ForkPanel key={`${detail.id}:${event.seq}:${prefill ? JSON.stringify(prefill) : ''}`} branch={detail} seq={event.seq} choice={choice} prefill={prefill} onClose={() => setForking(false)}
+          <ForkPanel key={`${detail.id}:${event.seq}`} branch={detail} seq={event.seq} choice={choice} onClose={() => setForking(false)}
             onForked={(r) => nav(`/runs/${runId}/${r.branch_id}`, { state: { notice: r.moved_from != null ? `Restarted from step ${r.start_seq} instead of ${r.moved_from}: ${r.reason ?? ''}` : null } })} />
         </div>
       )}
@@ -181,35 +136,26 @@ function Main({ detail, selected, onSelect, models, setModels }: {
   );
 }
 
-/** Selection (the address's `?step=`, shared with the process and world views), fork panel and notice, reset whenever the branch changes. */
+/**
+ * Selection (the address's `?step=`, shared with the process and world views), the rewind panel
+ * (`?fork=1`, opened from the run's ⋯) and the notice, reset whenever the branch changes.
+ */
 function useRunView(branchId: string, order: number[]) {
-  const [sp] = useSearchParams();
+  const [sp, setSp] = useSearchParams();
   const loc = useLocation();
   const [selected, setSelected] = useStepParam();
-  const [forking, setForking] = useState(sp.get('fork') === '1');
   const [notice, setNotice] = useState<string | null>((loc.state as { notice?: string } | null)?.notice ?? null);
-  const [prefill, setPrefill] = useState<Record<string, Change> | undefined>((loc.state as TryState | null)?.prefill);
-  useEffect(() => {
-    setForking(sp.get('fork') === '1');
-    setNotice((loc.state as { notice?: string } | null)?.notice ?? null);
-    setPrefill((loc.state as TryState | null)?.prefill);
-  }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setNotice((loc.state as { notice?: string } | null)?.notice ?? null); }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
   useStepKeys(order, setSelected);
-  return { selected, setSelected, forking, setForking, notice, setNotice, prefill, setPrefill, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
-}
-
-/** The task in plain words, or its id when the benchmark no longer lists it. */
-function runTitleOf(detail: BranchDetail, tasks: Task[] | null): string {
-  const id = taskOf(detail.events);
-  const t = tasks?.find((x) => x.id === id);
-  return t ? taskName(t) : id || 'Run';
+  const setForking = (on: boolean) => setSp((prev) => { const out = new URLSearchParams(prev); if (on) out.set('fork', '1'); else { out.delete('fork'); out.delete('change'); } return out; }, { replace: true });
+  return { selected, setSelected, forking: sp.get('fork') === '1', setForking, notice, setNotice, autoRows: sp.get('rows') === '1', choice: forkChoiceOf(sp.get('change')) };
 }
 
 export default function Run() {
   const { runId = '', branchId = '' } = useParams();
   const { detail, siblings, error, reload } = useBranch(branchId, runId);
   const [models, setModels] = useState(true);
-  const { tasks } = useTasks();
+  const nameOf = useTaskNames();
   const order = useMemo(() => (detail ? stepOrder(buildLanes(detail.events, detail.team, detail.start_seq), models) : []), [detail, models]);
   const v = useRunView(branchId, order);
   if (!detail) {
@@ -218,14 +164,14 @@ export default function Run() {
   const event = detail.events.find((e) => e.seq === v.selected) ?? null;
   return (
     <>
-      <Header runId={runId} detail={detail} siblings={siblings} title={runTitleOf(detail, tasks)} />
+      <Header runId={runId} detail={detail} siblings={siblings} title={nameOf(taskOf(detail.events)) || 'Run'} step={v.selected} />
       <PageBody>
         {v.notice && <Notice onDismiss={() => v.setNotice(null)}>{v.notice}</Notice>}
         {error && <ErrorState error={error} onRetry={reload} />}
         {detail.error && <ErrorState error={detail.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
-        <RunPageReview d={detail} onStep={v.setSelected} onTry={(seq, p) => { v.setPrefill(p); v.setSelected(seq); v.setForking(true); }} />
+        <RunReview d={detail} onStep={v.setSelected} />
         <Split storageKey="arena.run.side" main={<Main detail={detail} selected={v.selected} onSelect={v.setSelected} models={models} setModels={setModels} />}
-          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} prefill={v.prefill} />} />
+          side={<Side runId={runId} detail={detail} event={event} forking={v.forking} setForking={v.setForking} autoRows={v.autoRows} choice={v.choice} />} />
         <More detail={detail} />
       </PageBody>
     </>

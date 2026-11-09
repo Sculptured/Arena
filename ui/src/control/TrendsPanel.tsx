@@ -3,7 +3,7 @@ import { LineChart, Sparkline } from '../components/ui/chart';
 import { EmptyState } from '../components/ui/state';
 import type { Event } from '../types';
 import type { Action } from './actions';
-import { fmt } from './suite';
+import { fmt } from '@/lib/format';
 import { actionsPerBucket, bucketFor, cumulative, latencies, modelCalls, perMinute, secondsFrom } from './trends';
 
 function Trend({ label, value, xs, ys }: { label: string; value: string; xs: number[]; ys: number[] }) {

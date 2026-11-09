@@ -200,14 +200,7 @@ mod tests {
     use super::*;
 
     fn ev(seq: i64, agent: &str, kind: EventKind, payload: Value) -> Event {
-        Event {
-            branch_id: "b".into(),
-            seq,
-            at: chrono::Utc::now(),
-            agent: Some(agent.into()),
-            kind,
-            payload,
-        }
+        crate::testkit::event(seq, Some(agent), kind, payload)
     }
 
     fn call(seq: i64, name: &str, args: Value) -> Event {
@@ -239,25 +232,7 @@ mod tests {
     }
 
     fn branch() -> Branch {
-        Branch {
-            id: "b".into(),
-            run_id: "r".into(),
-            parent_id: None,
-            start_seq: None,
-            team: Team {
-                id: "t".into(),
-                name: "T".into(),
-                agents: vec![],
-            },
-            changes: json!([]),
-            fork_note: None,
-            status: BranchStatus::Passed,
-            error: None,
-            created_at: chrono::Utc::now(),
-            ended_at: None,
-            restore_mode: None,
-            restored: vec![],
-        }
+        crate::testkit::branch(BranchStatus::Passed)
     }
 
     fn end(seq: i64, agent: &str, tokens: i64, cost: Option<f64>, source: Option<&str>) -> Event {

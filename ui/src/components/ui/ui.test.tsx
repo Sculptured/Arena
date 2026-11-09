@@ -21,7 +21,7 @@ const text = (h: string) => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim
 
 describe('base components', () => {
   it('button: variants, a type by default, and asChild for links', () => {
-    expect(html(<Button variant="primary">Go</Button>)).toMatch(/<button[^>]*class="[^"]*bg-accent[^"]*"[^>]*type="button"/);
+    expect(html(<Button variant="primary">Go</Button>)).toMatch(/<button[^>]*class="[^"]*bg-primary[^"]*"[^>]*type="button"/);
     expect(html(<Button asChild><a href="/x">Link</a></Button>)).toMatch(/^<a [^>]*href="\/x"[^>]*>Link<\/a>$/);
   });
   it('status mark: glyph and word always; colour only when abnormal', () => {

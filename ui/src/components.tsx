@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { health } from './api';
 import { StatusMark, Tag } from './components/ui/status';
-import { runMark } from './control/suite';
+import { runMark } from './lib/mark';
 import { APPROXIMATE_LABEL, isApproximate, planLine } from './restore';
 import type { BranchStatus, Health, RestoredPart } from './types';
 

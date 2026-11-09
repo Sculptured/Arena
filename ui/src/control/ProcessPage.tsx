@@ -1,19 +1,19 @@
-import { Factory, ListTree } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { StatusChip } from '../components';
-import { Button } from '../components/ui/button';
 import { PageBody, PageHeader } from '../components/ui/page';
 import { Panel, PanelHeader } from '../components/ui/panel';
 import { Split } from '../components/ui/split';
 import { ErrorState, LoadingState } from '../components/ui/state';
 import { taskOf } from '../run/runStats';
+import { useTaskNames } from '../home/useHome';
 import ActionTimeline from '../run/ActionTimeline';
 import Inspector from '../run/Inspector';
 import { stepOrder } from '../run/timelineLayout';
 import { useBranch } from '../run/useBranch';
 import { useStepKeys } from '../run/useStepKeys';
-import { useStepParam, withStep } from '../run/useStepParam';
+import { useStepParam } from '../run/useStepParam';
+import RunMenu from '../run/RunMenu';
 import type { BranchDetail } from '../types';
 import { actionsOf, worldInfo } from './actions';
 import { buildLanes, spanOf } from './lanes';
@@ -35,8 +35,8 @@ function Main({ d, selected, onSelect, models, setModels }: { d: BranchDetail; s
   const running = d.status === 'running';
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <Panel><PanelHeader title="Process" meta="agents as units, the world's systems as equipment; heavier lines carry writes, dashed lines only reads" /><ProcessDiagram view={view} /></Panel>
-      <Panel><PanelHeader title={`Actions${running ? ' · live' : ''}`} meta="sequence of events, one lane per agent" />
+      <Panel><PanelHeader title="Process" meta="Agents as units, systems as equipment; heavy lines write, dashed lines read" /><ProcessDiagram view={view} /></Panel>
+      <Panel><PanelHeader title={`Actions${running ? ' · live' : ''}`} />
         <ActionTimeline lanes={lanes} team={d.team} span={spanOf(lanes)} selected={selected} onSelect={onSelect} models={models} onModels={setModels} />
       </Panel>
       <Panel><PanelHeader title="Trends" /><TrendsPanel events={d.events} actions={actions} /></Panel>
@@ -49,6 +49,7 @@ export default function ProcessPage() {
   const { runId = '', branchId = '' } = useParams();
   const { detail: d, error, reload } = useBranch(branchId);
   const [models, setModels] = useState(true);
+  const nameOf = useTaskNames();
   const order = useMemo(() => (d ? stepOrder(buildLanes(d.events, d.team, d.start_seq), models) : []), [d, models]);
   const [selected, setSelected] = useSelection(order);
   if (!d) return <><PageHeader title="Process" /><PageBody>{error ? <ErrorState error={error} onRetry={reload} /> : <Panel><LoadingState label="Loading the run…" rows={5} /></Panel>}</PageBody></>;
@@ -56,17 +57,14 @@ export default function ProcessPage() {
   const info = worldInfo(d.events);
   return (
     <>
-      <PageHeader mono title={task ? `task ${task}` : 'Run'} status={<><StatusChip status={d.status} /><span className="font-mono text-xs text-faint">{d.id.slice(0, 8)}</span></>}
-        meta={!info.known ? 'Recorded before Arena kept each tool\'s system and effect: those are shown as unknown.' : 'Process view'}
-        actions={<>
-          <Button size="sm" asChild><Link to={withStep(`/world/${runId}/${branchId}`, selected)}><Factory />World</Link></Button>
-          <Button size="sm" asChild><Link to={withStep(`/runs/${runId}/${branchId}`, selected)}><ListTree />Run page</Link></Button>
-        </>} />
+      <PageHeader title={`Process · ${nameOf(task) || 'Run'}`} status={<StatusChip status={d.status} />}
+        meta={!info.known && 'Recorded before Arena kept each tool\'s system and effect: those are shown as unknown.'}
+        actions={<RunMenu runId={runId} d={d} page="process" step={selected} />} />
       <PageBody>
         {error && <ErrorState error={error} onRetry={reload} />}
         {d.error && <ErrorState error={d.error} hint="The run stopped with this error. Its steps up to here are recorded." />}
         <Split storageKey="arena.process.side" main={<Main d={d} selected={selected} onSelect={setSelected} models={models} setModels={setModels} />}
-          side={<Panel className="lg:sticky lg:top-[52px] lg:max-h-[calc(100vh-92px)] lg:overflow-auto"><PanelHeader title="Step" /><Inspector branchId={d.id} event={d.events.find((e) => e.seq === selected) ?? null} team={d.team} events={d.events} /></Panel>} />
+          side={<Panel className="lg:sticky lg:top-16 lg:max-h-[calc(100vh-88px)] lg:overflow-auto"><PanelHeader title="Step" /><Inspector branchId={d.id} event={d.events.find((e) => e.seq === selected) ?? null} team={d.team} events={d.events} /></Panel>} />
       </PageBody>
     </>
   );

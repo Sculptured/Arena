@@ -1,5 +1,5 @@
 // Dev only: answers /api with the pharma fixtures, so the real pages (world view, run page,
-// compare, the New run and New suite dialogs) render without arenad. Bundled only when the build
+// compare, Run once and New experiment) render without arenad. Bundled only when the build
 // sets VITE_ARENA_FIXTURES=1 (see main.tsx); never in a normal build.
 import { scenarioOptions } from '../scenario/fixtures';
 import type { Health } from '../types';
@@ -30,7 +30,7 @@ const ROUTES: Route[] = [
   [/^\/api\/tasks$/, () => tasks],
   [/^\/api\/team\/default$/, () => team],
   [/^\/api\/runs$/, () => runs],
-  [/^\/api\/suites$/, () => []],
+  [/^\/api\/experiments$/, () => []],
   [/^\/api\/compare$/, () => comparison],
   [/^\/api\/branches\/([^/]+)\/views$/, (m) => views[decodeURIComponent(m[1])] ?? null],
   [/^\/api\/branches\/([^/]+)\/restore-plan$/, () => ({ parts: ['erp', 'lims', 'logistics', 'approvals'].map((part) => ({ part, how: 'save' })) })],

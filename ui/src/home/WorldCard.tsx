@@ -5,7 +5,7 @@ import { taskName, ticketTitle, worldName } from './summary';
 import type { Task } from './useHome';
 
 /** The task by its plain name; the ticket heading is its tooltip. */
-function TaskPicker({ tasks, task, onTask, busy }: { tasks: Task[] | null; task: Task | null; onTask: (id: string) => void; busy: boolean }) {
+export function TaskPicker({ tasks, task, onTask, busy }: { tasks: Task[] | null; task: Task | null; onTask: (id: string) => void; busy: boolean }) {
   const tip = task ? [ticketTitle(task.ticket), task.reason].filter(Boolean).join('\n') : undefined;
   return (
     <NativeSelect value={task?.id ?? ''} onChange={(e) => onTask(e.target.value)} disabled={busy || !tasks?.length} title={tip} aria-label="Task" className="h-10 text-base">

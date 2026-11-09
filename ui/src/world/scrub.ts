@@ -1,6 +1,6 @@
 // The twin's scrubber: a track over the branch's steps, a stop at every view, marks where a
 // disruption fired, a call was refused and the branch forked; what happened at a step; and where
-// "Rewind here" forks.
+// a rewind (the run's ⋯) forks.
 import { isWorldActor } from '../control/lanes';
 import { type Nav, moveIn } from '@/lib/keys';
 import { actionsOf } from '../control/actions';
@@ -105,15 +105,10 @@ function failureText(tool: string, outcome: string, error: string | null): strin
 const FORKABLE = new Set<Event['kind']>(['tool_call', 'model_call', 'message', 'handoff', 'agent_start', 'agent_end', 'delegation', 'report', 'wake', 'finish']);
 
 /**
- * Where "Rewind here" forks to keep the world exactly as it is after step `seq`: the first agent
+ * Where a rewind forks to keep the world exactly as it is after step `seq`: the first agent
  * step after it (a fork reruns from its step and reuses everything before). Null at the end.
  */
 export function rewindSeq(events: Event[], seq: number): number | null {
   const next = events.filter((e) => e.seq > seq && FORKABLE.has(e.kind) && !isWorldActor(e.agent)).map((e) => e.seq);
   return next.length ? Math.min(...next) : null;
-}
-
-/** The run page with the fork panel open at `seq` and "Swap architecture" chosen. */
-export function rewindLink(runId: string, branchId: string, seq: number): string {
-  return `/runs/${encodeURIComponent(runId)}/${encodeURIComponent(branchId)}?step=${seq}&fork=1&change=architecture`;
 }

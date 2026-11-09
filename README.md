@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
-    <img alt="Arena: a rewindable arena for testing multi-agent systems" src=".github/assets/banner-light.svg" width="100%">
+    <img alt="Arena: test agent systems in a simulated copy of their world" src=".github/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
@@ -24,13 +24,15 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-**Arena is a rewindable staging environment for multi-agent systems.** A team of AI agents works on a task in a
-world made of real systems: a database, a folder of files, a Docker Compose project, a simulator. arenad, the
-arena service, records every step and saves the world as it was at that step. It tracks everything and restricts
-nothing: the agents run in whatever shape the design has (one after another, all at once, or driven by the
-design's own code), talk only if they choose to, and arena times its own work so a run's numbers estimate
-production. Go back to any step, change an agent's prompt, model or harness, fork with an exact or approximate
-restore of the world, rerun from there, and compare the runs.
+**Arena tests agent systems in a simulated copy of the world they will be deployed in.** An *environment* is the
+systems the agents work with (an ERP, a database, suppliers, a plant), made of real software or simulators. A
+*scenario* is what happens to it: a task and the disruptions along the way. An *agent setup* is a model, a team
+structure and its rules. An **experiment** runs each of 1 to 4 setups several times on the same environment and
+scenario, and shows them side by side: pass rate (with its range), the checks each run passed, cost, time, and
+safety (actions the environment denied, flags raised for a human, safety checks violated). Limits live in the
+environment, not in the agent's prompt, and are enforced deterministically; scoring is by deterministic checks,
+never by a model. arenad, the arena service, records every step of every run, so any run can be opened and read
+step by step.
 
 ## Use Arena from code
 
@@ -44,16 +46,22 @@ with Arena.local(benchmark="retail", bin_dir="core/target/release") as arena:   
     for event in branch.stream():                 # every step, live
         print(event.summary())
     print(branch.check())                         # passed?, named checks, safety violations
-    fork = branch.fork(5, changes={"support": {"prompt": "Confirm every id first."}})
     branch.export("data/run-72")                  # JSONL dataset with a schema
 ```
 
 Bring your own agents instead (`arena.external_run(...)`: each agent gets an MCP endpoint with the world's tools
-and an OpenAI-compatible gateway), run suites, or drive a world step by step as a multi-agent RL environment
+and an OpenAI-compatible gateway), run experiments (`POST /api/experiments`), or drive a world step by step as a multi-agent RL environment
 (`arena.env.ArenaParallelEnv`). Any other language uses the [HTTP API](docs/reference.md#http-api).
 
 ## Why Arena
 
+- **Experiments, not anecdotes.** One run of an LLM agent says little. An experiment runs each setup N times on
+  the same seeded world and scenario, interleaving the setups so they meet the same conditions, and reports pass
+  rate with a 95% range, checks, cost, time and safety per setup.
+- **Hard limits outside the agent.** A purchasing cap, an approval gate or a sandbox policy is enforced by the
+  environment and recorded: every denied action is a step with its reason, counted per run.
+- **Deterministic scoring.** Each benchmark's checks (goal checks and safety checks, apart) decide pass or fail.
+  An optional AI review explains a run; it never scores one.
 - **Rewind the world, not just the transcript.** After each step that changes the world, arenad saves the parts
   that changed (a part that can only replay is replayed instead). A fork puts each part back as it was just
   before the fork point, and the team continues from there.
@@ -79,24 +87,26 @@ and an OpenAI-compatible gateway), run suites, or drive a world step by step as 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/run.png" alt="A run page: the steps of each agent on a timeline, a failed check, and the branch list with an approximately restored branch labelled"></td>
-    <td width="50%"><img src="docs/images/rerun.png" alt="The change and rerun panel at step 7: mode, model and prompt of the agent, exact or approximate restore, and how each part of the world will be restored"></td>
+    <td width="50%"><img src="docs/images/experiment.png" alt="Three agent setups side by side on the same pharma scenario: pass rate with its range, a square per run, checks passed, safety, cost and time, and the checks some run failed"></td>
+    <td width="50%"><img src="docs/images/new-experiment.png" alt="New experiment: the scenario, two agent setups (team, model, rules) and runs per setup"></td>
   </tr>
   <tr>
-    <td><sub><b>Run.</b> Every step of every agent, its branches, and which were restored approximately.</sub></td>
-    <td><sub><b>Change and rerun.</b> Edit an agent, pick a restore mode, and see how each part will be restored.</sub></td>
+    <td><sub><b>Experiment.</b> One column per setup: pass rate, every run, checks, safety, cost, time.</sub></td>
+    <td><sub><b>New experiment.</b> A scenario, 1 to 4 setups, runs per setup.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/compare.png" alt="Compare: two branches side by side with seconds, tokens and cost, a note that differences may come from the approximate restore, the first divergence at step 7, and one differing key"></td>
-    <td width="50%"><img src="docs/images/runs.png" alt="The Runs page: a task picker, a New run button, and a run with its original branch and two forks"></td>
+    <td width="50%"><img src="docs/images/run.png" alt="A run: its time, cost, checks and safety, the AI review's one line, and every step on a timeline"></td>
+    <td width="50%"><img src="docs/images/world.png" alt="The world view of a pharma run: KPIs, a scrubber over the steps, and the plant's systems as an HMI overview"></td>
   </tr>
   <tr>
-    <td><sub><b>Compare.</b> Cost, first divergent step, and the state that differs at the end.</sub></td>
-    <td><sub><b>Runs.</b> Each run with its original branch and the forks made from it.</sub></td>
+    <td><sub><b>Run.</b> Every step of every agent on one timeline.</sub></td>
+    <td><sub><b>World view.</b> The simulated systems at any step.</sub></td>
   </tr>
 </table>
 
-<sub>Captured from Arena's web UI on a small test world (a toy part and the kit's counter). The agents in these captures ran on a test model server that Arena has since removed; captures with real agents are not made yet.</sub>
+<sub>Captured from Arena's web UI on 2026-11-08: real runs of the pharma benchmark (Claude Code on Sonnet; the setups
+in the first capture are suites from before experiments, shown side by side), and the retail benchmark's New
+experiment page.</sub>
 
 ## How it works
 
@@ -183,14 +193,13 @@ can call arenad when that origin is in `ARENA_CORS_ORIGIN`. Or build the UI and 
 
 Then:
 
-1. **Start a run:** pick a task and a team. On the Team page each agent gets a mode, and an API-mode agent a
-   provider and a model.
-2. **Inspect:** click a step to see its arguments, its result, and the state it read or wrote, as it was at
-   that step.
-3. **Fork:** at a step, with a change (for example a new prompt for one agent, or that agent run by another
-   harness). The world is restored to just before that step, and the run continues from there.
-4. **Compare** the two branches: outcome, time, tokens, cost, the first step where they differ, and the state
-   that differs at the end.
+1. **New experiment:** pick the scenario (a task and any disruptions), add 1 to 4 agent setups (team, model,
+   rules), choose runs per setup, and press Run experiment.
+2. **Read the results:** one column per setup: pass rate, a square per run, checks, safety, cost and time. Click
+   a square to open that run.
+3. **Inspect a run:** its timeline; click a step to see its arguments, its result, and the state it read or
+   wrote, as it was at that step. A run's ⋯ menu has its world view, process view, comparison with another run,
+   and, under Advanced, rewind (fork from a step with a change and rerun).
 
 Settings (port, benchmark, package folders, disk limit, clock speed, model providers) are environment variables;
 see [docs/reference.md](docs/reference.md#configuration).

@@ -1,6 +1,4 @@
-import type { Change, Event, Team } from '../types';
-import { rewindSeq } from '../world/scrub';
-import type { StoredReview, Suggestion } from './types';
+import type { StoredReview } from './types';
 
 /** The reviewer as a person reads it: "Claude Code sonnet", "openrouter deepseek/…". */
 export function modelName(label: string): string {
@@ -16,31 +14,6 @@ export function smallPrint(s: StoredReview): string {
   else if (s.tokens != null) parts.push(`${s.tokens.toLocaleString()} tokens`);
   if (s.seconds != null) parts.push(`${Math.round(s.seconds)} s`);
   return parts.join(' · ');
-}
-
-/** A suggestion that "Rewind and try this" can pre-fill: a prompt or team change with text to add. */
-export const canTry = (s: Suggestion) => (s.kind === 'prompt' || s.kind === 'team') && !!s.prompt_text?.trim();
-
-/**
- * The fork changes a suggestion pre-fills: its text added to its agent's prompt, or to every
- * agent's when it names none. Null when it has nothing to pre-fill.
- */
-export function prefillOf(s: Suggestion, team: Team): Record<string, Change> | null {
-  if (!canTry(s)) return null;
-  const text = s.prompt_text!.trim();
-  const agents = s.agent ? team.agents.filter((a) => a.id === s.agent) : team.agents;
-  if (!agents.length) return null;
-  return Object.fromEntries(agents.map((a) => [a.id, { prompt: `${a.prompt.trimEnd()}\n\n${text}` }]));
-}
-
-/**
- * The step to rerun from to try a suggestion: its own step, else its agent's start, else the
- * run's first agent step; moved to the first step at or after it that a rerun can start from.
- */
-export function tryStep(s: Suggestion, events: Event[]): number | null {
-  const agentStart = s.agent ? events.find((e) => e.kind === 'agent_start' && e.agent === s.agent)?.seq : undefined;
-  const at = s.step ?? agentStart ?? 0;
-  return rewindSeq(events, at - 1);
 }
 
 /** The run page at a step. */

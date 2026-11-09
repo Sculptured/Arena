@@ -12,10 +12,10 @@ import type { BranchView } from './types';
 import { usePlay, useStopKeys } from './useWorld';
 
 /** The world view's state for the step in the address (the latest view when none), and the scrubber's controls. */
-export function useWorldView(runId: string, d: BranchDetail, views: BranchView[]) {
+export function useWorldView(d: BranchDetail, views: BranchView[]) {
   const [step, setStep] = useStepParam();
-  const s = useMemo(() => worldState({ views, step, events: d.events, team: d.team, startSeq: d.start_seq, runId, branchId: d.id, running: d.status === 'running' }),
-    [views, step, d, runId]);
+  const s = useMemo(() => worldState({ views, step, events: d.events, team: d.team, startSeq: d.start_seq }),
+    [views, step, d]);
   const stops = s.track.stops;
   const play = usePlay(stops, step, setStep);
   const { pause } = play;
@@ -35,7 +35,7 @@ export default function TwinView({ w, views, scrub = true }: { w: ReturnType<typ
       {scrub && (
         <Panel>
           <Scrubber track={s.track} current={s.current} index={s.index} headline={s.headline} happened={s.happened} changes={s.changes.items}
-            playing={play.playing} onPlay={play.toggle} onStep={(seq) => { play.pause(); setStep(seq); }} onMove={move} rewind={s.rewind} />
+            playing={play.playing} onPlay={play.toggle} onStep={(seq) => { play.pause(); setStep(seq); }} onMove={move} />
         </Panel>
       )}
       <PlantVideo branchId={w.branchId} events={w.events} step={s.current} />

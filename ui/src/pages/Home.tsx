@@ -12,7 +12,7 @@ import { missingFor, restoringLine, runLine, taskName } from '../home/summary';
 import TeamCard, { TeamActions } from '../home/TeamCard';
 import DisruptionPicker from '../home/DisruptionPicker';
 import { RUNNER_WORDS, RUNNERS } from '../home/runners';
-import { type Task, useSuggestedTeams, useTasks, useTeam, useWorldPreview } from '../home/useHome';
+import { type Task, useSuggestedTeams, useTaskNames, useTasks, useTeam, useWorldPreview } from '../home/useHome';
 import WorldCard from '../home/WorldCard';
 import { useScenario } from '../scenario/ScenarioBuilder';
 import { teamForRun } from '../team';
@@ -64,7 +64,7 @@ function useSetup() {
   useEffect(() => { setRunner(teamRunner); }, [team.team?.id, teamRunner]);
   const task: Task | null = tasks.tasks?.find((t) => t.id === taskId) ?? tasks.tasks?.[0] ?? null;
   const scenario = useScenario(true, task ? [task.id] : []);
-  const nameOf = (id: string) => { const t = tasks.tasks?.find((x) => x.id === id); return t ? taskName(t) : ''; };
+  const nameOf = useTaskNames();
   return { tasks, team, suggested, task, setTaskId, runner, setRunner, scenario, nameOf };
 }
 

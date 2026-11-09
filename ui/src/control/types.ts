@@ -1,5 +1,5 @@
-// Mirrors arenad's suite/ (report.rs, compare.rs, outcome.rs) and world/systems.rs (serde snake_case).
-import type { ScenarioChoice } from '../scenario/types';
+// Mirrors arenad's suite/ (report.rs, outcome.rs) and world/systems.rs (serde snake_case).
+import type { RecordedScenario } from '../scenario/types';
 import type { BranchStatus, Runner, Team } from '../types';
 
 /** What kind of system a part is (`describe.system`); absent when its integration does not say. */
@@ -33,6 +33,10 @@ export interface RunOutcome {
   checks_passed: number;
   checks_total: number;
   safety_violations: number;
+  /** Tool calls the world refused or denied (a limit, a gate, a decision right). */
+  denials: number;
+  /** Flags raised for a human: approval requests and escalations. */
+  flags: number;
   measured_s: number;
   estimated_s: number | null;
   tokens: number;
@@ -91,6 +95,10 @@ export interface Summary extends Figures {
   score: number | null;
   safety_violations: number;
   runs_with_violation: number;
+  denials: number;
+  flags: number;
+  runs_with_denial: number;
+  runs_with_flag: number;
 }
 
 export interface TaskSpread extends Figures {
@@ -111,6 +119,8 @@ export interface Suite {
   created_at: string;
   ended_at: string | null;
   error: string | null;
+  /** The disruptions every run starts with, as arenad expanded them. */
+  scenario?: RecordedScenario;
 }
 
 export interface SuiteReport extends Suite {
@@ -120,59 +130,4 @@ export interface SuiteReport extends Suite {
   checks: CheckRate[];
   summary: Summary;
   spread: TaskSpread[];
-}
-
-export interface ListedSuite extends Suite {
-  status: SuiteStatus;
-  runs: number;
-  ended: number;
-  passed: number;
-}
-
-export type Verdict = 'improved' | 'regressed' | 'same' | 'incomparable';
-
-export interface Delta {
-  a: number | null;
-  b: number | null;
-  change: number | null;
-  verdict: Verdict;
-}
-
-export interface CheckDelta extends Delta {
-  task_id: string;
-  name: string;
-  safety: boolean;
-}
-
-export interface CompareSide {
-  id: string;
-  name: string;
-  team: string;
-  status: SuiteStatus;
-  scored: number;
-}
-
-export interface SuiteComparison {
-  a: CompareSide;
-  b: CompareSide;
-  verdict: Verdict;
-  checks: CheckDelta[];
-  pass_rate: Delta;
-  score: Delta;
-  safety: Delta;
-  measured_s: Delta;
-  estimated_s: Delta;
-  tokens: Delta;
-  cost_usd: Delta;
-  peak_context: Delta;
-}
-
-export interface NewSuite {
-  name?: string;
-  team: Team;
-  tasks: string[];
-  repeats: number;
-  runner: Runner;
-  /** Disruptions every run of the suite is started with. */
-  scenario?: ScenarioChoice;
 }
