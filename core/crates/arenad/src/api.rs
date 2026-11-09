@@ -33,6 +33,7 @@ mod names;
 mod recording;
 mod review;
 mod rows;
+mod sandbox;
 mod stream;
 mod suites;
 mod twin;
@@ -65,6 +66,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(suites::router())
         .merge(experiments::router())
         .merge(review::router())
+        .merge(sandbox::router())
         .merge(twin::router())
         .merge(recording::router())
         .route("/api/{*rest}", get(api_not_found).post(api_not_found))

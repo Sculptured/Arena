@@ -276,3 +276,25 @@ def test_fingerprint_refusal_is_32003():
     c = Client(Plain())
     params = {"instance": "i1", "config": {"moved": True}, "seed": 1, "clock_ms": 0}
     assert c.call("start", params)["error"] == {"code": -32003, "message": "the plant moved"}
+
+
+def test_a_benchmark_answers_its_own_calls_and_refuses_the_rest():
+    import io
+    import json as _json
+
+    from arena_part import Benchmark, serve_benchmark
+
+    class B(Benchmark):
+        def describe(self):
+            return {"name": "b"}
+
+    lines = [{"jsonrpc": "2.0", "id": 1, "method": "describe", "params": {}},
+             {"jsonrpc": "2.0", "id": 2, "method": "seed", "params": {"connections": {}}},
+             {"jsonrpc": "2.0", "id": 3, "method": "gold_actions", "params": {"task": "t"}},
+             {"jsonrpc": "2.0", "id": 4, "method": "score", "params": {"task": "t", "docs": {}}},
+             {"jsonrpc": "2.0", "id": 5, "method": "start", "params": {}}]
+    out = io.StringIO()
+    serve_benchmark(B(), io.StringIO("".join(_json.dumps(m) + "\n" for m in lines)), out)
+    r = [_json.loads(x) for x in out.getvalue().splitlines()]
+    assert [x.get("result") for x in r[:3]] == [{"name": "b"}, {}, {"actions": []}]
+    assert r[3]["error"]["code"] == -32601 and r[4]["error"]["code"] == -32601

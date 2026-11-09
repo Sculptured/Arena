@@ -1,0 +1,17 @@
+[project]
+name = "factory-01-erp"
+version = "0.2.0"
+description = "arena-part/1 integration: Factory-01's simulated ERP (stock, reservations, schedule, two suppliers, purchasing with a limit per order)"
+requires-python = ">=3.10"
+dependencies = ["arena-part"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+arena-part = { path = "../../kits/python", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: needs services or hardware not always present"]

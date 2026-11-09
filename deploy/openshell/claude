@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# `claude`, run inside an ephemeral OpenShell sandbox. Put this folder first in arenad's PATH and every
+# Claude Code agent arenad starts runs sandboxed under $ARENA_OPENSHELL_POLICY. When the agent ends, the
+# sandbox's policy denials are posted to arenad as world events (POST /api/branches/{id}/sandbox-events),
+# so they show on the run's timeline with their reasons. Nothing is made up: no denial in the log, no event.
+#
+# Env: OPENSHELL_HOME (bin/openshell, state/, cliconf/), ARENA_OPENSHELL_IMAGE, ARENA_OPENSHELL_POLICY.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+: "${OPENSHELL_HOME:?set OPENSHELL_HOME to the folder with bin/openshell, state/ and cliconf/}"
+export XDG_STATE_HOME=$OPENSHELL_HOME/state XDG_CONFIG_HOME=$OPENSHELL_HOME/cliconf
+OS=$OPENSHELL_HOME/bin/openshell
+IMAGE=${ARENA_OPENSHELL_IMAGE:-openshell-arena-claude:latest}
+POLICY=${ARENA_OPENSHELL_POLICY:-$here/factory-01.yaml}
+NAME="ar-$$-$RANDOM"          # sandbox names are at most 19 characters
+
+# Arena's MCP URL names the branch and the agent: http://127.0.0.1:<port>/mcp/<branch>/<agent>.
+mcp=$(printf '%s\n' "$@" | grep -o 'http://127\.0\.0\.1:[0-9]*/mcp/[a-z0-9_]*/[A-Za-z0-9_-]*' | head -1 || true)
+
+cleanup() {
+  if [ -n "$mcp" ]; then
+    "$OS" logs "$NAME" --source sandbox </dev/null 2>/dev/null | python3 -I "$here/denials.py" "$mcp" || true
+  fi
+  "$OS" sandbox delete "$NAME" </dev/null >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+"$OS" sandbox create --name "$NAME" --detach --from "$IMAGE" --policy "$POLICY" -- sleep infinity \
+  </dev/null >/dev/null
+for _ in $(seq 1 60); do
+  "$OS" sandbox exec -n "$NAME" --no-tty -- true </dev/null >/dev/null 2>&1 && break
+  sleep 1
+done
+# Claude Code's sign-in: a copy of this user's credentials, inside the sandbox only while it lives.
+"$OS" sandbox exec -n "$NAME" --no-tty -- mkdir -p /sandbox/.claude </dev/null >/dev/null
+"$OS" sandbox upload "$NAME" "$HOME/.claude/.credentials.json" /sandbox/.claude/.credentials.json \
+  </dev/null >/dev/null 2>&1
+
+# The sandbox reaches the host as host.openshell.internal (never its own loopback).
+args=()
+for a in "$@"; do args+=("${a//127.0.0.1:/host.openshell.internal:}"); done
+set +e
+"$OS" sandbox exec -n "$NAME" --no-tty --no-login-shell -- /usr/local/bin/claude "${args[@]}"
+exit $?

@@ -1,0 +1,20 @@
+# OpenShell policy for a Claude Code agent in Factory-01 (docs: https://docs.nvidia.com/openshell/latest/).
+# The agent's only tools are Arena's MCP server (the environment), and its model is Anthropic's API.
+# Everything else (other hosts, Claude Code's telemetry, MCP proxies) is denied and logged.
+version: 1
+process:
+  run_as_user: "1000"      # the image's USER is root; the agent runs unprivileged
+  run_as_group: "1000"
+network_policies:
+  arena_mcp:               # Arena's MCP endpoint for this branch and agent (arenad on 4533)
+    endpoints:
+      - host: host.openshell.internal   # OpenShell's name for the host; a policy can't allow loopback
+        port: 4533
+    binaries:
+      - path: /usr/local/bin/claude
+  anthropic_api:           # the model
+    endpoints:
+      - host: api.anthropic.com
+        port: 443
+    binaries:
+      - path: /usr/local/bin/claude

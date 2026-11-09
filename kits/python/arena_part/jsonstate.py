@@ -106,12 +106,17 @@ class JsonStatePart(Part):
         try:
             done = tool.run(inst.config, work, normalize(name, tool.params, args))
         except (Refusal, ValueError) as e:
-            return disruptions.merged(refused(str(e)), before)
+            return disruptions.merged(self.on_refused(inst, name, args, e), before)
         inst.state = work
         out = {"result": done.result, "reads": done.reads, "writes": done.writes}
         if done.events:
             out["events"] = done.events
         return disruptions.merged(out, before)
+
+    def on_refused(self, inst, name, args, error) -> dict:
+        """The answer to a call the tool refused. A part that records refusals (a denial by a hard
+        limit) overrides it: it may change `inst.state`, name the keys in `writes` and give `events`."""
+        return refused(str(error))
 
     def _scheduled(self, inst, name) -> disruptions.Fired:
         """Fires and counts the disruptions an agent's call of `name` sets off, on the state itself."""
