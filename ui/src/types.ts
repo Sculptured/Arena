@@ -214,6 +214,18 @@ export interface NamedCheck {
   safety?: boolean;
   /** Why it failed, in words (empty when it passed). */
   detail?: string;
+  /** The figure the check measured (an optimisation's verified objective, simulations used). */
+  measure?: Measure;
+}
+
+/** A number a check measured. `better` absent: neither way is better (a count). `reference`: a value no run made. */
+export interface Measure {
+  label: string;
+  value: number;
+  unit?: string;
+  better?: 'higher' | 'lower';
+  target?: number;
+  reference?: { label: string; value: number };
 }
 
 export interface Branch {

@@ -12,6 +12,7 @@ import { useTaskNames } from '../home/useHome';
 import { usePolled } from '@/lib/usePolled';
 import { experiment as fetchExperiment, stopExperiment } from './api';
 import { columnOf } from './model';
+import { measureRows } from './measures';
 import { Checks, Setups } from './Results';
 import { SuiteWhatMatters } from '../review/WhatMatters';
 import type { Experiment } from './types';
@@ -85,7 +86,7 @@ function View({ ids }: { ids: string[] }) {
       <PageBody width={width}>
         {error && <ErrorState error={error} hint="Showing the last results read." onRetry={reload} />}
         {list.filter((e) => e.error && e.error !== 'stopped').map((e) => <ErrorState key={e.id} error={e.error!} hint="The experiment stopped early. The runs that ended are scored." />)}
-        <Setups cols={reports.map(columnOf)} />
+        <Setups cols={reports.map(columnOf)} measures={measureRows(reports)} />
         {reports.length === 2 && list.every((e) => e.status !== 'running') && <SuiteWhatMatters a={reports[0].id} b={reports[1].id} />}
         <Checks reports={reports} />
       </PageBody>

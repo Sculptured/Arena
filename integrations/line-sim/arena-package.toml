@@ -1,0 +1,15 @@
+kind = "integration"
+name = "line-sim"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "line_sim"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { company = { type = "string" }, seed = { type = "integer" }, backend = { type = "string" }, week = { type = "object" }, lines = { type = "array" }, decisions = { type = "array" }, safety = { type = "object" }, study = { type = "object" } }, required = ["seed", "lines", "decisions", "safety", "study"] }
+
+[[example]]
+tool = "describe_model"
+args = {}
+
+[[example]]
+tool = "get_history"
+args = {}

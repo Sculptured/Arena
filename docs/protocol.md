@@ -113,7 +113,7 @@ A benchmark program speaks the same transport.
 | `seed` | `{connections: {part: info}}` | `{}` (loads the starting data into fresh instances) |
 | `call_tool` | `{name, args, connections}` | `{result?, error?, part, reads, writes}` |
 | `gold_actions` | `{task}` | `{actions: [{name, args}]}` |
-| `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?, safety?}]}` (`safety: true`: a hard safety check, an unsafe action rather than a missed goal, reported apart from the score) |
+| `score` (with `scored: true`) | `{task, docs: {part: {key: doc}}}` | `{checks: [{name, passed, detail?, safety?, measure?}]}` (`safety: true`: a hard safety check, an unsafe action rather than a missed goal, reported apart from the score; `measure`: a number the check measured, see [Scoring by named checks](#scoring-by-named-checks)) |
 | `view` (with `view`) | `{connections: {part: info}, docs: {part: {key: doc}}}` | `{view: TwinView}`: the world's digital twin now ([The world's view](#the-worlds-view)) |
 
 - `instructions_title` is the heading over `instructions` in each agent's input; arenad uses
@@ -287,6 +287,21 @@ that way (ids a part makes up, the time things happened at) says `scored: true`.
 it saves every part's final state, gives the benchmark every part's `inspect` with no keys, and records the
 answer as the branch's check, which passes when there is at least one check and all of them pass. `differing_rows`
 lists the checks that failed.
+
+A check may carry a `measure`, the number it measured: `{label, value, unit?, better?: "higher"|"lower",
+target?, reference?: {label, value}}`. `better` says which way is better (absent for a count, such as the
+simulations a study used); `target` is the value the task asks for; `reference` is a value to read it
+against that no run made (an offline baseline search). Experiments show each measure per setup: every
+scored run's value, and the best run (or, without `better`, the mean). `benchmarks/line2-oee` scores a
+study by the verified objective of its recommendation this way.
+
+### Optimisation studies
+
+A tool result with an `objective`, `{label, value, ci95?, unit?, better: "higher"|"lower"}`, is one
+candidate evaluated (`line-sim`'s `run_simulation`). It may also give `simulation` (its number),
+`feasible` (false when it missed a limit judged after it ran) and `changes` (what it changed). A run
+page charts a run's candidates in step order with the best feasible value so far; the check whose
+`measure` has the same `label` gives the target and the recommendation's verified value.
 
 A benchmark's tools reach parts only through `connect` info. Only parts with exact saves may be connected
 (replay re-sends a part's own inputs, which a benchmark's direct writes are not).

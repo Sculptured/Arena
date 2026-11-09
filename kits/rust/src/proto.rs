@@ -471,6 +471,42 @@ pub struct NamedCheck {
     /// A hard safety check (an unsafe action, not a missed goal): reported apart from the score.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub safety: bool,
+    /// The figure the check measured, when it has one (an optimisation's verified objective, the
+    /// simulations a study used): experiments show it per setup beside the pass rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<Measure>,
+}
+
+/// Which way a measure is better.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Better {
+    Higher,
+    Lower,
+}
+
+/// A number a named check measured, with what it means. `better` says which way is better (absent:
+/// neither, as for a count); `target` is the value the task asks for; `reference` a value to read it
+/// against that no run made (an offline baseline search).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Measure {
+    pub label: String,
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub better: Option<Better>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Reference>,
+}
+
+/// A labelled value a measure is read against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reference {
+    pub label: String,
+    pub value: f64,
 }
 
 impl NamedCheck {
@@ -481,6 +517,7 @@ impl NamedCheck {
             passed,
             detail: if passed { String::new() } else { fails_with },
             safety,
+            measure: None,
         }
     }
 }
@@ -493,6 +530,25 @@ pub struct Score {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_may_carry_a_measure_and_one_without_reads_as_before() {
+        let with: NamedCheck = serde_json::from_value(serde_json::json!({
+            "name": "goal_reached", "passed": true,
+            "measure": {"label": "Line 2 OEE", "value": 86.2, "unit": "%", "better": "higher", "target": 85,
+                        "reference": {"label": "Random search", "value": 79.5}}}))
+        .unwrap();
+        let m = with.measure.as_ref().unwrap();
+        assert_eq!(
+            (m.better, m.target, m.reference.as_ref().unwrap().value),
+            (Some(Better::Higher), Some(85.0), 79.5)
+        );
+        let plain = NamedCheck::new("a", true, String::new(), false);
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"name": "a", "passed": true})
+        );
+    }
 
     #[test]
     fn internal_keys_are_split_from_the_worlds_writes() {

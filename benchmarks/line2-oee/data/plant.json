@@ -1,0 +1,190 @@
+{
+  "company": "Ridgeline Pumps",
+  "seed": 2026,
+  "week": { "shifts": 10, "shift_hours": 8, "warmup_hours": 4 },
+  "labour_usd_per_h": 42,
+  "headcount_per_shift": 13,
+  "maintenance": { "techs": 2, "repair_usd": 400, "pm_parts_usd_per_h": 150 },
+  "capex": { "budget_usd": 15000, "buffer_slot_usd": 1500 },
+  "holding_usd_per_unit_h": 0.4,
+  "lines": [
+    {
+      "id": "line1",
+      "name": "Line 1",
+      "product": "P-200 pumps",
+      "ideal_cycle_s": 80,
+      "variants": [
+        { "id": "P-200", "share": 1.0 }
+      ],
+      "batch_size": 100,
+      "speed_pct": 100,
+      "pm_hours": 4,
+      "buffers": [ 6, 6, 6 ],
+      "crew": [ 1, 2, 1, 2 ],
+      "scrap_usd": 140,
+      "min_good_per_week": 2650,
+      "stations": [
+        {
+          "id": "machining",
+          "name": "Machining",
+          "base_s": { "*": 78 },
+          "crew_factor": { "1": 1.0, "2": 0.95, "3": 0.93 },
+          "cv": 0.05,
+          "mtbf_h": 7,
+          "mttr_min": 35,
+          "speed_sensitive": true
+        },
+        {
+          "id": "assembly",
+          "name": "Assembly",
+          "base_s": { "*": 162 },
+          "crew_factor": { "1": 1.0, "2": 0.52, "3": 0.37 },
+          "cv": 0.25
+        },
+        {
+          "id": "test",
+          "name": "Test",
+          "base_s": { "*": 74 },
+          "crew_factor": { "1": 1.0, "2": 0.9, "3": 0.88 },
+          "cv": 0.05,
+          "mtbf_h": 10,
+          "mttr_min": 25,
+          "speed_sensitive": true,
+          "scrap": { "base": 0.01 }
+        },
+        {
+          "id": "pack",
+          "name": "Pack",
+          "base_s": { "*": 66 },
+          "crew_factor": { "1": 1.0, "2": 0.62, "3": 0.5 },
+          "cv": 0.2
+        }
+      ]
+    },
+    {
+      "id": "line2",
+      "name": "Line 2",
+      "product": "V-50 and V-80 valves",
+      "ideal_cycle_s": 56,
+      "variants": [
+        { "id": "V-50", "share": 0.6 },
+        { "id": "V-80", "share": 0.4 }
+      ],
+      "batch_size": 120,
+      "speed_pct": 100,
+      "pm_hours": 4,
+      "buffers": [ 5, 5, 5 ],
+      "crew": [ 1, 2, 1, 1 ],
+      "scrap_usd": 60,
+      "max_lead_time_h": 4,
+      "stations": [
+        {
+          "id": "machining",
+          "name": "Machining",
+          "base_s": { "V-50": 52, "V-80": 58 },
+          "crew_factor": { "1": 1.0, "2": 0.95, "3": 0.93 },
+          "cv": 0.05,
+          "mtbf_h": 10,
+          "mttr_min": 25,
+          "speed_sensitive": true,
+          "changeover_min": { "1": 15, "2": 9, "3": 8 }
+        },
+        {
+          "id": "assembly",
+          "name": "Assembly",
+          "base_s": { "*": 104 },
+          "crew_factor": { "1": 1.0, "2": 0.53, "3": 0.37 },
+          "cv": 0.22
+        },
+        {
+          "id": "test",
+          "name": "Test",
+          "base_s": { "V-50": 50, "V-80": 55 },
+          "crew_factor": { "1": 1.0, "2": 0.9, "3": 0.88 },
+          "cv": 0.05,
+          "mtbf_h": 9,
+          "mttr_min": 20,
+          "speed_sensitive": true,
+          "changeover_min": { "1": 6, "2": 4, "3": 3 },
+          "scrap": { "base": 0.015, "per_pct_over_100": 0.0025 }
+        },
+        {
+          "id": "pack",
+          "name": "Pack",
+          "base_s": { "*": 50 },
+          "crew_factor": { "1": 1.0, "2": 0.62, "3": 0.5 },
+          "cv": 0.2
+        }
+      ]
+    }
+  ],
+  "safety": { "min_crew_per_station": 1, "min_maintenance_techs": 1, "min_pm_hours": 2 },
+  "decisions": [
+    {
+      "name": "line2.buffers",
+      "kind": "int_list",
+      "len": 3,
+      "min": 1,
+      "max": 30,
+      "unit": "units",
+      "description": "Line 2 buffer capacity after machining, assembly and test. Each slot above today's costs capex."
+    },
+    {
+      "name": "line2.batch_size",
+      "kind": "int",
+      "min": 10,
+      "max": 400,
+      "unit": "units",
+      "description": "Line 2 campaign size of V-50; V-80 runs in proportion to the mix (60/40). Each switch costs a changeover at machining and test."
+    },
+    {
+      "name": "line2.speed_pct",
+      "kind": "int",
+      "min": 85,
+      "max": 115,
+      "unit": "%",
+      "description": "Line 2 machining and test speed. Faster cuts cycle time but machines fail more often and test scrap rises above 100%."
+    },
+    {
+      "name": "line2.pm_hours",
+      "kind": "number",
+      "min": 0,
+      "max": 16,
+      "unit": "h/week",
+      "description": "Line 2 planned maintenance per week, done at the start of each shift with the line stopped. More PM, fewer failures."
+    },
+    {
+      "name": "line2.crew",
+      "kind": "int_list",
+      "len": 4,
+      "min": 0,
+      "max": 3,
+      "unit": "operators",
+      "description": "Line 2 operators per shift at machining, assembly, test and pack. More operators: faster manual work and shorter changeovers."
+    },
+    {
+      "name": "line1.crew",
+      "kind": "int_list",
+      "len": 4,
+      "min": 0,
+      "max": 3,
+      "unit": "operators",
+      "description": "Line 1 operators per shift at machining, assembly, test and pack."
+    },
+    {
+      "name": "maintenance.techs",
+      "kind": "int",
+      "min": 0,
+      "max": 4,
+      "unit": "technicians",
+      "description": "Maintenance technicians per shift, shared by both lines: they repair failures and do PM."
+    }
+  ],
+  "study": {
+    "objective": "line2.oee",
+    "max_simulations": 30,
+    "replications": { "default": 5, "max": 10 },
+    "verify_replications": 20,
+    "verify_from": 1000
+  }
+}
