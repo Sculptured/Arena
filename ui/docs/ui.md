@@ -1,6 +1,6 @@
-# Arena UI: look, tokens, components, patterns
+# Shakedown UI: look, tokens, components, patterns
 
-Arena's web UI is extra sparse: each screen shows only what a first-time user needs to do its one
+Shakedown's web UI is extra sparse: each screen shows only what a first-time user needs to do its one
 main thing, with one primary action. Everything else is one click away under **⋯**, **More**,
 **Details**, **Options** or ⌘K. No helper paragraphs on screens (a tooltip at most), no ids, no
 secondary metadata lines, few borders, plenty of whitespace.
@@ -9,7 +9,7 @@ secondary metadata lines, few borders, plenty of whitespace.
 
 - **Top bar** (`app/TopBar.tsx`): the wordmark, **Experiments** and **Runs**, and one **⋯** with Run
   once, Compare two runs, World view of a run, the Team editor, AI review on or off, the command
-  palette, the theme and which Arena core is in use.
+  palette, the theme and which Shakedown core is in use.
 - **Experiments** (`/`, `experiments/ExperimentsPage.tsx`): newest first, each row the experiment's
   name, its scenario in words, one small bar per setup (passed of runs asked) and when. Tick two or
   more (the box shows on hover) to **Compare** their setups side by side. Empty: one line on what an
@@ -45,7 +45,7 @@ secondary metadata lines, few borders, plenty of whitespace.
 - **Compare runs** (`/compare/:a/:b`), **World view** (`/world/…`), **Process view** (`/control/…`)
   and the **Team editor** (`/team`) are one click away under ⋯ and ⌘K.
 
-**Which core.** The UI talks to the Arena core (arenad) it is served from. A build can name another
+**Which core.** The UI talks to the Shakedown core (arenad) it is served from. A build can name another
 with `VITE_ARENA_URL=<url>`, and the address can switch with `?core=<url>` (this browser remembers it;
 `?core=` with nothing goes back to the serving core); every `/api` request and the event stream go
 there (`src/core.ts`), and the ⋯ menu says which core is in use. A UI served from another
@@ -149,7 +149,7 @@ Logic lives in pure modules with tests, and components only render. For example:
   - The Event log tab lists the same steps as rows.
 - **Trace waterfall** (`run/Waterfall.tsx`). It shows the selected step's turn: the agent's model call
   and every step up to its next model call. Each bar ends when its step was recorded and starts that
-  step's `duration_ms` earlier. Arena's own work in a step (gate check, recording, save) is listed
+  step's `duration_ms` earlier. Shakedown's own work in a step (gate check, recording, save) is listed
   under it.
 - **Inspector.** This is the step in full: the system it touched and its effect, the permit the write
   ran under (or the change it named that approvals never recorded), the arguments, reads and writes,
@@ -182,8 +182,8 @@ Logic lives in pure modules with tests, and components only render. For example:
   `board/board.ts`). It opens readable: a board that only fits below 80% opens at 80% from its top-left corner. The wheel pans, Ctrl/⌘ + wheel or a pinch zooms, a drag pans; −, Fit and + zoom by button and **Expand** opens it full screen (these show on hover). A card shows its prompt beside the board. **Import** (`board/importTeam.ts`) takes a
   Sculptured design (`TeamDraft`: `claude` becomes Claude Code, `codex` Codex; the model from the
   agent, its group or the team; places, groups and hands-work-to connections kept; agents put in work
-  order; an agent whose `data_access.writes` is empty is read-only) or an Arena team, picked, dropped
-  or pasted. A kind Arena can't run (OpenCode) is refused by name. The board is kept with the team in
+  order; an agent whose `data_access.writes` is empty is read-only) or a Shakedown team, picked, dropped
+  or pasted. A kind Shakedown can't run (OpenCode) is refused by name. The board is kept with the team in
   this browser and never sent to arenad. **Edit** opens the team editor (`/team`).
 - **Scenario builder** (`scenario/`). On Run once and New experiment as a picker, from the benchmark's
   `scenario_options` (`GET /api/benchmark`): a toggle and parameters per disruption (label and

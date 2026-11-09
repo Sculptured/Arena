@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Arena does not work as it should
+description: Something in Shakedown does not work as it should
 labels: [bug]
 body:
   - type: textarea

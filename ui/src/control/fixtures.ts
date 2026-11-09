@@ -21,7 +21,7 @@ export const runStart = ev(1, 0, null, 'run_start', {
   world: [{ part: 'erp', integration: 'erpnext' }, { part: 'lims', integration: 'lims' }, { part: 'gate', integration: 'approvals' }],
   systems: {
     erp: { kind: 'erp', product: 'ERPNext', stands_in_for: 'SAP S/4HANA', simulated: false },
-    lims: { kind: 'lims', product: 'Arena LIMS', stands_in_for: 'LabWare', simulated: true },
+    lims: { kind: 'lims', product: 'Shakedown LIMS', stands_in_for: 'LabWare', simulated: true },
     gate: { kind: 'approvals', product: 'Sculptured approvals', simulated: false },
   },
   tools: {

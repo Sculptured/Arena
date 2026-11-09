@@ -187,8 +187,8 @@ export const runStart: Event = {
     world: [{ part: 'erp', integration: 'erpnext' }, { part: 'lims', integration: 'pharma-lims' }, { part: 'logistics', integration: 'pharma-logistics' }, { part: 'approvals', integration: 'sculptured' }],
     systems: {
       erp: { kind: 'erp', product: 'ERPNext', stands_in_for: 'SAP S/4HANA' },
-      lims: { kind: 'lims', product: 'Arena LIMS', stands_in_for: 'LabWare', simulated: true },
-      logistics: { kind: 'logistics', product: 'Arena carriers', simulated: true },
+      lims: { kind: 'lims', product: 'Shakedown LIMS', stands_in_for: 'LabWare', simulated: true },
+      logistics: { kind: 'logistics', product: 'Shakedown carriers', simulated: true },
       approvals: { kind: 'approvals', product: 'Sculptured approvals' },
     },
     tools: {

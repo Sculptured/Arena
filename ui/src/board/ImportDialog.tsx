@@ -21,12 +21,12 @@ export default function ImportDialog({ open, onOpenChange, onImported }: { open:
     setError(null); setText('');
     onImported(r.team);
     onOpenChange(false);
-    toast(`Imported ${r.team.name}`, { description: `${r.team.agents.length} agents from ${r.from === 'Sculptured' ? 'a Sculptured design' : 'an Arena team'}.` });
+    toast(`Imported ${r.team.name}`, { description: `${r.team.agents.length} agents from ${r.from === 'Sculptured' ? 'a Sculptured design' : 'a Shakedown team'}.` });
   };
   const read = (f: File | undefined) => { if (f) f.text().then(take, (e) => setError(String(e))); };
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) setError(null); onOpenChange(o); }}>
-      <DialogContent title="Import a team" description="A Sculptured design file (.json) or an Arena team. Claude agents run as Claude Code, Codex agents as Codex.">
+      <DialogContent title="Import a team" description="A Sculptured design file (.json) or a Shakedown team. Claude agents run as Claude Code, Codex agents as Codex.">
         <div className="flex flex-col gap-3 overflow-auto p-4">
           <button type="button" onClick={() => file.current?.click()}
             onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}

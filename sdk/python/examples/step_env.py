@@ -9,7 +9,7 @@ The policy is:
   (``POLICY_MODEL``, default ``claude-haiku-4-5``); else
 - Claude Code (``claude -p``, no tools of its own, JSON answer; ``POLICY_MODEL`` default ``haiku``).
 
-Either way it costs credits. Arena supplies the world, the record and the reward, not the agent.
+Either way it costs credits. Shakedown supplies the world, the record and the reward, not the agent.
 After the episode it forks at the first tool call ("reset to step N") and prints that the world is back.
 """
 

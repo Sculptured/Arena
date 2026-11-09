@@ -1,8 +1,8 @@
-"""A multi-agent step-loop environment over an Arena world, for RL and agent research.
+"""A multi-agent step-loop environment over a Shakedown world, for RL and agent research.
 
 It follows PettingZoo's parallel API (``reset``/``step``/``close``, dicts keyed by agent) without
-depending on PettingZoo. Arena supplies the world, the record and the score; **your policy** (an LLM
-or anything else) picks the actions. Arena supplies no agent.
+depending on PettingZoo. Shakedown supplies the world, the record and the score; **your policy** (an LLM
+or anything else) picks the actions. Shakedown supplies no agent.
 
     env = ArenaParallelEnv(arena, task="72", agents=["support"])
     obs, infos = env.reset(seed=7)

@@ -1,4 +1,6 @@
-# Arena: environments, scenarios, experiments + the Automation Fair demo
+# Shakedown (was Arena): environments, scenarios, experiments + the Automation Fair demo
+
+> Name note (2026-11-08): the product is now **Shakedown**; "Arena" below is the old name, kept as written. Internal names (`arenad`, `arena-part/1`, `ARENA_*`) are unchanged for now.
 
 Approved in chat 2026-11-08. Deadline for the demo: Monday 2026-11-16 (Automation Fair). Target: done 2026-11-08 end of day.
 

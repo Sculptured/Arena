@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
-    <img alt="Arena: test agent systems in a simulated copy of their world" src=".github/assets/banner-light.svg" width="100%">
+    <img alt="Shakedown: test agent systems in a simulated copy of their world" src=".github/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="#use-arena-from-code">From code</a> ·
+  <a href="#use-shakedown-from-code">From code</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/concepts.md">Concepts</a> ·
   <a href="docs/protocol.md">Protocol</a> ·
@@ -24,17 +24,21 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-**Arena tests agent systems in a simulated copy of the world they will be deployed in.** An *environment* is the
+**Shakedown tests agent systems in a simulated copy of the world they will be deployed in.** An *environment* is the
 systems the agents work with (an ERP, a database, suppliers, a plant), made of real software or simulators. A
 *scenario* is what happens to it: a task and the disruptions along the way. An *agent setup* is a model, a team
 structure and its rules. An **experiment** runs each of 1 to 4 setups several times on the same environment and
 scenario, and shows them side by side: pass rate (with its range), the checks each run passed, cost, time, and
 safety (actions the environment denied, flags raised for a human, safety checks violated). Limits live in the
 environment, not in the agent's prompt, and are enforced deterministically; scoring is by deterministic checks,
-never by a model. arenad, the arena service, records every step of every run, so any run can be opened and read
+never by a model. arenad, the Shakedown service, records every step of every run, so any run can be opened and read
 step by step.
 
-## Use Arena from code
+Shakedown (code name `arena`): the service is still `arenad`, the Python package `arena` (`arena-sdk`), the protocol
+`arena-part/1`, the environment variables `ARENA_*` and this repo `Sculptured/Arena`. Those internal names are
+renamed later, in one pass.
+
+## Use Shakedown from code
 
 The core runs headless; no UI is needed. With the Python SDK ([docs/sdk.md](docs/sdk.md), `sdk/python`):
 
@@ -53,7 +57,7 @@ Bring your own agents instead (`arena.external_run(...)`: each agent gets an MCP
 and an OpenAI-compatible gateway), run experiments (`POST /api/experiments`), or drive a world step by step as a multi-agent RL environment
 (`arena.env.ArenaParallelEnv`). Any other language uses the [HTTP API](docs/reference.md#http-api).
 
-## Why Arena
+## Why Shakedown
 
 - **Experiments, not anecdotes.** One run of an LLM agent says little. An experiment runs each setup N times on
   the same seeded world and scenario, interleaving the setups so they meet the same conditions, and reports pass
@@ -104,7 +108,7 @@ and an OpenAI-compatible gateway), run experiments (`POST /api/experiments`), or
   </tr>
 </table>
 
-<sub>Captured from Arena's web UI on 2026-11-08: real runs of the pharma benchmark (Claude Code on Sonnet; the setups
+<sub>Captured from Shakedown's web UI on 2026-11-08: real runs of the pharma benchmark (Claude Code on Sonnet; the setups
 in the first capture are suites from before experiments, shown side by side), and the retail benchmark's New
 experiment page.</sub>
 
@@ -114,7 +118,7 @@ experiment page.</sub>
 flowchart LR
   subgraph clients["Clients"]
     UI["Web UI<br/>ui/"]
-    SC["Sculptured<br/>Arena control"]
+    SC["Sculptured<br/>Shakedown control"]
   end
 
   subgraph team["Team of agents"]
@@ -156,7 +160,7 @@ instances, runs tool calls, saves an instance's state, starts from a save, shows
 states. A **benchmark** names the world it runs in (its **parts**) and brings the tasks, the tools, the data and
 the gold actions. When a branch ends, arenad diffs its world with the task's gold world; it passes when no key
 differs and at least one part could be checked. The core (arenad, the protocol, the kits) depends on no UI: the
-web UI is one client of arenad's HTTP API, and the Python SDK and Sculptured's Arena control workspace are others.
+web UI is one client of arenad's HTTP API, and the Python SDK and Sculptured's Shakedown control workspace are others.
 
 Read [docs/concepts.md](docs/concepts.md) for the full model: runs, branches, steps, saves, the restore table,
 teams and handoffs, forking rules and cost labels.
@@ -232,7 +236,7 @@ integrations are checked on their own, not inside a team's run. Three of them ne
 `sculptured` runs the Sculptured program, and `ridgeline-hub` and `isaac-sim` (with its mirror) wrap the Ridgeline
 factory example. Without those, their tests are skipped.
 
-## Extend Arena
+## Extend Shakedown
 
 - **Write an integration:** a folder with an `arena-package.toml` and a program that speaks the protocol. Start
   from the counter in [integrations/README.md](integrations/README.md), then check it with `arena-part-check`.
@@ -245,7 +249,7 @@ factory example. Without those, their tests are skipped.
 
 | Document | What it covers |
 |---|---|
-| [docs/sdk.md](docs/sdk.md) | Using Arena from code: the Python SDK, external agents, the step-loop env, export, reproducibility, Rust, citing |
+| [docs/sdk.md](docs/sdk.md) | Using Shakedown from code: the Python SDK, external agents, the step-loop env, export, reproducibility, Rust, citing |
 | [docs/concepts.md](docs/concepts.md) | Glossary, restore modes, teams and runners, external designs, overhead and estimates, CLI isolation, forking, cost labels |
 | [docs/protocol.md](docs/protocol.md) | `arena-part/1`: transport, manifest, every call, errors, clock and determinism contracts |
 | [integrations/README.md](integrations/README.md) | The integrations, a step-by-step counter integration, `arena-part-check` |
@@ -255,7 +259,7 @@ factory example. Without those, their tests are skipped.
 
 ## Project status
 
-Arena is early. Only `postgres` has been used in an arenad run with agents, through the retail example; every
+Shakedown is early. Only `postgres` has been used in an arenad run with agents, through the retail example; every
 other integration is checked on its own, and API mode has not been measured.
 
 <details>
@@ -268,7 +272,7 @@ other integration is checked on its own, and API mode has not been measured.
   to drive the run through the external API (`docs/concepts.md`, "External designs"), which is tested with
   Claude Code as the external system's agent (`core/crates/arenad/tests/external.rs`, `live_`). Any agent may
   write unless its team marks it `read_only`.
-- The production estimate (measured time minus arena's overhead) has been checked by tests only, not against a
+- The production estimate (measured time minus Shakedown's overhead) has been checked by tests only, not against a
   production deployment. Costs not reported by a provider are estimated only for the models in
   `docs/prices.toml`; every other cost shows as unknown.
 - API mode has not been measured with any provider. Its providers' request and answer translation is unit-tested
@@ -298,7 +302,7 @@ security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Arena is licensed under the [Apache License 2.0](LICENSE).
+Shakedown is licensed under the [Apache License 2.0](LICENSE).
 
 The retail data in `data/retail/` (`db.json`, `tasks.json`, `policy.md`) comes from
 [tau2-bench](https://github.com/sierra-research/tau2-bench), MIT License, Copyright (c) 2025 Sierra Research;
@@ -306,5 +310,5 @@ see [data/retail/LICENSE](data/retail/LICENSE) and [NOTICE](NOTICE).
 
 ## Examples and demos
 
-Worlds, demos and showcases built on Arena (the factory showcase, the local pharma stack) live in the separate
-**Arena-Examples** repo, next to this one, so this repo stays the core.
+Worlds, demos and showcases built on Shakedown (the factory showcase, the local pharma stack) live in the separate
+`Arena-Examples` repo, next to this one, so this repo stays the core.

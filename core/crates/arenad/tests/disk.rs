@@ -264,7 +264,7 @@ fn assert_over_limit(status: u16, body: &Value) {
         (status, body["error"].as_str()),
         (
             507,
-            Some("the arena's saves use more than the limit; delete old runs")
+            Some("Shakedown's saves use more than the limit; delete old runs")
         )
     );
 }

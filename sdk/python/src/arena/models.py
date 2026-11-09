@@ -283,7 +283,7 @@ class Event:
 
     def summary(self) -> str:
         """One line for a console timeline."""
-        who = self.agent or "arena"
+        who = self.agent or "shakedown"
         p = self.payload
         if self.kind == "tool_call":
             out = f"error: {p['error']}" if p.get("error") else "ok"

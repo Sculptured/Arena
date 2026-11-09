@@ -65,7 +65,7 @@ function partOf(p: Record<string, unknown>, known: ToolInfo | undefined): string
 
 /** Arena's own talk tool for reading messages (`exec/talk.rs`): not part of the world. */
 const INBOX = 'inbox';
-const MESSAGES: SystemInfo = { kind: 'messages', product: "Arena's messages between agents" };
+const MESSAGES: SystemInfo = { kind: 'messages', product: "Shakedown's messages between agents" };
 
 /** What the run recorded about a tool; arena's inbox reads messages. */
 function toolInfo(info: WorldInfo, tool: string): ToolInfo | undefined {

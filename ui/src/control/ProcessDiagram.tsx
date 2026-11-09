@@ -11,7 +11,7 @@ const STATE: Record<UnitState, { glyph: string; word: string; abnormal: boolean 
   running: { glyph: '◐', word: 'Running', abnormal: false },
   done: { glyph: '■', word: 'Done', abnormal: false },
   failed: { glyph: '✕', word: 'Failed', abnormal: true },
-  automatic: { glyph: '⟳', word: 'Run by Arena', abnormal: false },
+  automatic: { glyph: '⟳', word: 'Run by Shakedown', abnormal: false },
 };
 
 function Alarm({ c }: { c: Counts }) {

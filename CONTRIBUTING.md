@@ -1,4 +1,4 @@
-# Contributing to Arena
+# Contributing to Shakedown
 
 Thanks for helping. Bug reports, new integrations and benchmarks, docs fixes and code are all welcome.
 

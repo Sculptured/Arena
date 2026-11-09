@@ -25,7 +25,7 @@ describe('metrics', () => {
     expect(costText(cost(0, 'no API charge'))).toBe('no API charge');
   });
   it('estimates production as measured minus overhead, or says why not', () => {
-    expect(estimateText(metrics())).toBe('10.0 s (12.0 s measured − 2.00 s arena overhead)');
+    expect(estimateText(metrics())).toBe('10.0 s (12.0 s measured − 2.00 s Shakedown overhead)');
     expect(estimateText(metrics({ estimated_s: null, overhead_recorded: false }))).toContain('not estimated');
   });
   it('shows each agent with its model and tokens', () => {

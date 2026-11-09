@@ -42,7 +42,7 @@ export function resultOf(d: Pick<BranchDetail, 'status' | 'events' | 'error'>): 
     case 'failed': return { flow, title: 'Failed', why: check ? checkWhy(check, false) : sentence(d.error ?? 'An agent failed') };
     case 'stopped': return { flow, title: 'Stopped', why: 'You stopped the run before it finished, so it was not scored.' };
     case 'error': return { flow, title: 'Error', why: sentence(d.error ?? 'Something in the world stopped working') };
-    case 'interrupted': return { flow, title: 'Interrupted', why: 'Arena restarted while the run was going, so it was not scored.' };
+    case 'interrupted': return { flow, title: 'Interrupted', why: 'Shakedown restarted while the run was going, so it was not scored.' };
     default: return null;
   }
 }

@@ -32,7 +32,7 @@ All JSON on `http://127.0.0.1:4510`, except the event stream. Errors are `{error
 | `GET /api/branches/{id}/rows?seq=N&keys=<kind>/<id>,...[&part=]` | the state of those keys just after step N (at most 50 keys) |
 | `POST /api/branches/{id}/fork` | `{at_seq, changes: {<agent id>: {prompt?, model?, kind?, provider?, read_only?}}, restore: "exact"\|"approximate", team?}` (default exact); `team` (a run an external system drives only, and not with `changes`; else 400) gives the new branch another team, such as a single agent in place of a team: its agents' `history` holds the events of any agent of the same id, and the fork note says the team changed; returns `{branch_id, start_seq, moved_from, reason}`, and for an external run `agents`: each agent's `{agent, mcp_url, gateway_url, spec, history}` on the new branch, which stays live for the external system (`history` is the agent's recorded events before `start_seq`). The changes are checked on the team the fork would run, as `POST /api/runs` checks a team |
 | `GET /api/branches/{id}/views` | `[{seq, event_seq, view}]`: the world's views recorded on the branch, in order (a fork's include those before its fork point, which its record starts with). `seq` is the step the view follows (the `world_view` event's `seq_of`), `event_seq` the view's own event, `view` the benchmark's `TwinView` ([protocol](protocol.md#the-worlds-view)); empty for a benchmark that draws none; 404 for an unknown branch |
-| `GET /api/branches/{id}/recording` | `{video, of, sidecar}`: the branch's plant recording, if `ARENA_RECORDINGS` holds one (an MP4 whose name has the branch id in it; a fork without one shows its parent's, `of` says whose), with its JSON sidecar; `video` is null when there is none. A recording part writes its frames on arena time, so the video's second t is the branch's arena second t |
+| `GET /api/branches/{id}/recording` | `{video, of, sidecar}`: the branch's plant recording, if `ARENA_RECORDINGS` holds one (an MP4 whose name has the branch id in it; a fork without one shows its parent's, `of` says whose), with its JSON sidecar; `video` is null when there is none. A recording part writes its frames on Shakedown time, so the video's second t is the branch's Shakedown second t |
 | `GET /api/branches/{id}/recording.mp4` | that MP4, with byte ranges (so a player can seek); 404 when there is none |
 | `GET /api/branches/{id}/restore-plan?at_seq=N&restore=exact\|approximate` | `{parts: [{part, how, estimate_seconds?}]}`, or 409 with the refusal |
 | `GET /api/compare?a=<branch>&b=<branch>` | `{a, b, first_divergent_seq, differing_rows, not_compared}` |
@@ -98,12 +98,12 @@ Environment variables, read once at startup by arenad:
   PATH, a provider without its key) turns AI review off, with why in `/api/review/settings`.
 - `ARENA_RECORDINGS`: a folder of plant recordings fetched from a recording part (Isaac Sim writes
   `<record>-b_<branch>_plant.mp4` and its `.json` sidecar), which the world view shows as "Plant (Isaac Sim)" beside
-  the twin, held at the arena second of the step on screen. Optional.
+  the twin, held at the Shakedown second of the step on screen. Optional.
 - `ARENA_UI_DIST`: a built UI folder for arenad to serve at `/`. Optional: arenad is fully usable without a UI
   (from code, see [sdk.md](sdk.md)), and the UI can be served from anywhere else.
 - `ARENA_CORS_ORIGIN`: web origins, comma-separated (`http://127.0.0.1:5173,https://ui.example`), whose pages
   may call `/api` from a browser, for a UI served from elsewhere. Exact matches only; `*` and anything that isn't
-  `http(s)://host[:port]` is skipped with a warning (a wildcard would let any web page drive this machine's arena).
+  `http(s)://host[:port]` is skipped with a warning (a wildcard would let any web page drive this machine's Shakedown).
   Unset: same origin only. The `/api` routes still answer only a loopback `Host`.
 
 A blank key counts as unset. A key a header can't carry is reported at startup (by its variable's name) and
@@ -250,7 +250,7 @@ the running one at `ARENA_SDK_URL`, and are skipped without either. They drive t
 The arenad they start runs the startup cleanup, so give them a Postgres no other test run uses at the time.
 
 The tests of `integrations/ridgeline-hub` and `integrations/isaac-sim` read the Ridgeline factory example from
-`Sculptured-Examples/factory` next to the arena checkout (their READMEs say which folders). **That example is not
+`Sculptured-Examples/factory` next to the `Arena` checkout (their READMEs say which folders). **That example is not
 public yet**: without it every test of those two packages is skipped, and the packages can't start. The Sculptured
 program that `integrations/sculptured` runs is not published yet either; its live test is skipped without it.
 
@@ -261,7 +261,7 @@ agent: everything an agent does in a test is done by a real model. arenad's `liv
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ARENA_LOCAL_MODELS` with `ARENA_LIVE_MODEL`); `ARENA_LIVE_AGENT=claude`
 or `=api` picks one. A test that needs arenad's own loop (its model calls recorded, a fork resuming
 mid-conversation, a provider's request and cost) skips without a key, and every live test prints `skipped: …` and
-passes when no model is available. Models vary from run to run, so these tests check what Arena records and
+passes when no model is available. Models vary from run to run, so these tests check what Shakedown records and
 enforces (every step and its fields, gates, checks, restores), never one path through a task; where a model did not
 make the call a check needs, the test prints `note: …`. What the fakes used to cover that a real model can't be
 made to do (arguments cut off, a refusal, an overloaded provider, a model list over the bound) is tested on the

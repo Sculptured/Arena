@@ -37,8 +37,8 @@ function MoreMenu({ onPalette }: { onPalette: (start?: Mode) => void }) {
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setThemePref(nextPref(pref)); }}>
           <span className="flex-1">Theme</span><span className="text-2xs text-muted">{THEME_WORD[pref]}</span>
         </DropdownMenuItem>
-        <DropdownMenuLabel className="font-normal" title="Open the UI with ?core=<url> to use another Arena core, or ?core= to go back to this one">
-          Arena core: {CORE || 'this server'}
+        <DropdownMenuLabel className="font-normal" title="Open the UI with ?core=<url> to use another Shakedown core, or ?core= to go back to this one">
+          Shakedown core: {CORE || 'this server'}
         </DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -51,8 +51,11 @@ export default function TopBar({ onPalette }: { onPalette: (start?: Mode) => voi
   return (
     <div className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-2 border-b border-line bg-bg/85 px-4 backdrop-blur sm:gap-6 sm:px-6">
       <Link to="/" className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-        <span aria-hidden="true" className="grid size-5 place-items-center rounded-[5px] bg-fg font-mono text-2xs text-bg">A</span>
-        <span className="hidden sm:inline">Arena</span>
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 shrink-0 text-fg">
+          <rect width="24" height="24" rx="5.5" fill="currentColor" />
+          <path d="M4 17H7.6C9.4 17 9.3 5.8 11.3 5.8C13.1 5.8 13 13.2 14.7 13.2C16.1 13.2 16.2 9.4 17.5 9.4C18.6 9.4 18.8 11 20 11" fill="none" stroke="var(--bg)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="hidden sm:inline">Shakedown</span>
       </Link>
       <nav className="flex items-center gap-1" aria-label="Main">
         {NAV.map((n) => {

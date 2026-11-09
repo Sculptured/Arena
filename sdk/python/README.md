@@ -1,7 +1,7 @@
 # arena-sdk
 
-Build, drive, observe and export [Arena](https://github.com/Sculptured/Arena) environments from Python.
-Arena's core (arenad) is headless; this SDK talks to its HTTP API. No UI needed.
+Build, drive, observe and export [Shakedown](https://github.com/Sculptured/Arena) environments from Python.
+Shakedown's core (arenad) is headless; this SDK talks to its HTTP API. No UI needed.
 
 ```bash
 uv add "arena-sdk @ git+https://github.com/Sculptured/Arena#subdirectory=sdk/python"   # or: uv pip install -e sdk/python
@@ -20,7 +20,7 @@ with Arena.local(benchmark="retail", bin_dir="core/target/release") as arena:   
 
 - **Connect or start a core:** `Arena(url)`, `Arena.local(benchmark=..., packages=..., pg_url=..., saves=...)`.
 - **Build an environment:** `arena.benchmark()` (tasks, `scenario_options`), `arena.run(task, team, scenario=[...], seed=...)`.
-- **Run teams:** Arena's runners (`chain`, `concurrent`; Claude Code, Codex or API agents with real models), or
+- **Run teams:** Shakedown's runners (`chain`, `concurrent`; Claude Code, Codex or API agents with real models), or
   `arena.external_run(task, agents=["a", "b"])`: each agent gets an MCP endpoint and an OpenAI-compatible gateway
   for any agent framework (`arena.claude_code.run(agent, prompt)` runs Claude Code on one).
 - **Observe:** `branch.stream()` / `astream()`, `record()`, `views()`, `rows()`, `metrics()`, `check()`.

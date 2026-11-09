@@ -1,7 +1,7 @@
 # Measurements with the retail example benchmark
 
 These numbers were measured with the bundled retail example benchmark (`benchmarks/retail`, tau2-bench retail
-on one `postgres` part). They describe that benchmark on one machine, not the arena in general. The live
+on one `postgres` part). They describe that benchmark on one machine, not Shakedown in general. The live
 Claude Code and Codex runs were made before the move to integrations and have not been repeated.
 
 ## Snapshot copy time

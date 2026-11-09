@@ -22,4 +22,4 @@ What these printed when last run (retail task 72, `haiku`, 2026-11-07): quicksta
 tokens, $0.008 reported); bring-your-own-agent with Claude Code made 5 read calls and failed the task; the fork of
 the quickstart run at its first write moved to the resolver's start (a CLI session restarts from the agent's start)
 and passed again; a one-run suite failed (pass rate 0.0); the step-loop policy made 6 read calls, ended, and was
-scored failed. Models vary; that is what Arena measures.
+scored failed. Models vary; that is what Shakedown measures.

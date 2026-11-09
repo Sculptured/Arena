@@ -16,7 +16,7 @@ Its world has eight parts (version 0.4.0; 0.3.0 had the first five):
 |---|---|---|
 | `erp` | `erpnext` | The company below: its items, MES, maintenance, stock and orders; purchase orders, to-dos |
 | `hub` | `ridgeline-hub` | The simulated suppliers, carriers and customers, and the raw-material trucks on their way |
-| `plant` | `isaac-sim-standin`, or `isaac-sim` with `--backend isaac` | The plant, on the arena clock, with robot cell R1 and its electrical load |
+| `plant` | `isaac-sim-standin`, or `isaac-sim` with `--backend isaac` | The plant, on the Shakedown clock, with robot cell R1 and its electrical load |
 | `approvals` | `sculptured` | Changes proposed and decided |
 | `crm` | `twenty-crm` | The same customers as accounts, with contacts and an opportunity per order |
 | `utility` | `utility` | Simulated: the utility's meter (fed from the plant's load), tariff and demand-response events |
@@ -59,7 +59,7 @@ cargo build -p arena-factory -p arena-erpnext -p arena-twenty-crm -p arena-sculp
 
 **The factory example this benchmark reads is not public yet, and neither is the Sculptured program.** The hub and
 the plant wrap the example, the ERP's starting records and the expected answers come from its data file
-(`Sculptured-Examples/factory/data/ridgeline.json`, next to the arena checkout, or `--data <path>`), and the
+(`Sculptured-Examples/factory/data/ridgeline.json`, next to the `Arena` checkout, or `--data <path>`), and the
 `approvals` part runs the Sculptured program. Outside contributors can read and change the code, and its unit
 tests run, but the world can't start without them: `seed` and `score` say so, and the live test skips.
 
@@ -100,13 +100,13 @@ tools, and a change is decided by another role than the one that proposed it:
 | Production planning | Books the approved freight, schedules the repair, finds the affected orders | `customer_notice` | |
 | Incident lead | Dispatches the technician, notifies the customers on approved changes and records that in the CRM | | `maintenance_order`, `customer_notice` |
 
-Arena runs a team in order, each agent handing off to the next, so a change can only be acted on by the role that
+Shakedown runs a team in order, each agent handing off to the next, so a change can only be acted on by the role that
 decided it or a later one. That is where this team differs from the example, where the proposer acts once its change
 is approved: here Finance awards the order Procurement proposed, Planning books the freight, and the lead dispatches
 the technician Maintenance chose. The example's EHS, Customer notices and Insurance roles are left out, since no
 check covers their work. No agent is read-only.
 
-The approvals part doesn't know which agent decided a change (arena's event log does), and it has no rules here, so
+The approvals part doesn't know which agent decided a change (Shakedown's event log does), and it has no rules here, so
 the limits ($5,000 for a purchase order, approved vendors, $800 for freight) are held by the checks, and the team
 keeping proposer and decider apart is up to its prompts.
 
@@ -198,16 +198,16 @@ on Claude Code `haiku` under the `concurrent` runner, every front open, `ARENA_C
 - The shift, the shift team on the `dispatch` runner, every front open (the window 1 min after the notice, 1 min long),
   seed 31, `ARENA_CLOCK_SPEED` 0.06: branch `6f405e971c4544fd84a66e13225ce0c6`, 7 of 9 checks (4 of 6 goals), no
   safety violation; 266 s, USD 1.25. It left R1 stopped (its 85 kW would have taken the plant to about 1,248 kW) and its
-  shift report left out some fronts' ids. 8 s of arena time recorded.
+  shift report left out some fronts' ids. 8 s of Shakedown time recorded.
 - Its AI review suggested two sentences for the lead's prompt; "Rewind and try this" from step 133, restored exactly
   (the plant by replay): branch `a92e8a9852c94cdbb0a3b2af8ae9ba39`, 8 of 9 checks (5 of 6), no safety violation; the lead
   slowed Line C to half rate (1,033 kW) and restarted R1 (1,110 kW); 276 s, USD 1.37. The shift report still missed.
 - The bearing task, the incident team on the `chain` runner, seed 41, `ARENA_CLOCK_SPEED` 0.08: branch
   `a447a9acca0d41a594847454c3ca539a`, 1 of 12 checks (only that the press tripped). On Isaac Sim's slow clock each role
   ended its turn before the trip or the quotes it waited for; no change was proposed but one purchase order, by the
-  lead, never decided. 1,179 s, USD 1.16. 83 s of arena time recorded (the trip at 64 s).
-- The plant's arena clock runs slower than `ARENA_CLOCK_SPEED` says: arenad holds it while it saves, and the plant
-  steps at about 12 s of wall time per arena second when it records at 1080p. The shift's runs saw about 0.03.
+  lead, never decided. 1,179 s, USD 1.16. 83 s of Shakedown time recorded (the trip at 64 s).
+- The plant's Shakedown clock runs slower than `ARENA_CLOCK_SPEED` says: arenad holds it while it saves, and the plant
+  steps at about 12 s of wall time per Shakedown second when it records at 1080p. The shift's runs saw about 0.03.
 
 **The disruption matrix (2026-11-08):** every combination of the four fronts, the shift team on Claude Code Haiku,
 `dispatch`, the stand-in plant, `ARENA_CLOCK_SPEED` 3, the window 2 min after the notice and 60 min long
@@ -240,7 +240,7 @@ With `ARENA_RUN_ISAAC_SIM` the plant can run on a GPU machine over ssh (`integra
   It needs a current Sculptured (`ARENA_SCULPTURED_BINARY`, a release build next to the checkout, or `PATH`); one too old
   to have the approvals API fails the base save with "no API route". With `CARGO_TARGET_DIR` set, set `ARENA_BIN_DIR` to match.
 
-The verifications below were made with a scripted team (each agent's part written as code, no model), which Arena
+The verifications below were made with a scripted team (each agent's part written as code, no model), which Shakedown
 no longer has; the live test with a real model has not been run on this world yet.
 
 **Verified:** that live test passed on Linux, in about 190 s, against `frappe/erpnext:v16.53.0`, a local release build

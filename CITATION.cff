@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use Arena in your research, please cite it as below."
-title: "Arena: a rewindable staging environment for multi-agent systems"
+message: "If you use Shakedown in your research, please cite it as below."
+title: "Shakedown: a rewindable staging environment for multi-agent systems"
 type: software
 authors:
   - name: "Sculptured"

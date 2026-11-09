@@ -8,7 +8,7 @@ product: "Simulated electric utility and site meter", simulated: true}`. Restore
 `state.json`); approximate: no. `uses_clock`: true.
 
 A Python package on the kit's `arena_part.jsonstate`, with the clock added: `advance` (and every `call_tool`, first)
-integrates the load up to the arena clock. The load is kept in whole watts and the energy in whole watt-milliseconds,
+integrates the load up to the Shakedown clock. The load is kept in whole watts and the energy in whole watt-milliseconds,
 cut at every window's start and end, so the state after an advance doesn't depend on how the advances were split.
 
 ## Config
@@ -18,7 +18,7 @@ Given by the factory benchmark (`benchmarks/factory/data/shift.json`, `utility`)
 | key | what |
 |---|---|
 | `meter`, `site`, `utility` | names shown in the meter's document |
-| `plant_start` | the plant clock at arena time 0 (default `2026-03-10T06:00:00`) |
+| `plant_start` | the plant clock at Shakedown time 0 (default `2026-03-10T06:00:00`) |
 | `initial_kw` | the load until the plant's first reading (default 1500) |
 | `tariff` | `{standard_per_kwh, peak_per_kwh}` in USD; inside a demand-response window the peak price applies |
 | `scenarios` | optional scenarios by name, each with `disruptions` |

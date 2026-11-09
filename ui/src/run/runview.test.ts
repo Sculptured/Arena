@@ -46,7 +46,7 @@ describe('trace waterfall', () => {
   });
   it('lists arena\'s own work in a step under it', () => {
     const evs = [runStart, ev(2, 1, 'quality', 'tool_call', { name: 'get_result', duration_ms: 10, overhead_ms: { gate: 4, record: 2, wait: 0.001 } })];
-    expect(traceOf(evs, 2)!.spans.filter((s) => s.kind === 'overhead').map((s) => [s.label, s.end - s.start])).toEqual([['arena · gate check', 4], ['arena · recording', 2]]);
+    expect(traceOf(evs, 2)!.spans.filter((s) => s.kind === 'overhead').map((s) => [s.label, s.end - s.start])).toEqual([['Shakedown · gate check', 4], ['Shakedown · recording', 2]]);
     expect([spanLength(1400), spanLength(120), spanLength(4), spanLength(0.06)]).toEqual(['1.4 s', '120 ms', '4.0 ms', '0.06 ms']);
   });
 });

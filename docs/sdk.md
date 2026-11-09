@@ -1,6 +1,6 @@
-# Use Arena from code
+# Use Shakedown from code
 
-Arena's core is **arenad** (the service), the **`arena-part/1` protocol** and its **kits**. It is headless and
+Shakedown's core is **arenad** (the service), the **`arena-part/1` protocol** and its **kits**. It is headless and
 fully usable without a UI: everything the web UI does goes through arenad's public HTTP API
 ([reference.md](reference.md#http-api)), and so can your code. Three ways in:
 
@@ -10,8 +10,8 @@ fully usable without a UI: everything the web UI does goes through arenad's publ
   OpenAI chat completions, so any MCP client and any OpenAI-compatible client work.
 - **Rust:** the same HTTP API ([below](#rust)), or arenad as a library.
 
-The rule for agents everywhere: they are real models. Arena never supplies a scripted agent; your code, Claude
-Code, Codex, or an API model does the work, and Arena records, restores and scores it.
+The rule for agents everywhere: they are real models. Shakedown never supplies a scripted agent; your code, Claude
+Code, Codex, or an API model does the work, and Shakedown records, restores and scores it.
 
 ## Install
 
@@ -72,7 +72,7 @@ folder in `packages=[...]`. The core has no route to compose a world on the fly.
 
 ## Run teams
 
-**Arena's own runners.** arenad starts each agent: Claude Code or Codex headless with only the world's tools
+**Shakedown's own runners.** arenad starts each agent: Claude Code or Codex headless with only the world's tools
 (CLI mode), or its own loop with a provider's model (API mode). `chain` runs them one after another, `concurrent`
 all at once.
 
@@ -121,7 +121,7 @@ async for event in branch.astream(): ...
 rec = branch.record()                # status, team, events, metrics, fork info, run_start (seed, tools, systems)
 rec.check                            # CheckResult: passed, checks [NamedCheck(name, passed, detail, safety)],
                                      #   score, safety_violations, differing_rows
-rec.metrics                          # measured_s, estimated_s (without Arena's overhead), tokens, cost, per agent
+rec.metrics                          # measured_s, estimated_s (without Shakedown's overhead), tokens, cost, per agent
 branch.views()                       # the world's view after each step (the digital twin), if the benchmark draws one
 branch.rows(seq=12, keys=["orders/#W5270061"])     # state of keys just after step 12
 ```
@@ -175,7 +175,7 @@ copied into every export. `pd.read_json("events.jsonl", lines=True)` loads it.
 ## A step-loop environment for RL
 
 `arena.env.ArenaParallelEnv` wraps an external run in PettingZoo's parallel API (without depending on it). Your
-policy chooses each agent's tool call; Arena runs it in the world, records it, and scores the episode.
+policy chooses each agent's tool call; Shakedown runs it in the world, records it, and scores the episode.
 
 ```python
 from arena.env import ArenaParallelEnv, END
@@ -210,7 +210,7 @@ a step is reproducible given the world. `examples/step_env.py` uses a Claude mod
   (`restore_mode`, `restored`). See [concepts.md](concepts.md#restore-modes).
 - **Pinned parts.** A replay is refused when a part's fingerprint (versions, source hashes) changed since the
   run; each part's fingerprint is in `RunStart.fingerprints`.
-- **Time.** Arena times its own overhead on every event; `estimated_s` is the run's time without it.
+- **Time.** Shakedown times its own overhead on every event; `estimated_s` is the run's time without it.
 
 ## Add your own world part
 
@@ -244,18 +244,18 @@ A typed Rust client crate is not written yet. Write integrations and benchmarks 
 ## Core and UI are separate
 
 The core (arenad, the protocol, the kits, the integrations and benchmarks) depends on no UI. The web UI (`ui/`)
-is one client of the HTTP API, as Sculptured's Arena control and this SDK are. arenad can serve a built UI
+is one client of the HTTP API, as Sculptured's Shakedown control and this SDK are. arenad can serve a built UI
 (`ARENA_UI_DIST`) as a convenience; it is not required. A UI served from another origin can call the API when
 arenad lists that origin in `ARENA_CORS_ORIGIN` ([reference.md](reference.md#configuration)); the API still
 answers only a loopback `Host`.
 
-## Cite Arena
+## Cite Shakedown
 
-If Arena helps your research, cite it (see [CITATION.cff](../CITATION.cff)):
+If Shakedown helps your research, cite it (see [CITATION.cff](../CITATION.cff)):
 
 ```bibtex
-@software{arena,
-  title  = {Arena: a rewindable staging environment for multi-agent systems},
+@software{shakedown,
+  title  = {Shakedown: a rewindable staging environment for multi-agent systems},
   author = {{Sculptured}},
   year   = {2026},
   url    = {https://github.com/Sculptured/Arena},

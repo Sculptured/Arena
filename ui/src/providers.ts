@@ -129,7 +129,7 @@ export function providerOptions(list: ProviderStatus[], current: string): Provid
 /** Why an open agent on `provider` with `model` can't run, if the UI can tell. */
 export function modelProblem(provider: string, model: string | null | undefined, list: ProviderStatus[]): string | null {
   const s = list.find((x) => x.id === provider);
-  if (!s && list.length) return `${provider} is not configured on this arena`;
+  if (!s && list.length) return `${provider} is not configured on this Shakedown core`;
   if (s && providerState(s) === 'unavailable') return `${s.label} is unavailable${s.why ? `: ${s.why}` : ''}`;
   if (!model?.trim() && !hasDefaultModel(provider)) return `Name a model for ${s?.label ?? providerName(provider)}`;
   return null;

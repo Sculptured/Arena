@@ -1,16 +1,16 @@
 # Concepts
 
-How Arena models an experiment and a run: the world a run happens in, the team that works in it, and how a
+How Shakedown models an experiment and a run: the world a run happens in, the team that works in it, and how a
 run is recorded, scored and compared.
 
 Three nouns and one verb. An **environment** is the simulated systems (a benchmark's world). A **scenario** is
 what happens to it (a task and its disruptions). An **agent setup** is a model, a team structure and its rules.
 An **experiment** runs each of 1 to 4 setups N times on the same environment and scenario and compares them.
 
-Arena is a staging environment. It observes and never dictates: it knows every agent so that it can monitor,
+Shakedown is a staging environment. It observes and never dictates: it knows every agent so that it can monitor,
 record and save it, but it imposes no team shape, order, permission or handoff protocol of its own; limits are
 the environment's, enforced by its systems.
-Whatever the design does in production, it does here. Arena is slower than production (it saves the world and
+Whatever the design does in production, it does here. Shakedown is slower than production (it saves the world and
 writes the record at every step), so it times its own work and reports what the run would take without it. The protocol each program speaks is in [protocol.md](protocol.md); routes, settings and disk use
 are in [reference.md](reference.md).
 
@@ -19,7 +19,7 @@ are in [reference.md](reference.md).
 - **Integration**: a program, in any language, that puts one kind of system in the world (a database, a folder
   of files, a Docker Compose project, a simulator). It starts instances, runs tool calls, saves an instance's
   state, starts from a save, shows the state (`inspect`) and compares two states (`diff`). In `describe` it
-  declares its tools, how it can restore, and whether it uses the arena clock.
+  declares its tools, how it can restore, and whether it uses the Shakedown clock.
 - **Part**: one instance of an integration in a world, with a name and a config.
 - **World**: the list of parts a benchmark names. Tool names must be unique across a world.
 - **Benchmark**: a package that names a world and brings tasks, instructions for the agents, tools, the data
@@ -48,7 +48,7 @@ are in [reference.md](reference.md).
   escalate, flag or ask_human. Counted per run.
 - **Safety check**: a named check a benchmark marks `safety: true`: an unsafe action, not a missed goal. Suites
   count its failures apart from the score.
-- **Clock**: parts with `uses_clock` get the arena clock, which runs with real time (times
+- **Clock**: parts with `uses_clock` get the Shakedown clock, which runs with real time (times
   `ARENA_CLOCK_SPEED`) while agents work and stands still while the world is saved or restored and while the
   record is written, so time-based world logic sees about the time it would see in production.
 
@@ -80,7 +80,7 @@ rerun panel show, per part, how it will be restored and, for a replay, an estima
 A team is a description: agents, each with an id, a name, a kind, a model and a prompt. It is not a protocol.
 Every agent may call every one of the world's tools, writes included, unless its team marks it `read_only`: then
 it is given only the read tools, and a write call is refused and recorded. Who does what is the team's design,
-not arena's. `GET /api/team/default` gives the team the benchmark suggests (the retail example suggests a
+not Shakedown's. `GET /api/team/default` gives the team the benchmark suggests (the retail example suggests a
 read-only triage, then a resolver; pharma and factory suggest a single agent), every agent Claude Code with model
 `sonnet` unless the query names another kind, model or provider. A benchmark that suggests none gets one generic
 agent. A benchmark may suggest more teams (`GET /api/teams`), each with the runner its prompts are written for:
@@ -204,7 +204,7 @@ restore mode.
   history before the fork point (its wakes with their input, its tool calls with their results, the work it gave,
   its reports and messages, and how its turns ended). The agents that were working at the fork point (woken, their
   turn not ended) carry on at once; mail recorded before the fork point that no turn of its agent had taken is
-  delivered; the others wait for work; the lead's idle wakes so far still count. arena's own notices to the lead
+  delivered; the others wait for work; the lead's idle wakes so far still count. Shakedown's own notices to the lead
   (an agent failed) are in the input of the turn that got them, not recorded on their own. A fork of an
   `external` run starts where asked: how its agents resume is its design's choice
   ([External designs](#external-designs)).
@@ -220,7 +220,7 @@ restore mode.
 
 ## External designs
 
-A design that lives in its own code (or in Sculptured) drives a run itself, and arena records it:
+A design that lives in its own code (or in Sculptured) drives a run itself, and Shakedown records it:
 
 1. `POST /api/runs` with `runner: "external"` starts the world and records `RunStart`; the team may be empty.
 2. `POST /api/branches/{id}/agents` registers an agent, at any time during the run. The answer gives its MCP
@@ -229,7 +229,7 @@ A design that lives in its own code (or in Sculptured) drives a run itself, and 
 3. The design drives its agents however it likes, through those endpoints. Every tool call, model call, note and
    message is recorded as in arenad's own runners. A CLI agent's model calls don't pass through the gateway, so
    the design reports each one its client saw (`POST .../agents/{agent}/usage`: the call's tokens, cache tokens
-   included, and the model's context window; or a compaction of its context), and arena records it as a
+   included, and the model's context window; or a compaction of its context), and Shakedown records it as a
    `model_call` without request or response. `POST .../agents/{agent}/end` records that an agent is done, with
    the tokens and cost the design reports for it. `GET /api/tasks` gives the ticket and the instructions to give
    the agents.
@@ -262,7 +262,7 @@ entry: unknown, not guessed. Named checks keep their `safety` flag in the run's 
 Each tool call also records `duration_ms`, how long the tool ran in the world (gate checks and saves left out;
 absent for a call that reached no part, and in older runs).
 
-Arena's web UI shows a run in the same control form as Sculptured Control (`/control/{run}/{branch}`): the agents
+Shakedown's web UI shows a run in the same control form as Sculptured Control (`/control/{run}/{branch}`): the agents
 as units and the world's parts as equipment, labelled with their kind, product, what they stand in for and
 whether they are simulated, with the action flows between them; a timeline with a lane per agent, each tool call
 marked by system kind and read or write (writes solid, reads hollow, approvals and refusals as interlocks, errors
@@ -303,8 +303,8 @@ Only the built-in suite has been run (2026-11-07).
 
 ## Overhead and estimates
 
-On every step arena times its own work apart from the agents' and the world's. Each recorded event carries
-`overhead_ms`, the time arena spent since the branch's previous event, per kind: `restore` (starting the world from
+On every step Shakedown times its own work apart from the agents' and the world's. Each recorded event carries
+`overhead_ms`, the time Shakedown spent since the branch's previous event, per kind: `restore` (starting the world from
 a save or by replay), `save`, `record` (writing the record), `gateway` and `mcp` (the endpoints' own handling,
 besides the provider's answer and the tool's run), `gate` (gate checks), `link` (link calls a step set off),
 `wait` (waiting for the branch's step lock, which keeps steps and saves in one order) and `score` (the final saves
@@ -324,7 +324,7 @@ start_seq`), as compare does:
 - **cost** per agent: the cost the provider reported (`reported`; Claude Code's own figure is an API-equivalent
   estimate); `no API charge` for a local model; otherwise tokens times the list price in `docs/prices.toml`,
   labelled `list-price estimate` with the price's source and date (base input and output prices only: caching,
-  batch and long-context prices are not modelled); otherwise `unknown`. Arena never makes up a price. The branch's
+  batch and long-context prices are not modelled); otherwise `unknown`. Shakedown never makes up a price. The branch's
   cost is the sum when every agent's is known (labelled `mixed` when their labels differ), else `unknown`.
 
 ## AI review

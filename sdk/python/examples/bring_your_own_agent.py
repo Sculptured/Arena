@@ -1,4 +1,4 @@
-"""Bring your own agent: your code drives the agents, Arena gives each one the world's tools (an MCP
+"""Bring your own agent: your code drives the agents, Shakedown gives each one the world's tools (an MCP
 endpoint) and a model gateway (OpenAI-compatible), and records everything.
 
     uv run python examples/bring_your_own_agent.py [task_id] [claude-code|openai|openrouter|anthropic] [model]

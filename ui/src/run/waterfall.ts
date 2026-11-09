@@ -78,7 +78,7 @@ function stepSpans(e: Event, t0: number, info: WorldInfo): TraceSpan[] {
   const step: TraceSpan = { seq: e.seq, kind: 'step', ...stepLabel(e, info), start: end - dur, end, depth: 1 };
   const over = Object.entries(obj(p.overhead_ms)).filter(([, v]) => typeof v === 'number' && v > 0.05) as [string, number][];
   const rows = over.map(([k, ms]): TraceSpan => ({
-    seq: null, kind: 'overhead', label: `arena · ${OVERHEAD_WORDS[k] ?? k}`, detail: '', start: step.start, end: step.start + ms, depth: 2, abnormal: false, write: false,
+    seq: null, kind: 'overhead', label: `Shakedown · ${OVERHEAD_WORDS[k] ?? k}`, detail: '', start: step.start, end: step.start + ms, depth: 2, abnormal: false, write: false,
   }));
   return [step, ...rows];
 }

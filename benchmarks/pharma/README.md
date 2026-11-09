@@ -116,7 +116,7 @@ named by its PO number or its ERP sales order.
 
 `data/teams.json` holds the three deployments the benchmark suggests, as data a design (a Sculptured board, an
 external runner) can use: each role's short prompt, the tool groups its decisions need, the change actions it proposes,
-and the arenad runner its prompts are written for. Arena imposes none of it. arenad offers the first as its default
+and the arenad runner its prompts are written for. Shakedown imposes none of it. arenad offers the first as its default
 team and the others one click away (`teams` in `describe`; `arena-pharma --team dispatch` or `--team team` makes
 another the default).
 
@@ -170,7 +170,7 @@ the ERPNext and Twenty images, and arenad stopped. It is `opt_in`.
 `live_pharma_a_disruption_shows_in_the_twin` (arenad's `tests/pharma.rs`, with the Sculptured build of 2026-11-04 as
 `ARENA_SCULPTURED_BINARY`; the one on `PATH` from 2026-10-24 lacks the changes route the approvals part needs) passed
 once: the base incident with Tundra full after its first quote, with the coordinated team scripted (each role's part
-written as code, no model; Arena no longer has that team, and the live tests with a real model have not run on this
+written as code, no model; Shakedown no longer has that team, and the live tests with a real model have not run on this
 world yet). The disruption fired as a world event, the scripted logistics turned to Borealis, all 13 checks passed, and 56 views were recorded, Tundra's
 lane going from available to no capacity and orders covered from 0 to 7 of 8; from each view's step to the view took
 27 ms on average, 86 ms at most (event timestamps, so the view call and its recording). The older live test of the

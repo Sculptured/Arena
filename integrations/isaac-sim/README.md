@@ -9,10 +9,10 @@ package `isaac-sim-mirror` (see `integrations/isaac-sim-mirror/README.md`)
 only follows a live plant.
 
 **The factory example this package wraps is not public yet.** Its default `isaac_path` points into a private
-`Sculptured-Examples` checkout next to the arena checkout; without one the package can't start and every test in
+`Sculptured-Examples` checkout next to the `Arena` checkout; without one the package can't start and every test in
 `tests/` is skipped (pytest says why). Outside contributors can read and change the code, but can't run it.
 
-The Ridgeline factory as an `arena-part/1` integration, on the arena clock. In the factory demo
+The Ridgeline factory as an `arena-part/1` integration, on the Shakedown clock. In the factory demo
 (`Sculptured-Examples/factory`, branch `isaac-plant`), Isaac Sim 6.2 **is** the plant. This integration wraps
 that demo's `isaac/factory.py` class `Factory` without editing it. Factory is plain Python and reaches the
 simulation only through a `PlantIO`.
@@ -45,9 +45,9 @@ changes the fingerprint.
 
 | key | default |
 |---|---|
-| `isaac_path` | `Sculptured-Examples/factory/isaac`, next to the arena checkout |
+| `isaac_path` | `Sculptured-Examples/factory/isaac`, next to the `Arena` checkout |
 | `data_path` | `<isaac_path>/../data/ridgeline.json`, passed to `press_model.load_data` |
-| `plant_start` | `2026-03-10T06:00:00`, the plant clock at arena time 0 |
+| `plant_start` | `2026-03-10T06:00:00`, the plant clock at Shakedown time 0 |
 | `physics_hz` | the factory's `press_model.PHYSICS_HZ` (360) |
 | `scenario` | `true`: `start` begins the PR-A1 wear scenario at once |
 
@@ -65,7 +65,7 @@ changes the fingerprint.
 |---|---|
 | `record` | none. An MP4 path, relative to `$ARENA_SAVES/isaac-sim/`. Each instance writes `<stem>-<instance>.mp4` (arenad runs a base, then a branch) |
 | `camera` | `auto`: the factory's camera director, which cuts to events. Or `free`, or a rig in the factory's `layout.CAMERAS` |
-| `record_fps` | 30: frames per second of arena time. The MP4 plays at this rate, so it runs in arena time |
+| `record_fps` | 30: frames per second of Shakedown time. The MP4 plays at this rate, so it runs in Shakedown time |
 | `record_height` | 720: the MP4's height; the width follows at 16:9 |
 | `scene` | `ridgeline`: the factory's own scene. `showcase`: a dressed stamping plant (see "The showcase scene"). Visuals only |
 
@@ -74,7 +74,7 @@ changes the fingerprint.
 - It reuses the factory's own code, read only: `visuals.Visuals` (tower lights, labels, crate, truck, camera
   director) and `record.Recorder` (a Replicator render product on the main camera, piped to ffmpeg), headless at
   1280x720 with the RaytracedLighting renderer, as `run.py --headless --record` does. The difference is the clock:
-  a frame is rendered every `physics_hz / record_fps` physics steps, so frames fall on arena time, not wall time.
+  a frame is rendered every `physics_hz / record_fps` physics steps, so frames fall on Shakedown time, not wall time.
 - Label textures go to `<stem>-<instance>_labels/` beside the MP4, and the recorder's `<stem>-<instance>.json`
   (frames, duration) too. The MP4 is finished on `stop` (or when the process exits normally); the log says
   `[isaac-sim] wrote <path>`. Fetch it from the machine the program ran on.
@@ -118,10 +118,10 @@ starts (`isaac_part/showcase_*.py`). It changes only what is seen:
 
 **Ran on Isaac Sim (RunPod, 2026-11-05).** An NVIDIA RTX A5000 (24 GB, driver 595.91.07), the image
 `nvcr.io/nvidia/isaac-sim:6.2.0`, `remote/render_showcase.py --seconds 100` (seed 7, 1280x720, 30 fps, RaytracedLighting):
-- The MP4 has 3000 frames, 100.0 s at 30 fps, so it plays in arena time. The plant's own events in that run: zone C at
+- The MP4 has 3000 frames, 100.0 s at 30 fps, so it plays in Shakedown time. The plant's own events in that run: zone C at
   35 s, zone D at 48 s, the trip at 64 s (the stand-in, seed 7: 33.7 s, 46.4 s, 61.9 s).
-- Wall time: 10.9 to 11.1 s per arena second with the recording. Physics alone (no frames rendered) was 5.8 to 6.0 s per
-  arena second with the showcase scene loaded, and 6.4 s with the factory's own scene on the same pod, so the dressing
+- Wall time: 10.9 to 11.1 s per Shakedown second with the recording. Physics alone (no frames rendered) was 5.8 to 6.0 s per
+  Shakedown second with the showcase scene loaded, and 6.4 s with the factory's own scene on the same pod, so the dressing
   adds no physics cost. A frame cost 22 to 24 ms for the visuals in Python and 129 to 132 ms to render and hand to
   ffmpeg.
 - Seen on 6.2: changing a material's `emissive_intensity` while running did not show in the render (texture and
@@ -162,8 +162,8 @@ zone's restore (gateway), a late truck (dock board), the cell stopping or starti
 or more (energy board). `render` in the config sets the renderer's carb settings (e.g. the path tracer).
 
 **Ran on Isaac Sim (RunPod, 2026-11-08).** An RTX 3090 (24 GB, driver 580.95.05), `nvcr.io/nvidia/isaac-sim:6.2.0`:
-- 1080p, 24 fps, RTX real-time: 12.1 s of wall time per arena second (208 ms to render a frame, 25 ms of visuals).
-- 2160p (4K), 24 fps: 22.8 s per arena second (523 ms a frame). Path-traced 4K stills (64 samples, OptiX denoiser) took
+- 1080p, 24 fps, RTX real-time: 12.1 s of wall time per Shakedown second (208 ms to render a frame, 25 ms of visuals).
+- 2160p (4K), 24 fps: 22.8 s per Shakedown second (523 ms a frame). Path-traced 4K stills (64 samples, OptiX denoiser) took
   about 30 s each.
 - The first start on a fresh pod took 16 min (shader and asset caches); later ones about 1 min.
 - On an RTX A5000 host with driver 550.144.03 DLSS was unavailable ("NGX isn't enabled"): frames were grainy and took
@@ -172,31 +172,31 @@ or more (energy board). `render` in the config sets the renderer's carb settings
 - The image's entrypoint (`runheadless.sh`) ignores a start command: create the pod with an entrypoint override
   (RunPod's REST API `dockerEntrypoint`) to start `remote/sshd.py`.
 - Two hero runs of the factory benchmark recorded here (`benchmarks/factory/README.md`); the recordings' sidecars
-  give their frames and duration in arena time.
+  give their frames and duration in Shakedown time.
 
-## The arena clock
+## The Shakedown clock
 
 - The factory is never edited. The part replaces two names on the imported `factory` module:
-  - `time`, whose `time()` is the plant epoch plus arena time;
-  - `datetime`, whose `now()` is `plant_start` plus arena time.
+  - `time`, whose `time()` is the plant epoch plus Shakedown time;
+  - `datetime`, whose `now()` is `plant_start` plus Shakedown time.
 
   That makes `Factory.reset`'s plant clock, the promised dates and each event's `wall` the same in every run.
 - `Factory` is built with `erp=None` and `triggers=None`, and its threads are never started. The part calls its
   methods directly, under its lock, and then `drain()`s its inbox.
 - `uses_clock: true`. `advance(clock_ms)` runs fixed steps of `1/physics_hz` s up to `clock_ms`, counted from
-  arena time 0. How the advances are split doesn't matter.
+  Shakedown time 0. How the advances are split doesn't matter.
 - `advance` returns the factory events since the last `advance` as `{kind, text, data}`. `data` is
   `{source, seq, t, detail}`: `t` is the plant time, `detail` is the factory event's own data, and `wall` is
   dropped. The factory's keys and these never overwrite each other.
 - `call_tool` first steps to its `clock_ms`, then acts. Its events stay queued for the next `advance`.
-- `start` calls `start_scenario(seed)` with the arena seed. That resets with the seed, so the floor noise
+- `start` calls `start_scenario(seed)` with the Shakedown seed. That resets with the seed, so the floor noise
   follows it. With `scenario: false`, `start` calls `reset(seed)` instead.
 - The plant clock advances by the factory's own `timedelta(seconds=dt)`, which rounds 1/360 s to 2778 µs. So it
-  runs 0.016 % ahead of arena time, as it would in the app.
+  runs 0.016 % ahead of Shakedown time, as it would in the app.
 
 **Speed of the stand-in (measured on this machine):** 120 s of physics at 360 Hz took 0.91 s, or 7.6 ms per
-second of physics, about 130 times real time. One arena hour costs about 30 s. With seed 7, zone C came at 33.7
-s of arena time, zone D at 46.4 s and the trip at 61.9 s. `test_scenario.py` expects the trip between 55 and
+second of physics, about 130 times real time. One Shakedown hour costs about 30 s. With seed 7, zone C came at 33.7
+s of Shakedown time, zone D at 46.4 s and the trip at 61.9 s. `test_scenario.py` expects the trip between 55 and
 66 s.
 
 ## Tools
@@ -216,13 +216,13 @@ The names and arguments are those of the factory's `mcp/src/ridgeline_mcp/floor.
 | `set_line_status(line, status, rate)` | write | `set_line` (`rate` is `boost`) | `line/<id>` |
 | `add_shipment(part, origin, carrier, transit_hours, ref)` | write | `add_shipment` | `shipment/<id>` |
 
-- `wait_for_event` returns at once, with `timed_out` when nothing matches yet. Inside `call_tool` the arena clock
+- `wait_for_event` returns at once, with `timed_out` when nothing matches yet. Inside `call_tool` the Shakedown clock
   stands still, so a wait would never end. `timeout_s` is accepted and ignored.
 - `proposal_id` is accepted and not verified here. A benchmark can gate the tool on the `sculptured` part
   (`docs/protocol.md`, "Gates on tools").
 - `add_shipment` is what the factory's hub calls when a carrier is booked. In a world it comes through a
   benchmark's link (`docs/protocol.md`, "Links between parts"), and then agents don't get the tool.
-- The plant runs without ERPNext in the arena, so it has no Work Orders. `orders` is empty, and `predict_move`
+- The plant runs without ERPNext in Shakedown, so it has no Work Orders. `orders` is empty, and `predict_move`
   refuses: "predict_move needs the plant's Work Orders, which come from ERPNext; the plant runs without ERPNext
   in the arena".
 - Records the factory would file in ERPNext (lockouts, statements, inspection notes) come out as events saying
@@ -237,7 +237,7 @@ The names and arguments are those of the factory's `mcp/src/ridgeline_mcp/floor.
 
 ## Robot cells, the plant's load and its scenario: `cells`, `power`, `plant_scenario`
 
-The factory example has presses only. The arena adds, beside its `Factory` and without editing it
+The factory example has presses only. Shakedown adds, beside its `Factory` and without editing it
 (`isaac_part/equipment.py`), what the factory benchmark's shift task needs. A world that configures neither sees the
 plant as before (no extra keys, events or load).
 
@@ -268,7 +268,7 @@ plant as before (no extra keys, events or load).
 ## Keys, inspect and diff
 
 - Keys come from `state()`: `machine/<id>`, `line/<id>`, `order/<id>`, `technician/<id>`, `operator/<id>`,
-  `shipment/<id>`, `robot/<id>` and `incident/<id>`, and the arena's `cell/<id>`. There are also `plant/clock` (`t`,
+  `shipment/<id>`, `robot/<id>` and `incident/<id>`, and Shakedown's `cell/<id>`. There are also `plant/clock` (`t`,
   `clock`, `speed`, `scenario`, `log_seq`), `plant/sim` and, with `power`, `plant/power`.
 - `diff` compares documents exactly, except for floats inside the physics readings (`sensors` and `pose`
   subtrees). Those count as the same when they differ by at most 0.05 plus 1 % of the larger one, because they
@@ -351,20 +351,20 @@ export ARENA_RUN_ISAAC_SIM="exec ssh -p <port> -i <key> -o BatchMode=yes isaac@<
   `--backend isaac`, ERPNext (`frappe/erpnext:v16.53.0`), `ridgeline-hub` and Sculptured.
 - arenad started the part over `ssh` (`ARENA_RUN_ISAAC_SIM`, `remote/sshd.py` on the pod), with
   `ARENA_CLOCK_SPEED=0.1` and `{"record": "factory-gold.mp4", "camera": "auto", "record_fps": 10}`.
-- The team was the scripted, no-model team, on the gold path. Arena no longer has that team: the factory's live
+- The team was the scripted, no-model team, on the gold path. Shakedown no longer has that team: the factory's live
   test (now `live_factory_team_runs_the_incident_and_arena_scores_it`) runs the benchmark's team on a real model,
   and has not run on Isaac Sim.
 
 **Result.**
 - The branch passed, with all nine checks.
-- Its metrics: 1311.0 s measured, 156.9 s of arena overhead (145.9 s of it restoring the base, mostly ERPNext), so
+- Its metrics: 1311.0 s measured, 156.9 s of Shakedown overhead (145.9 s of it restoring the base, mostly ERPNext), so
   1154.1 s estimated in production. That estimate is at 0.1× clock speed, so it measures the slow clock more than
   the team.
 - The test took 1324 s.
 - The branch started from the base save approximately, so `set_state` (`set_dof_positions` ...) ran on 6.2
   without an error. The continuity of the readings after it was not measured.
 
-**The recording.** 1158 frames, 115.8 s of arena time at 10 fps, 1280x720 H.264, 21.5 MB. The camera director
+**The recording.** 1158 frames, 115.8 s of Shakedown time at 10 fps, 1280x720 H.264, 21.5 MB. The camera director
 cut to PR-A1 near 35 s and near 50 s. From about 65 s to 75 s it showed "Press Line A DOWN" at 0 spm, then went
 back to the wide shot. That is near the stand-in's zone C (33.7 s), zone D (46.4 s) and trip (61.9 s). The events'
 own times were not compared.
@@ -375,11 +375,11 @@ own times were not compared.
 |---|---|
 | First start (shader and asset caches empty) | about 4.5 min |
 | Later starts | 31 s; another plant in the same process: 6 to 8 s |
-| Physics alone | about 4 s of wall time per second of arena time (about 11 ms per 360 Hz step) |
-| Recording at 30 fps | 9.4 s per arena second |
-| Recording at 10 fps | 5.9 s per arena second |
+| Physics alone | about 4 s of wall time per second of Shakedown time (about 11 ms per 360 Hz step) |
+| Recording at 30 fps | 9.4 s per Shakedown second |
+| Recording at 10 fps | 5.9 s per Shakedown second |
 
-That is why the clock ran at 0.1. The plant must step faster than the arena clock runs, or every call waits
+That is why the clock ran at 0.1. The plant must step faster than the Shakedown clock runs, or every call waits
 longer than the last.
 
 **Found and fixed on the way.**

@@ -35,15 +35,15 @@ export function costText(c: Cost): string {
 
 /** The estimate line: production time, or why there is none. */
 export function estimateText(m: Metrics): string {
-  if (m.estimated_s == null) return 'not estimated: this run was recorded before arena timed its own work';
-  return `${secs(m.estimated_s)} s (${secs(m.measured_s)} s measured − ${secs(m.overhead_s)} s arena overhead)`;
+  if (m.estimated_s == null) return 'not estimated: this run was recorded before Shakedown timed its own work';
+  return `${secs(m.estimated_s)} s (${secs(m.measured_s)} s measured − ${secs(m.overhead_s)} s Shakedown overhead)`;
 }
 
 function OverheadTable({ lines }: { lines: [string, string][] }) {
   if (!lines.length) return null;
   return (
     <Table className="text-xs">
-      <thead><tr><Th>Arena overhead</Th><Th className="text-right">Time</Th></tr></thead>
+      <thead><tr><Th>Shakedown overhead</Th><Th className="text-right">Time</Th></tr></thead>
       <tbody>{lines.map(([label, v]) => <Tr key={label}><Td>{label}</Td><Td className="text-right font-mono">{v}</Td></Tr>)}</tbody>
     </Table>
   );

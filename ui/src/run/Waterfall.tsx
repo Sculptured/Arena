@@ -55,7 +55,7 @@ export default function Waterfall({ events, selected, onSelect }: { events: Even
     <div className="min-w-0 py-1">
       <Axis trace={trace} />
       {trace.spans.map((s, i) => <Row key={`${s.seq}-${i}`} s={s} total={trace.total} selected={s.seq != null && s.seq === selected} onSelect={onSelect} />)}
-      <p className="px-3 pt-1.5 text-2xs text-faint">A bar ends when the step was recorded. Arena's own work in a step is listed under it; where it falls inside the step is not recorded. Gaps are waiting or unseen work.</p>
+      <p className="px-3 pt-1.5 text-2xs text-faint">A bar ends when the step was recorded. Shakedown's own work in a step is listed under it; where it falls inside the step is not recorded. Gaps are waiting or unseen work.</p>
     </div>
   );
 }

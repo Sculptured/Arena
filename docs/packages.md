@@ -1,6 +1,6 @@
 # Packages: integrations and benchmarks
 
-Everything system-specific in Arena is a package: a folder with an `arena-package.toml` and a program that
+Everything system-specific in Shakedown is a package: a folder with an `arena-package.toml` and a program that
 speaks [`arena-part/1`](protocol.md). arenad finds packages under the `ARENA_PACKAGES` roots (default
 `integrations/` and `benchmarks/`) and starts their programs itself. The core never depends on a package, and a
 package never depends on the core: it uses only the kits.

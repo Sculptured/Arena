@@ -1,6 +1,6 @@
-# Arena dataset (`arena-dataset/1`)
+# Shakedown dataset (`arena-dataset/1`)
 
-A folder exported by the Arena SDK (`Branch.export`, `Suite.export`, `arena.export.export_branches`). Every
+A folder exported by the Shakedown SDK (`Branch.export`, `Suite.export`, `arena.export.export_branches`). Every
 line of a `.jsonl` file is one JSON object. Times are ISO 8601 in UTC. Fields a core did not record are `null`
 or absent, never guessed.
 
@@ -26,7 +26,7 @@ or absent, never guessed.
 | `score` | share of goal checks passed (safety checks left out) |
 | `safety_violations` | names of failed safety checks |
 | `differing_rows` | keys (`<kind>/<id>`, prefixed `part:` in a world of several parts) that differ from the task's gold world, or the failed named checks |
-| `metrics` | `{measured_s, estimated_s, overhead_s, overhead_ms: {kind: ms}, tokens, cost: {usd, label, source, as_of}, agents: [{agent, kind, model, provider, tokens, prompt_tokens, completion_tokens, cost, model_calls, peak_prompt_tokens, compactions, overhead_s}]}`; `estimated_s` is the time without Arena's own overhead |
+| `metrics` | `{measured_s, estimated_s, overhead_s, overhead_ms: {kind: ms}, tokens, cost: {usd, label, source, as_of}, agents: [{agent, kind, model, provider, tokens, prompt_tokens, completion_tokens, cost, model_calls, peak_prompt_tokens, compactions, overhead_s}]}`; `estimated_s` is the time without Shakedown's own overhead |
 | `events` | number of events of the branch in `events.jsonl` |
 
 ## `events.jsonl`: one line per recorded event
@@ -36,10 +36,10 @@ or absent, never guessed.
 | `run_id`, `branch_id`, `task_id` | where the event belongs |
 | `seq` | the event's step number in its branch, from 1 |
 | `at` | when it was recorded |
-| `agent` | the agent it belongs to, or null for the world and arena |
+| `agent` | the agent it belongs to, or null for the world and Shakedown |
 | `kind` | see below |
 | `inherited` | true for a fork's events before its fork point (copied from its parent; analyse a fork from `start_seq`) |
-| `payload` | the kind's fields, below. Every payload may carry `overhead_ms` (`{restore, save, record, gateway, mcp, gate, link, wait, score, pause?}`): Arena's own time since the previous event |
+| `payload` | the kind's fields, below. Every payload may carry `overhead_ms` (`{restore, save, record, gateway, mcp, gate, link, wait, score, pause?}`): Shakedown's own time since the previous event |
 
 Payloads by `kind`:
 

@@ -34,7 +34,7 @@ describe('actions', () => {
 
   it('labels_stand_ins_with_what_they_stand_in_for_and_simulations_as_simulated', () => {
     const info = worldInfo(events);
-    expect(systemLine(info.systems.lims)).toBe('Arena LIMS, stands in for LabWare, simulated');
+    expect(systemLine(info.systems.lims)).toBe('Shakedown LIMS, stands in for LabWare, simulated');
     expect(systemLine(info.systems.erp)).toBe('ERPNext, stands in for SAP S/4HANA');
     expect(systemLine(null)).toBe('system not stated');
   });

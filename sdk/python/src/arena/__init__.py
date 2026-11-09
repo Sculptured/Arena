@@ -1,4 +1,4 @@
-"""Arena from Python: build environments, run teams, observe, control and export.
+"""Shakedown (code name ``arena``) from Python: build environments, run teams, observe, control and export.
 
     from arena import Arena, Agent
 
@@ -8,7 +8,7 @@
         print(event.summary())
     print(branch.check())
 
-See docs/sdk.md in the Arena repository.
+See docs/sdk.md in the Shakedown repository (Sculptured/Arena).
 """
 
 from .client import DEFAULT_URL, AgentEndpoint, Arena, Branch, Suite

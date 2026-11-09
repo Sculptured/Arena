@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-labelledby="title desc">
-  <title id="title">Arena</title>
-  <desc id="desc">Arena: test agent systems in a simulated copy of their world. Two agent setups, each run five times on the same scenario, their runs as rows of squares.</desc>
+  <title id="title">Shakedown</title>
+  <desc id="desc">Shakedown: test agent systems in a simulated copy of their world. Two agent setups, each run five times on the same scenario, their runs as rows of squares.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0e1a20"/>
@@ -15,7 +15,7 @@
     </style>
   </defs>
   <rect x="0.5" y="0.5" width="1279" height="339" rx="24" fill="url(#bg)" stroke="#2a3d45"/>
-  <text x="66" y="150" class="title">Arena</text>
+  <text x="66" y="150" class="title">Shakedown</text>
   <text x="72" y="208" class="tag">Test agent systems in a simulated copy of their world</text>
   <rect x="72" y="252" width="231" height="36" rx="18" fill="#1c3038" stroke="#2c444c"/><text x="187.5" y="276" text-anchor="middle" class="chip">Real systems, simulated</text><rect x="315" y="252" width="214" height="36" rx="18" fill="#1c3038" stroke="#2c444c"/><text x="422.0" y="276" text-anchor="middle" class="chip">Hard limits, enforced</text><rect x="541" y="252" width="231" height="36" rx="18" fill="#1c3038" stroke="#2c444c"/><text x="656.5" y="276" text-anchor="middle" class="chip">Every setup run N times</text><rect x="784" y="252" width="137" height="36" rx="18" fill="#1c3038" stroke="#2c444c"/><text x="852.5" y="276" text-anchor="middle" class="chip">Side by side</text>
   <text x="910" y="123" text-anchor="end" class="lbl">Setup A</text>

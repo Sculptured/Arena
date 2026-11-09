@@ -1,5 +1,5 @@
 name: Idea or feature request
-description: Suggest something Arena should do
+description: Suggest something Shakedown should do
 labels: [enhancement]
 body:
   - type: textarea

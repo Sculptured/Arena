@@ -10,7 +10,7 @@ and `arena-part-check` (passed) ran against a local build of `sculptured` on the
 by hand (no routine test runs them). The test is skipped, and says so, when no
 Sculptured program is found. A save restores only with the same Sculptured build.
 
-Sculptured's approvals in the arena world: changes proposed to a business system and the decisions on
+Sculptured's approvals in the Shakedown world: changes proposed to a business system and the decisions on
 them. No agent of Sculptured's runs for it: the tools propose through Sculptured's route for outside
 systems. Each instance is a `sculptured serve` of its own; the tools reach it only through Sculptured's HTTP
 API.

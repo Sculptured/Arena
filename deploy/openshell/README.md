@@ -9,7 +9,7 @@ recorded on the run's timeline as world events (part `sandbox`, kind `denial`) w
 |---|---|
 | `claude` | Stands in for `claude`: makes a sandbox, runs the real Claude Code in it, posts its denials, deletes it. |
 | `denials.py` | Turns `openshell logs` lines into events and posts them to `POST /api/branches/{id}/sandbox-events`. |
-| `factory-01.yaml` | The policy for Factory-01: the agent may reach only Arena's MCP endpoint and Anthropic's API. |
+| `factory-01.yaml` | The policy for Factory-01: the agent may reach only Shakedown's MCP endpoint and Anthropic's API. |
 | `Dockerfile` | The sandbox image: OpenShell's Ubuntu base and this machine's Claude Code binary. |
 
 ## Set up (no root needed; Docker driver)

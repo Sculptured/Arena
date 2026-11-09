@@ -137,7 +137,7 @@ describe('provider options', () => {
     expect(providerOptions(HEALTH, 'openrouter').find((o) => o.id === 'openai')!.disabled).toBe(true);
     expect(providerOptions(HEALTH, 'local:gone').at(-1)).toEqual({ id: 'local:gone', text: 'local:gone (not configured)', disabled: false });
     expect(providerOptions(HEALTH, 'openrouter').find((o) => o.id === 'local:ollama')).toMatchObject({ disabled: false, text: 'ollama (local, 127.0.0.1:11434) (not checked)' });
-    expect(modelProblem('local:gone', 'm', HEALTH)).toBe('local:gone is not configured on this arena');
+    expect(modelProblem('local:gone', 'm', HEALTH)).toBe('local:gone is not configured on this Shakedown core');
     expect(modelProblem('openai', 'gpt-x', HEALTH)).toBe('OpenAI is unavailable: OPENAI_API_KEY is not set');
   });
 });

@@ -343,7 +343,7 @@ async fn check_disk(state: &AppState) -> Result<(), ApiError> {
 }
 
 /// Why a run is refused while the saves are over the limit.
-pub const SAVES_FULL: &str = "the arena's saves use more than the limit; delete old runs";
+pub const SAVES_FULL: &str = "Shakedown's saves use more than the limit; delete old runs";
 
 /// True when any branch of the run is running (stored as running, or live in this process).
 async fn run_is_running(state: &AppState, id: &str) -> Result<bool, ApiError> {

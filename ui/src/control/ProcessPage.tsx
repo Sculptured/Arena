@@ -58,7 +58,7 @@ export default function ProcessPage() {
   return (
     <>
       <PageHeader title={`Process · ${nameOf(task) || 'Run'}`} status={<StatusChip status={d.status} />}
-        meta={!info.known && 'Recorded before Arena kept each tool\'s system and effect: those are shown as unknown.'}
+        meta={!info.known && 'Recorded before Shakedown kept each tool\'s system and effect: those are shown as unknown.'}
         actions={<RunMenu runId={runId} d={d} page="process" step={selected} />} />
       <PageBody>
         {error && <ErrorState error={error} onRetry={reload} />}

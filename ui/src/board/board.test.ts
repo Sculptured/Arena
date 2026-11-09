@@ -102,13 +102,13 @@ describe('import', () => {
     expect(r.team.board?.decides).toEqual({ check: ['Release go/no-go'] });
   });
 
-  it('refuses kinds Arena cannot run, by name, instead of swapping them', () => {
+  it('refuses kinds Shakedown cannot run, by name, instead of swapping them', () => {
     const d = { ...design, agents: [{ ...design.agents[0], kind: 'opencode', name: 'Coder' }] };
     const r = importTeam(JSON.stringify(d));
-    expect('error' in r && r.error).toContain("Arena can't run OpenCode agents yet: Coder");
+    expect('error' in r && r.error).toContain("Shakedown can't run OpenCode agents yet: Coder");
   });
 
-  it('takes an Arena team as it is, and says what is wrong with anything else', () => {
+  it('takes a Shakedown team as it is, and says what is wrong with anything else', () => {
     const t = team(2);
     expect(importTeam(JSON.stringify(t))).toEqual({ team: t, from: 'Arena' });
     expect(importTeam('{nope')).toEqual({ error: expect.stringContaining("isn't a JSON file") });
