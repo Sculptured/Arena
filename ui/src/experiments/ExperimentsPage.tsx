@@ -1,5 +1,5 @@
 import { FlaskConical, GitCompare, Plus } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ago, formatTime } from '../components';
 import { Button } from '../components/ui/button';
@@ -12,25 +12,14 @@ import { experimentMark } from '@/lib/mark';
 import { taskName } from '../home/summary';
 import { useTasks } from '../home/useHome';
 import { cn } from '@/lib/cn';
+import { usePolled } from '@/lib/usePolled';
 import { experiments as fetchExperiments } from './api';
 import type { ListedExperiment, SetupLine } from './types';
 
 /** While any experiment runs, the list is read again this often. */
 const POLL_MS = 3000;
 
-function useList() {
-  const [list, setList] = useState<ListedExperiment[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(() => { fetchExperiments().then((l) => { setList(l); setError(null); }).catch((e) => setError(String(e.message ?? e))); }, []);
-  useEffect(() => { load(); }, [load]);
-  const running = !!list?.some((e) => e.status === 'running');
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(load, POLL_MS);
-    return () => clearInterval(t);
-  }, [running, load]);
-  return { list, error, load };
-}
+const anyRunning = (l: ListedExperiment[]) => l.some((e) => e.status === 'running');
 
 /** A setup in a row: its name and a bar of how many of its runs passed, out of all it asked for. */
 function SetupBar({ s, label }: { s: SetupLine; label: string }) {
@@ -86,7 +75,7 @@ function Empty() {
 /** The experiments, newest first; pick two or more to see their setups side by side. */
 export default function ExperimentsPage() {
   const nav = useNavigate();
-  const { list, error, load } = useList();
+  const { data: list, error, reload: load } = usePolled(fetchExperiments, anyRunning, POLL_MS, 'experiments');
   const { tasks } = useTasks();
   const [picked, setPicked] = useState<string[]>([]);
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id].slice(-4)));

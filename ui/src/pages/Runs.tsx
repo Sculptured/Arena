@@ -1,6 +1,6 @@
 import type { ColumnDef } from '@tanstack/react-table';
 import { MoreHorizontal, Play } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { deleteRun, runs as fetchRuns } from '../api';
@@ -16,21 +16,11 @@ import { Panel } from '../components/ui/panel';
 import { EmptyState, ErrorState } from '../components/ui/state';
 import { type BranchRow, branchRows, runIsRunning, runTitle } from '../runs/runsTable';
 import type { RunSummary } from '../types';
+import { usePolled } from '@/lib/usePolled';
 
-/** The runs, polled every 3 s while any of them runs. */
+/** The runs, read again every 3 s while any of them runs. */
 function useRuns() {
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(() => {
-    fetchRuns().then((r) => { setRuns(r); setError(null); }).catch((e) => setError(String(e.message ?? e)));
-  }, []);
-  useEffect(() => { refresh(); }, [refresh]);
-  const anyRunning = useMemo(() => !!runs?.some(runIsRunning), [runs]);
-  useEffect(() => {
-    if (!anyRunning) return;
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [anyRunning, refresh]);
+  const { data: runs, error, reload: refresh } = usePolled(fetchRuns, (r) => r.some(runIsRunning), 3000, 'runs');
   return { runs, error, refresh };
 }
 

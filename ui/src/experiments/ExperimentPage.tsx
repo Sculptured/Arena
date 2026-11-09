@@ -1,5 +1,5 @@
 import { Square } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogActions, DialogContent } from '../components/ui/dialog';
@@ -10,6 +10,7 @@ import { StatusMark } from '../components/ui/status';
 import { experimentMark } from '@/lib/mark';
 import { taskName } from '../home/summary';
 import { useTasks } from '../home/useHome';
+import { usePolled } from '@/lib/usePolled';
 import { experiment as fetchExperiment, stopExperiment } from './api';
 import { columnOf } from './model';
 import { Checks, Columns } from './Results';
@@ -21,22 +22,10 @@ const POLL_MS = 2000;
 
 /** The experiments named, read again while any of them runs. */
 function useExperiments(ids: string[]) {
-  const [list, setList] = useState<Experiment[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
   const key = ids.join(',');
-  useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = () => Promise.all(key.split(',').filter(Boolean).map(fetchExperiment)).then((v) => {
-      if (!alive) return;
-      setList(v); setError(null);
-      if (v.some((e) => e.status === 'running')) timer = setTimeout(load, POLL_MS);
-    }).catch((e) => alive && setError(String(e.message ?? e)));
-    load();
-    return () => { alive = false; clearTimeout(timer); };
-  }, [key, tick]);
-  return { list, error, reload: () => setTick((t) => t + 1) };
+  const load = () => Promise.all(key.split(',').filter(Boolean).map(fetchExperiment));
+  const { data, error, reload } = usePolled(load, (v) => v.some((e) => e.status === 'running'), POLL_MS, key);
+  return { list: data, error, reload };
 }
 
 /** "Larchmont batch on hold · ▼ Usual courier loses capacity": the scenario in a line. */
