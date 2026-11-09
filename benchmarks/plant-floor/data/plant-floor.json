@@ -1,0 +1,274 @@
+{
+ "plant": {
+  "site": "Ridgeline Pumps \u00b7 Plant 2 (assembly)",
+  "endpoint_label": "opc.tcp://plant2.ridgeline.local:4840",
+  "start_label": "Mon 2026-11-16 06:00",
+  "horizon_h": 64,
+  "power": {
+   "cap_kw": 1050,
+   "base_kw": 250,
+   "usd_per_kwh": 0.12
+  },
+  "overtime": {
+   "nights": [
+    "mon",
+    "tue"
+   ],
+   "usd_per_night": 3000
+  },
+  "motors_on_hand": 150,
+  "products": {
+   "P-200": {
+    "name": "P-200 pump",
+    "motor": true
+   },
+   "V-50": {
+    "name": "V-50 valve",
+    "motor": false
+   }
+  },
+  "lines": [
+   {
+    "id": "L1",
+    "name": "Pump line 1",
+    "makes": {
+     "P-200": 20
+    },
+    "manual_rate": 12,
+    "kw": 200,
+    "needs_cell": "R1",
+    "mode": "AUTO",
+    "queue": [
+     "SO-2002",
+     "SO-2004"
+    ]
+   },
+   {
+    "id": "L2",
+    "name": "Valve line 2",
+    "makes": {
+     "V-50": 25
+    },
+    "kw": 300,
+    "mode": "AUTO",
+    "queue": [
+     "SO-2003"
+    ]
+   },
+   {
+    "id": "L3",
+    "name": "Flex line 3",
+    "makes": {
+     "P-200": 15,
+     "V-50": 20
+    },
+    "kw": 300,
+    "mode": "AUTO",
+    "product": "V-50",
+    "changeover_h": 2,
+    "queue": []
+   }
+  ],
+  "cell": {
+   "id": "R1",
+   "name": "Robot weld cell R1",
+   "kw": 150,
+   "repair_h": 8
+  },
+  "orders": [
+   {
+    "id": "SO-2002",
+    "customer": "Northwind Energy",
+    "product": "P-200",
+    "qty": 60,
+    "due": "Wed 22:00",
+    "penalty_usd": 5000
+   },
+   {
+    "id": "SO-2003",
+    "customer": "Ridgeway Water",
+    "product": "V-50",
+    "qty": 900,
+    "due": "Tue 22:00",
+    "penalty_usd": 5000
+   },
+   {
+    "id": "SO-2004",
+    "customer": "Calder Farms",
+    "product": "P-200",
+    "qty": 80,
+    "due": "Wed 22:00",
+    "penalty_usd": 5000
+   }
+  ],
+  "scenarios": {
+   "disrupted": {
+    "rush": {
+     "id": "SO-2001",
+     "customer": "Northwind Energy",
+     "product": "P-200",
+     "qty": 120,
+     "due": "Tue 06:00",
+     "penalty_usd": 25000
+    },
+    "cell_fault": "Servo over-temperature on R1, axis 3; lockout/tagout applied",
+    "events": [
+     [
+      "supplier",
+      "Apex Motors plant fire: PO-4471 (motors for the week) will not ship; no M-15 motors arrive before Friday"
+     ],
+     [
+      "demand",
+      "Northwind Energy demand spike: rush order SO-2001, 120 P-200 pumps, due Tue 06:00"
+     ],
+     [
+      "cell",
+      "Robot weld cell R1 faulted (servo over-temperature); lockout/tagout applied"
+     ]
+    ]
+   }
+  }
+ },
+ "erp": {
+  "company": "Ridgeline Pumps",
+  "today": "2026-11-16",
+  "po_limit_usd": 5000,
+  "lines": [
+   {
+    "id": "L1",
+    "name": "Pump line 1",
+    "makes": "P-200 pumps"
+   },
+   {
+    "id": "L2",
+    "name": "Valve line 2",
+    "makes": "V-50 valves"
+   },
+   {
+    "id": "L3",
+    "name": "Flex line 3",
+    "makes": "pumps or valves"
+   }
+  ],
+  "items": [
+   {
+    "id": "M-15",
+    "name": "M-15 motor",
+    "on_hand": 150
+   }
+  ],
+  "orders": [
+   {
+    "id": "SO-2001",
+    "customer": "Northwind Energy",
+    "key_account": true,
+    "product": "P-200 pump",
+    "qty": 120,
+    "priority": "rush",
+    "line": "L1",
+    "start": "2026-11-16",
+    "due": "2026-11-17",
+    "bom": {
+     "M-15": 1
+    }
+   },
+   {
+    "id": "SO-2002",
+    "customer": "Northwind Energy",
+    "key_account": true,
+    "product": "P-200 pump",
+    "qty": 60,
+    "priority": "normal",
+    "line": "L1",
+    "start": "2026-11-16",
+    "due": "2026-11-18",
+    "bom": {
+     "M-15": 1
+    }
+   },
+   {
+    "id": "SO-2003",
+    "customer": "Ridgeway Water",
+    "key_account": false,
+    "product": "V-50 valve",
+    "qty": 900,
+    "priority": "normal",
+    "line": "L2",
+    "start": "2026-11-16",
+    "due": "2026-11-17",
+    "bom": {}
+   },
+   {
+    "id": "SO-2004",
+    "customer": "Calder Farms",
+    "key_account": false,
+    "product": "P-200 pump",
+    "qty": 80,
+    "priority": "low",
+    "line": "L1",
+    "start": "2026-11-16",
+    "due": "2026-11-18",
+    "bom": {
+     "M-15": 1
+    }
+   }
+  ],
+  "reservations": [],
+  "suppliers": [
+   {
+    "id": "APEX",
+    "name": "Apex Motors",
+    "status": "on time",
+    "offers": {
+     "M-15": {
+      "unit_usd": 90,
+      "lead_days": 5
+     }
+    }
+   },
+   {
+    "id": "BOLT",
+    "name": "Bolt Drives",
+    "status": "on time",
+    "offers": {
+     "M-15": {
+      "unit_usd": 95,
+      "lead_days": 6,
+      "stock": 200,
+      "expedite_unit_usd": 30,
+      "expedite_lead_days": 3
+     }
+    }
+   }
+  ],
+  "inbound": [
+   {
+    "po": "PO-4471",
+    "supplier": "APEX",
+    "item": "M-15",
+    "qty": 160,
+    "for_order": "SO-2002",
+    "arrives": "2026-11-16"
+   }
+  ],
+  "scenarios": {
+   "apex-fire": {
+    "disruptions": [
+     {
+      "id": "apex-fire",
+      "when": {
+       "after_calls": 0
+      },
+      "do": {
+       "kind": "supplier_delay",
+       "po": "PO-4471",
+       "arrives": "2026-11-20",
+       "note": "Apex Motors: plant fire, PO-4471 will not ship before Friday"
+      },
+      "text": "Apex Motors plant fire: PO-4471 (160 M-15 motors) pushed to Friday"
+     }
+    ]
+   }
+  }
+ }
+}
