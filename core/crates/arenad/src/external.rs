@@ -98,6 +98,8 @@ impl Join {
             provider: self.provider.as_deref().and_then(trimmed),
             read_only: self.read_only,
             lead: false,
+            url: None,
+            headers: Default::default(),
         }
     }
 }

@@ -60,6 +60,8 @@ fn agent(id: &str, provider: Option<&str>, model: Option<&str>) -> AgentSpec {
         provider: provider.map(str::to_string),
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

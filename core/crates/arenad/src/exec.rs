@@ -53,6 +53,9 @@ pub struct BranchCtx {
     tap: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Said>>>,
     /// Set once the lead of a dispatch run has finished it: every later call is refused.
     closed: std::sync::atomic::AtomicBool,
+    /// agent id -> the bearer token its MCP endpoint wants, for an agent given one (an `http`
+    /// agent, while arenad waits for it). Kept in memory only.
+    tokens: Mutex<HashMap<String, String>>,
 }
 
 impl BranchCtx {
@@ -75,6 +78,7 @@ impl BranchCtx {
             flow: FlowControl::default(),
             tap: Mutex::new(None),
             closed: Default::default(),
+            tokens: Default::default(),
         }
     }
 
@@ -190,6 +194,36 @@ impl BranchCtx {
     /// one); `None` when the branch has no such agent.
     pub fn provider_of(&self, agent: &str) -> Option<Option<String>> {
         self.agent(agent).map(|a| a.provider)
+    }
+
+    /// A new bearer token for `agent`'s MCP endpoint, which takes no call without it from now on.
+    pub fn issue_token(&self, agent: &str) -> String {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        self.tokens
+            .lock()
+            .unwrap()
+            .insert(agent.into(), token.clone());
+        token
+    }
+
+    /// Takes back `agent`'s token: its endpoint answers no one until another is issued.
+    pub fn revoke_token(&self, agent: &str) {
+        self.tokens
+            .lock()
+            .unwrap()
+            .insert(agent.into(), String::new());
+    }
+
+    /// True when a call to `agent`'s endpoint with `authorization` (the header's value) may go
+    /// through: the agent was never given a token, or this is it.
+    pub fn token_ok(&self, agent: &str, authorization: Option<&str>) -> bool {
+        match self.tokens.lock().unwrap().get(agent) {
+            None => true,
+            Some(t) => {
+                let given = authorization.and_then(|a| a.strip_prefix("Bearer "));
+                !t.is_empty() && given == Some(t.as_str())
+            }
+        }
     }
 
     pub fn handoff_note(&self, agent: &str) -> Option<String> {

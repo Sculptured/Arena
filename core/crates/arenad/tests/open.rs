@@ -54,6 +54,8 @@ fn agent(id: &str, model: Option<&str>) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 
