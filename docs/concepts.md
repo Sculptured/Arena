@@ -104,6 +104,10 @@ has its own set, below):
 - `dispatch`: a lead and its team (see [Dispatch runs](#dispatch-runs)).
 - `external`: the design's own code drives the agents (see [External designs](#external-designs)).
 
+An agent already deployed elsewhere joins a team as an `http` agent (arenad POSTs it the run and its MCP
+endpoint, and it answers when done) or a Bedrock agent (API mode on provider `bedrock:<region>`); see
+[agents.md](agents.md).
+
 In every runner the world freezes (no tick, no clock) once the agents are done, and is then scored.
 
 ### Dispatch runs

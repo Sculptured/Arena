@@ -129,6 +129,8 @@ fn agent(role: &TeamRole) -> AgentSpec {
         provider: None,
         read_only: role.read_only,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

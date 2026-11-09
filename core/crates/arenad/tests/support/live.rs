@@ -163,6 +163,8 @@ impl Live {
             provider: self.provider().map(str::to_string),
             read_only: false,
             lead: false,
+            url: None,
+            headers: Default::default(),
         }
     }
 

@@ -58,6 +58,8 @@ fn team() -> Team {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     };
     Team {
         id: "t".into(),

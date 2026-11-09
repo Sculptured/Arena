@@ -53,6 +53,16 @@ Bring your own agents instead (`arena.external_run(...)`: each agent gets an MCP
 and an OpenAI-compatible gateway), run experiments (`POST /api/experiments`), or drive a world step by step as a multi-agent RL environment
 (`arena.env.ArenaParallelEnv`). Any other language uses the [HTTP API](docs/reference.md#http-api).
 
+## Bring your own agent
+
+Test the agent system you already run. Add it to a team as an `http` agent, `{kind: "http", url, headers?}`:
+when the run starts, arenad POSTs the task, an MCP endpoint with the world's tools and a token to the URL; the
+agent works through that endpoint, every call recorded, and answers the POST when it is done. Or name a model on
+Amazon Bedrock, `{kind: "bedrock", model_id, region}`, and arenad runs the tool-use loop with your AWS
+credentials. In the UI it is **Connect your agent** in the team picker, then **Test connection**. Header values
+never reach a log or a saved run. `sdk/python/examples/agent_server.py` is a working example; the Bedrock path is
+untested live. See [docs/agents.md](docs/agents.md).
+
 ## Why Arena
 
 - **Experiments, not anecdotes.** One run of an LLM agent says little. An experiment runs each setup N times on
@@ -246,6 +256,7 @@ factory example. Without those, their tests are skipped.
 | Document | What it covers |
 |---|---|
 | [docs/sdk.md](docs/sdk.md) | Using Arena from code: the Python SDK, external agents, the step-loop env, export, reproducibility, Rust, citing |
+| [docs/agents.md](docs/agents.md) | Bringing your own deployed agent: the `arena-agent/1` protocol, Bedrock agents, secrets, what is verified |
 | [docs/concepts.md](docs/concepts.md) | Glossary, restore modes, teams and runners, external designs, overhead and estimates, CLI isolation, forking, cost labels |
 | [docs/protocol.md](docs/protocol.md) | `arena-part/1`: transport, manifest, every call, errors, clock and determinism contracts |
 | [integrations/README.md](integrations/README.md) | The integrations, a step-by-step counter integration, `arena-part-check` |

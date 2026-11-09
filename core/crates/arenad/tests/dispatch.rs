@@ -66,6 +66,8 @@ fn spec(id: &str, kind: AgentKind) -> AgentSpec {
         provider: None,
         read_only: false,
         lead: false,
+        url: None,
+        headers: Default::default(),
     }
 }
 

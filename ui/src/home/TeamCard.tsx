@@ -1,7 +1,8 @@
-import { ChevronDown, FileUp, Pencil, Users } from 'lucide-react';
+import { ChevronDown, FileUp, Pencil, PlugZap, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import ImportDialog from '../board/ImportDialog';
+import { type ConnectFrom, connectedTeams } from '../connect/connect';
 import { agentModelLine } from '../providers';
 import TeamBoard from '../board/TeamBoard';
 import { Button } from '../components/ui/button';
@@ -38,34 +39,45 @@ function suggestionLine(t: Team): string {
   return t.runner && t.runner !== 'chain' ? `${size} · ${RUNNER_WORDS[t.runner]}` : size;
 }
 
-/** The benchmark's suggested teams, one click away; picking one replaces the team (and its runner). */
-function TeamPicker({ teams, current, onPick }: { teams: Team[]; current: Team | null; onPick: (t: Team) => void }) {
-  if (teams.length < 2) return null;
+function PickItem({ t, line, current, onPick }: { t: Team; line: string; current: Team | null; onPick: (t: Team) => void }) {
+  return (
+    <DropdownMenuItem onSelect={() => onPick({ ...t, picked: true })} className={current?.id === t.id ? 'bg-accent-soft' : ''}>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-sm">{t.name}</span>
+        <span className="truncate text-2xs text-muted">{line}</span>
+      </span>
+    </DropdownMenuItem>
+  );
+}
+
+/** The benchmark's suggested teams and your connected agents, one click away; picking one replaces the team (and its runner). */
+function TeamPicker({ teams, connected, current, onPick }: { teams: Team[]; connected: Team[]; current: Team | null; onPick: (t: Team) => void }) {
+  const suggested = teams.length >= 2 ? teams : [];
+  if (!suggested.length && !connected.length) return null;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm"><Users />Suggested<ChevronDown /></Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm"><Users />{suggested.length ? 'Suggested' : 'Connected'}<ChevronDown /></Button></DropdownMenuTrigger>
       <DropdownMenuContent className="w-72">
-        <DropdownMenuLabel>The benchmark's teams</DropdownMenuLabel>
-        {teams.map((t) => (
-          <DropdownMenuItem key={t.id} onSelect={() => onPick({ ...t, picked: true })} className={current?.id === t.id ? 'bg-accent-soft' : ''}>
-            <span className="flex min-w-0 flex-col">
-              <span className="text-sm">{t.name}</span>
-              <span className="text-2xs text-muted">{suggestionLine(t)}</span>
-            </span>
-          </DropdownMenuItem>
-        ))}
+        {suggested.length > 0 && <DropdownMenuLabel>The benchmark's teams</DropdownMenuLabel>}
+        {suggested.map((t) => <PickItem key={t.id} t={t} line={suggestionLine(t)} current={current} onPick={onPick} />)}
+        {connected.length > 0 && <DropdownMenuLabel className={suggested.length ? 'mt-1 border-t border-line pt-2' : ''}>Your connected agents</DropdownMenuLabel>}
+        {connected.map((t) => <PickItem key={t.id} t={t} line={agentModelLine(t.agents[0])} current={current} onPick={onPick} />)}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/** The team's buttons, under Options: the suggested teams, Import and Edit. */
+const FROM_RUN: ConnectFrom = { from: '/run' };
+
+/** The team's buttons, under Options: the suggested teams (and connected agents), Import, Connect and Edit. */
 export function TeamActions({ team, suggested = [], onImported }: { team: Team | null; suggested?: Team[]; onImported: (t: Team) => void }) {
   const [importing, setImporting] = useState(false);
+  const [connected] = useState(connectedTeams);
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <TeamPicker teams={suggested} current={team} onPick={onImported} />
+      <TeamPicker teams={suggested} connected={connected} current={team} onPick={onImported} />
       <Button size="sm" onClick={() => setImporting(true)}><FileUp />Import</Button>
+      <Button size="sm" asChild><Link to="/connect" state={FROM_RUN}><PlugZap />Connect</Link></Button>
       <Button size="sm" asChild><Link to="/team"><Pencil />Edit</Link></Button>
       <ImportDialog open={importing} onOpenChange={setImporting} onImported={onImported} />
     </div>
