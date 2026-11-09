@@ -1,0 +1,19 @@
+kind = "integration"
+name = "factory-01-erp"
+version = "0.1.0"
+protocol = 1
+run = { command = ["uv", "run", "--project", ".", "python", "-m", "factory01_erp"] }
+needs = { gpu_vram_gb = 0, services = [] }
+config_schema = { type = "object", properties = { company = { type = "string" }, today = { type = "string" }, po_limit_usd = { type = "number" }, lines = { type = "array" }, items = { type = "array" }, orders = { type = "array" }, reservations = { type = "array" }, suppliers = { type = "array" }, inbound = { type = "array" }, scenarios = { type = "object" } }, required = ["today", "po_limit_usd", "lines", "items", "orders", "suppliers"] }
+
+[[example]]
+tool = "get_inventory"
+args = {}
+
+[[example]]
+tool = "get_schedule"
+args = {}
+
+[[example]]
+tool = "get_suppliers"
+args = {}

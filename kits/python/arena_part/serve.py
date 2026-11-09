@@ -153,7 +153,7 @@ def _response(id_, out=None, err=None):
     return {"jsonrpc": "2.0", "id": id_, "result": out}
 
 
-def _handle(part, req):
+def _handle(part, req, dispatch_fn=dispatch):
     """Returns (id or None, response dict or None when no reply is due)."""
     if not isinstance(req, dict):
         return _response(None, err=PartError(-32600, "invalid request"))
@@ -168,7 +168,7 @@ def _handle(part, req):
             raise PartError(-32600, "invalid request")
         if not ids_ok(params):
             raise errors.invalid(_ID_MSG)
-        resp = _response(id_, dispatch(part, method, params))
+        resp = _response(id_, dispatch_fn(part, method, params))
     except PartError as e:
         resp = _response(id_, err=e)
     except Exception as e:  # a raising handler is answered, not fatal
@@ -177,8 +177,9 @@ def _handle(part, req):
     return resp if has_id else None
 
 
-def serve(part, stdin=None, stdout=None):
-    """Serve a part until the input closes: read a request line, answer it, repeat."""
+def serve(part, stdin=None, stdout=None, dispatch_fn=dispatch):
+    """Serve a part until the input closes: read a request line, answer it, repeat. `dispatch_fn`
+    maps a method to its handler (a benchmark's: `benchmark.dispatch`)."""
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
     for line in stdin:
@@ -190,7 +191,7 @@ def serve(part, stdin=None, stdout=None):
         except ValueError as e:
             resp = _response(None, err=PartError(-32700, f"parse error: {e}"))
         else:
-            resp = _handle(part, req)
+            resp = _handle(part, req, dispatch_fn)
         if resp is not None:
             try:
                 data = json.dumps(resp, separators=(",", ":"))

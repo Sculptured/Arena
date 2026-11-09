@@ -1,0 +1,56 @@
+{
+  "company": "Ridgeline Pumps",
+  "today": "2026-11-16",
+  "po_limit_usd": 150,
+  "lines": [
+    {"id": "L1", "name": "Line 1", "makes": "P-200 pumps"},
+    {"id": "L2", "name": "Line 2", "makes": "V-50 valves"}
+  ],
+  "items": [
+    {"id": "M-15", "name": "M-15 motor", "on_hand": 44},
+    {"id": "SK-2", "name": "SK-2 seal kit", "on_hand": 90},
+    {"id": "H-200", "name": "H-200 pump housing", "on_hand": 60},
+    {"id": "B-50", "name": "B-50 valve body", "on_hand": 30}
+  ],
+  "orders": [
+    {"id": "SO-1001", "customer": "Northwind Energy", "key_account": true, "product": "P-200 pump",
+     "qty": 40, "priority": "high", "line": "L1", "start": "2026-11-18", "due": "2026-11-19",
+     "bom": {"M-15": 1, "SK-2": 1, "H-200": 1}},
+    {"id": "SO-1002", "customer": "Ridgeway Water", "key_account": false, "product": "V-50 valve",
+     "qty": 30, "priority": "normal", "line": "L2", "start": "2026-11-17", "due": "2026-11-20",
+     "bom": {"SK-2": 1, "B-50": 1}},
+    {"id": "SO-1003", "customer": "Calder Farms", "key_account": false, "product": "P-200 pump",
+     "qty": 20, "priority": "low", "line": "L1", "start": "2026-11-24", "due": "2026-11-27",
+     "bom": {"M-15": 1, "SK-2": 1, "H-200": 1}}
+  ],
+  "reservations": [
+    {"order": "SO-1001", "item": "SK-2", "qty": 40},
+    {"order": "SO-1001", "item": "H-200", "qty": 40},
+    {"order": "SO-1002", "item": "SK-2", "qty": 30},
+    {"order": "SO-1002", "item": "B-50", "qty": 30},
+    {"order": "SO-1003", "item": "M-15", "qty": 20},
+    {"order": "SO-1003", "item": "SK-2", "qty": 20},
+    {"order": "SO-1003", "item": "H-200", "qty": 20}
+  ],
+  "suppliers": [
+    {"id": "APEX", "name": "Apex Motors", "status": "on time",
+     "offers": {"M-15": {"unit_usd": 90, "lead_days": 5}}},
+    {"id": "BOLT", "name": "Bolt Drives", "status": "on time",
+     "offers": {"M-15": {"unit_usd": 95, "lead_days": 6, "stock": 100,
+                         "expedite_unit_usd": 30, "expedite_lead_days": 1}}}
+  ],
+  "inbound": [
+    {"po": "PO-4471", "supplier": "APEX", "item": "M-15", "qty": 40, "for_order": "SO-1001",
+     "arrives": "2026-11-17"}
+  ],
+  "scenarios": {
+    "apex-delay": {
+      "disruptions": [
+        {"id": "apex-delay", "when": {"after_calls": 0},
+         "do": {"kind": "supplier_delay", "po": "PO-4471", "arrives": "2026-11-25",
+                "note": "Apex Motors: plant outage, PO-4471 ships 2026-11-24"},
+         "text": "Apex Motors delays PO-4471 (40 M-15 motors for SO-1001) from 17 Nov to 25 Nov"}
+      ]
+    }
+  }
+}
